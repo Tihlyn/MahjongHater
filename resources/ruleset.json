@@ -1,0 +1,309 @@
+{
+  "ruleset": {
+    "game_name": "Doman Mahjong",
+    "source_game": "Final Fantasy XIV (Manderville Gold Saucer, released patch 4.5, 2019-01-07)",
+    "players": 4,
+    "variant": "Japanese riichi (yonma / 4-player)",
+    "three_player_sanma": {"available": false, "source": "ffxiv"},
+    "starting_points": 25000,
+    "target_score_oka_uma": {"oka": false, "uma": false, "note": "No oka/uma in-game; ranked placement only affects external rating points, not in-game score", "source": "riichi_standard"},
+    "tile_set": {
+      "total_tiles": 136,
+      "distinct_tiles": 34,
+      "copies_per_tile": 4,
+      "suits": {
+        "man_characters": "1-9",
+        "pin_dots": "1-9 (stylized as Namazu in the Doman tile set)",
+        "sou_bamboo": "1-9 (stylized as Sabotender/daggers in the Doman tile set)"
+      },
+      "honors": {
+        "winds": ["East", "South", "West", "North"],
+        "dragons": ["White (Haku)", "Green (Hatsu)", "Red (Chun)"]
+      },
+      "terminals": "the 1 and 9 of each number suit",
+      "simples": "2-8 of each number suit",
+      "red_fives_akadora": {"count": 3, "detail": "one red 5 in each suit", "source": "ffxiv"}
+    },
+    "wall_layout": {
+      "live_wall_drawable": 70,
+      "dead_wall": 14,
+      "starting_hand_size": 13,
+      "dealer_first_draw": 1,
+      "note": "13x4 = 52 dealt + dealer's first draw 1 + 70 live + 14 dead = 136; dead wall replenished to 14 after each kan replacement draw",
+      "source": "riichi_standard"
+    },
+    "dora": {
+      "initial_dora_indicators": 1,
+      "kan_dora": "one additional indicator revealed per kan",
+      "ura_dora": "revealed only for a riichi winner; count equals the number of dora indicators",
+      "ffxiv_display_quirk": "By default the on-screen 'dora' area shows the ACTUAL dora tile, not the indicator (e.g. shown 2-man = dora is 2-man). A 'Traditional' setting (added patch 5.4) shows the previous-tile indicator instead.",
+      "dora_are_not_yaku": true,
+      "source": "ffxiv"
+    },
+    "hand_flow": {
+      "turn_order": "counterclockwise (the player to the right goes next)",
+      "turn": "draw 1 tile, then discard 1 (the drawn tile may itself be discarded = tsumogiri)",
+      "win_check": "on own draw (tsumo) or on an opponent's discard (ron)"
+    },
+    "calls": {
+      "chi": {"from": "the player immediately to your left (whose discard precedes your turn)", "forms": "sequence", "opens_hand": true},
+      "pon": {"from": "any player", "forms": "triplet", "opens_hand": true, "skips_intervening_players": true},
+      "kan": {
+        "ankan_closed": {"opens_hand": false, "note": "drawn 4th tile added to a concealed triplet"},
+        "daiminkan_open": {"opens_hand": true, "note": "called on a discard"},
+        "shouminkan_added": {"opens_hand": true, "note": "add the drawn 4th tile to an existing pon; can be robbed via chankan"},
+        "after_kan": "reveal new dora indicator, then draw a replacement tile from the dead wall",
+        "max_kan_per_hand": 4,
+        "ffxiv_visual_quirk": "all kans (even concealed ankan) are displayed in shouminkan form"
+      },
+      "kuikae": {"allowed": false, "source": "ffxiv", "note": "cannot claim a tile then discard an identical one, nor claim a tile merely to swap a meld"},
+      "no_call_on_last_tile": {"value": true, "source": "ffxiv"},
+      "kuitan_open_tanyao": {
+        "default": "enabled in Novice Mahjong, Advanced Mahjong, and 4-player (Kuitan enabled)",
+        "disabled_room": "only the 4-player (Kuitan disabled) Duty Finder option turns it off",
+        "source": "ffxiv"
+      },
+      "atozuke": {"enabled": true, "note": "yaku are determined only at the moment of declaring the win", "source": "ffxiv"}
+    },
+    "riichi": {
+      "requires_closed_hand": true,
+      "requires_tenpai": true,
+      "min_points_to_declare": 1000,
+      "bet": 1000,
+      "may_declare_in_furiten": true,
+      "post_riichi": "may only discard the tile drawn each turn; may pass/ignore a winning tile but is then placed in (permanent) furiten",
+      "closed_kan_after_riichi": "permitted only if it does not change the waits",
+      "source": "ffxiv"
+    },
+    "furiten": {
+      "discard_furiten": "any winning tile is in your own discards (incl. tiles others claimed via chi/pon/kan); ron disabled, tsumo still allowed; cleared by shifting the wait",
+      "temporary_furiten": "passed a ron chance while not in riichi; cleared automatically after your next discard",
+      "riichi_furiten": "passed a ron chance while in riichi; permanent for the rest of the hand",
+      "source": "ffxiv"
+    },
+    "dealer_rotation": {
+      "rotation_direction": "passes to the next player (to the right) after each hand",
+      "renchan_dealer_repeat": "dealer keeps the seat AND seat winds do not rotate if the dealer WINS or is TENPAI at an exhaustive draw; honba +1",
+      "source": "ffxiv"
+    },
+    "honba": {
+      "points_per_counter": 300,
+      "ron_payment": "discarder pays an extra 300 per honba",
+      "tsumo_payment": "an extra 100 per honba from each of the other three players",
+      "incremented_on": "dealer win, exhaustive draw, or abortive draw",
+      "reset_on": "a non-dealer win",
+      "source": "riichi_standard"
+    },
+    "riichi_sticks": {
+      "value": 1000,
+      "collected_by": "the winner of the hand",
+      "carry_over": "if a hand ends in a draw, sticks remain on the table for the next winner",
+      "end_of_game": "leftover riichi bets go to the 1st-place player",
+      "source": "riichi_standard + ffxiv"
+    },
+    "game_length": {
+      "quick_match_tonpuusen": {"rounds": "East only", "hands": 4, "added": "patch 5.4"},
+      "full_match_hanchan": {"rounds": "East + South", "hands": 8},
+      "no_west_round_shanyu": true,
+      "source": "ffxiv"
+    },
+    "abortive_draws": {
+      "implemented": [
+        "Nine terminals/honors in starting hand (kyuushu kyuuhai)",
+        "Triple ron (sanchahou)",
+        "Four kans called by 2+ different players (suukaikan)",
+        "Same wind discarded by all four players on the first go-around (suufon renda)"
+      ],
+      "not_implemented": ["Four riichi (suucha riichi) — there is NO abortive draw for four riichi in FFXIV"],
+      "effect": "hand repeated, no points exchanged, honba +1, seat winds do not rotate",
+      "kyuushu_condition": "only valid if no chi/pon/kan/ankan has been called; a pair of terminal/honor counts as one type",
+      "suukaikan_note": "no abort if all four kans are by one player (they pursue the Four Kan yaku); a 5th kan then aborts",
+      "source": "ffxiv"
+    },
+    "special_ffxiv_rules": {
+      "double_ron": {"allowed": true, "note": "if the dealer is one of the two ron winners, the hand is replayed with the same dealer/seat winds"},
+      "pao_sekinin_barai": {
+        "applies_to": ["Daisangen (Big Three Dragons)", "Daisuushii (Big Four Winds)"],
+        "not_applies_to": ["Shousuushii (Little Four Winds)"],
+        "rule": "the player who discards the completing 3rd dragon triplet / 4th wind triplet must pay the full yakuman; if the hand is won by ron, that player and the discarder split the cost 50/50",
+        "source": "ffxiv"
+      },
+      "time_limits": {
+        "warning_80_min": "if a single hand lasts more than 80 minutes the following hand is the last; results are still recorded",
+        "hard_cap_120_min": "game ends automatically after 120 minutes; results NOT recorded",
+        "source": "ffxiv"
+      }
+    }
+  },
+
+  "win_lose_conditions": {
+    "winning_a_hand": {
+      "ron": "complete the hand on a tile discarded by an opponent (discarder pays in full)",
+      "tsumo": "complete the hand on a self-drawn tile",
+      "yaku_requirement": "the hand MUST contain at least one yaku (dora/akadora/uradora alone never qualify); enforced at the win declaration under the atozuke rule"
+    },
+    "valid_winning_hand_shapes": {
+      "standard": "4 melds + 1 pair (14 tiles)",
+      "chiitoitsu": "7 distinct pairs (closed only); a 4-of-a-kind does NOT count as two pairs",
+      "kokushi_musou": "one of each of the 13 terminal/honor types + one duplicate (closed only)"
+    },
+    "exhaustive_draw_ryuukyoku": {
+      "trigger": "live wall exhausted with no winner",
+      "tenpai_noten_payment_total": 3000,
+      "payments": {
+        "1_tenpai": "tenpai player receives 1000 from each of the other three (3000 total)",
+        "2_tenpai": "each tenpai player receives 1500; each noten player pays 1500",
+        "3_tenpai": "each tenpai player receives 1000; the single noten player pays 3000",
+        "all_tenpai_or_all_noten": "no payment"
+      },
+      "dealer": "keeps seat / seat winds frozen if dealer is tenpai; honba +1 either way",
+      "source": "riichi_standard + ffxiv"
+    },
+    "game_end": {
+      "ends_on_South_4_if": ["a non-dealer wins", "the dealer is in 1st place and wins", "the dealer is in 1st place and tenpai at the draw"],
+      "agariyame": "in the final hand, a 1st-place dealer who wins or is tenpai ends the game with no option to continue",
+      "tobi_bankruptcy": {"ends_immediately_if": "any player's score drops BELOW zero", "exactly_zero": "game continues", "source": "ffxiv"}
+    },
+    "final_placement": {
+      "ranking_by": "final points, highest = 1st",
+      "tie_break": "seat order relative to the dealer in the FIRST hand of the East round; closer to that dealer ranks higher (first dealer wins ties, then 2nd, then 3rd dealer)",
+      "leftover_riichi_sticks": "awarded to 1st place",
+      "source": "ffxiv"
+    }
+  },
+
+  "scoring_and_formulas": {
+    "model": "FULL han + fu standard riichi scoring (NOT a flat per-han table). The community 'flat scoring' claim is a documentation error; 1000/2000/3900/8000 are simply the standard 30-fu non-dealer-ron column.",
+    "source_confirmation": "riichi.wiki: 'Doman Mahjong uses the same rules as regular Japanese mahjong.'",
+    "fu_calculation": {
+      "rounding": "sum all fu, then round UP to the next multiple of 10 (except chiitoitsu, which is fixed at 25)",
+      "base_fu_futei": 20,
+      "win_method_fu": {
+        "menzen_ron_closed_ron_bonus": 10,
+        "tsumo": 2,
+        "tsumo_pinfu_exception": "0 (pinfu tsumo stays at 20 fu)",
+        "open_pinfu_ron_exception": "an open hand that would otherwise total 20 fu is set to 30 fu"
+      },
+      "meld_fu": {
+        "sequence_chi": 0,
+        "triplet_simple_open_minko": 2,
+        "triplet_simple_closed_anko": 4,
+        "triplet_terminalhonor_open_minko": 4,
+        "triplet_terminalhonor_closed_anko": 8,
+        "kan_simple_open_minkan": 8,
+        "kan_simple_closed_ankan": 16,
+        "kan_terminalhonor_open_minkan": 16,
+        "kan_terminalhonor_closed_ankan": 32,
+        "rule": "triplet base = 2 fu; x2 if terminal/honor; x2 if concealed; a kan = x4 of the corresponding triplet"
+      },
+      "pair_fu": {
+        "yakuhai_pair": 2,
+        "note": "pair of any dragon / round wind / seat wind = 2 fu; a double-wind pair (round AND seat) = 2 or 4 fu depending on ruleset (undocumented for FFXIV); non-yakuhai pair = 0"
+      },
+      "wait_fu": {
+        "ryanmen_two_sided": 0,
+        "shanpon_double_pon_wait": 0,
+        "kanchan_closed_middle": 2,
+        "penchan_edge": 2,
+        "tanki_pair_wait": 2
+      },
+      "special_fixed_fu": {
+        "chiitoitsu": 25,
+        "pinfu_tsumo": 20
+      }
+    },
+    "base_points_formula": "base = fu * 2^(2 + han); base is capped at 2000 (= mangan) when no named limit applies",
+    "payment_multipliers": {
+      "non_dealer_ron": "base * 4 (paid entirely by the discarder)",
+      "dealer_ron": "base * 6 (paid entirely by the discarder)",
+      "non_dealer_tsumo": "base * 2 from the dealer + base * 1 from each of the two non-dealers",
+      "dealer_tsumo": "base * 2 from each of the three players",
+      "rounding": "each individual payment rounded UP to the nearest 100"
+    },
+    "dealer_bonus_note": "A dealer win equals 1.5x a non-dealer win of the same han/fu, which falls naturally out of the 6x-vs-4x ron and 2x-all tsumo multipliers.",
+    "fu_skip_rule": "If a hand reaches 5+ han it is a named limit hand and fu is no longer used.",
+    "limit_hands": {
+      "mangan": {"triggers": ["5 han", "4 han + 40+ fu", "3 han + 70+ fu"], "non_dealer_points": 8000, "dealer_points": 12000},
+      "haneman": {"triggers": ["6-7 han"], "non_dealer_points": 12000, "dealer_points": 18000},
+      "baiman": {"triggers": ["8-10 han"], "non_dealer_points": 16000, "dealer_points": 24000},
+      "sanbaiman": {"triggers": ["11-12 han"], "non_dealer_points": 24000, "dealer_points": 36000},
+      "yakuman": {"triggers": ["a yakuman pattern", "13+ counted han (kazoe yakuman, ENABLED in FFXIV)"], "non_dealer_points": 32000, "dealer_points": 48000},
+      "tsumo_splits_for_limits": "e.g. non-dealer mangan tsumo = 2000 from each non-dealer + 4000 from dealer; dealer mangan tsumo = 4000 from all three"
+    },
+    "multiple_yakuman": {"allowed": true, "max": 4, "counted_as_single_not_double": ["Suuankou tanki", "Junsei (pure) Chuuren Poutou", "Juusanmen (13-sided) Kokushi"], "source": "ffxiv"},
+    "dora_types": {
+      "regular_dora": "+1 han each; not a yaku",
+      "akadora_red_five": "+1 han each (3 in game, one per suit); not a yaku; a red 5 that is also dora = +2 han",
+      "uradora": "+1 han each; only for riichi winners; not a yaku"
+    },
+    "worked_examples_proving_fu": {
+      "1han_30fu_nondealer_ron": 1000,
+      "2han_30fu_nondealer_ron": 2000,
+      "3han_30fu_nondealer_ron": 3900,
+      "3han_40fu_nondealer_ron": 5200,
+      "4han_30fu_nondealer_ron": 7700,
+      "note": "5200 and 7700 cannot be produced by a flat per-han table, confirming the engine computes fu."
+    }
+  },
+
+  "yaku_list": {
+    "notes": "Fields han_closed / han_open. han_open = null means the yaku is unavailable when the hand is open. Any triplet-based yaku also accepts kans. Verified against the FFXIV Lodestone yaku list and Advanced Rules pages.",
+    "one_han": [
+      {"name_en": "Riichi", "name_jp": "立直/リーチ", "closed_only": true, "han_closed": 1, "han_open": null, "desc": "Declare a ready closed hand while betting 1000 points."},
+      {"name_en": "Menzen Tsumo", "name_jp": "門前清自摸和", "closed_only": true, "han_closed": 1, "han_open": null, "desc": "Self-draw win with a fully concealed hand."},
+      {"name_en": "Ippatsu", "name_jp": "一発", "closed_only": true, "han_closed": 1, "han_open": null, "desc": "Win within one go-around of declaring riichi, with no intervening calls."},
+      {"name_en": "Pinfu", "name_jp": "平和", "closed_only": true, "han_closed": 1, "han_open": null, "desc": "Closed all-sequence hand, non-yakuhai pair, two-sided (ryanmen) wait; structure yields 0 fu."},
+      {"name_en": "Iipeikou (Pure Double Chi)", "name_jp": "一盃口", "closed_only": true, "han_closed": 1, "han_open": null, "desc": "Two identical sequences (same suit, same numbers)."},
+      {"name_en": "Tanyao (All Simples)", "name_jp": "断幺九", "closed_only": false, "han_closed": 1, "han_open": 1, "desc": "No terminals or honors.", "ffxiv_divergence": "Open is allowed only when kuitan is enabled (all ranked rooms + 4-player Kuitan-enabled); closed-only in the single 4-player Kuitan-disabled room."},
+      {"name_en": "Yakuhai (Dragon)", "name_jp": "役牌（三元牌）", "closed_only": false, "han_closed": 1, "han_open": 1, "desc": "Triplet/kan of any dragon; +1 han per such triplet."},
+      {"name_en": "Yakuhai (Round Wind / Bakaze)", "name_jp": "場風", "closed_only": false, "han_closed": 1, "han_open": 1, "desc": "Triplet/kan of the round wind (East in the East round, South in the South round)."},
+      {"name_en": "Yakuhai (Seat Wind / Jikaze)", "name_jp": "自風", "closed_only": false, "han_closed": 1, "han_open": 1, "desc": "Triplet/kan of your seat wind; a double-wind (round+seat) triplet counts for both = 2 han."},
+      {"name_en": "Rinshan Kaihou (After a Kan)", "name_jp": "嶺上開花", "closed_only": false, "han_closed": 1, "han_open": 1, "desc": "Win on the replacement tile drawn after declaring a kan."},
+      {"name_en": "Chankan (Robbing a Kan)", "name_jp": "槍槓", "closed_only": false, "han_closed": 1, "han_open": 1, "desc": "Ron on a tile an opponent adds to a pon to form a shouminkan (kokushi may NOT rob a closed kan)."},
+      {"name_en": "Haitei Raoyue (Last Tile Draw)", "name_jp": "海底摸月", "closed_only": false, "han_closed": 1, "han_open": 1, "desc": "Tsumo on the last live-wall tile."},
+      {"name_en": "Houtei Raoyui (Last Tile Claim)", "name_jp": "河底撈魚", "closed_only": false, "han_closed": 1, "han_open": 1, "desc": "Ron on the final discard of the hand."}
+    ],
+    "two_han": [
+      {"name_en": "Double Riichi", "name_jp": "両立直/ダブルリーチ", "closed_only": true, "han_closed": 2, "han_open": null, "desc": "Declare riichi on your very first discard with no prior calls by anyone."},
+      {"name_en": "Sanshoku Doujun (Mixed Triple Chi)", "name_jp": "三色同順", "closed_only": false, "han_closed": 2, "han_open": 1, "desc": "The same sequence in all three number suits."},
+      {"name_en": "Ittsuu (Pure Straight)", "name_jp": "一気通貫", "closed_only": false, "han_closed": 2, "han_open": 1, "desc": "1-2-3, 4-5-6, 7-8-9 all in one suit."},
+      {"name_en": "Chanta / Chantaiyao (Outside Hand)", "name_jp": "混全帯幺九", "closed_only": false, "han_closed": 2, "han_open": 1, "desc": "Every meld and the pair contains a terminal or honor."},
+      {"name_en": "Honroutou (All Terminals and Honors)", "name_jp": "混老頭", "closed_only": false, "han_closed": 2, "han_open": 2, "desc": "Only terminals and honors; implies toitoi or chiitoitsu (scored separately)."},
+      {"name_en": "Shousangen (Little Three Dragons)", "name_jp": "小三元", "closed_only": false, "han_closed": 2, "han_open": 2, "desc": "Two dragon triplets + a pair of the third dragon (the two dragon yakuhai add +2 more, totaling 4 han)."},
+      {"name_en": "Toitoi (All Pon)", "name_jp": "対々和", "closed_only": false, "han_closed": 2, "han_open": 2, "desc": "Four triplets/kans + a pair."},
+      {"name_en": "Sanshoku Doukou (Triple Pon)", "name_jp": "三色同刻", "closed_only": false, "han_closed": 2, "han_open": 2, "desc": "The same-numbered triplet in all three number suits."},
+      {"name_en": "Sanankou (Three Concealed Pon)", "name_jp": "三暗刻", "closed_only": false, "han_closed": 2, "han_open": 2, "desc": "Three concealed triplets/kans (the fourth meld may be open)."},
+      {"name_en": "Sankantsu (Three Kan)", "name_jp": "三槓子", "closed_only": false, "han_closed": 2, "han_open": 2, "desc": "Three kans (open or closed)."},
+      {"name_en": "Chiitoitsu (Seven Pairs)", "name_jp": "七対子", "closed_only": true, "han_closed": 2, "han_open": null, "desc": "Seven DISTINCT pairs; fixed at 25 fu; identical pairs are not allowed."}
+    ],
+    "three_han": [
+      {"name_en": "Ryanpeikou (Twice Pure Double Chi)", "name_jp": "二盃口", "closed_only": true, "han_closed": 3, "han_open": null, "desc": "Two distinct iipeikou; does not stack with iipeikou or with chiitoitsu."},
+      {"name_en": "Junchan / Junchantaiyao (Terminals in All Groups)", "name_jp": "純全帯幺九", "closed_only": false, "han_closed": 3, "han_open": 2, "desc": "Every meld and the pair contains a terminal (no honors)."},
+      {"name_en": "Honitsu (Half Flush)", "name_jp": "混一色", "closed_only": false, "han_closed": 3, "han_open": 2, "desc": "One number suit plus honors only."}
+    ],
+    "special_four_han": [
+      {"name_en": "Nagashi Mangan", "name_jp": "流し満貫", "closed_only": true, "value": "mangan (non-dealer 8000 / dealer 12000)", "desc": "At an exhaustive draw, all your discards were terminals/honors and none were claimed by an opponent.", "ffxiv_divergence": "Counts as a DRAW, not a win — the hand is replayed; it does not count as a win for wind rotation, honba, or riichi-bet purposes; cannot be claimed if your hand is open."}
+    ],
+    "six_han": [
+      {"name_en": "Chinitsu (Full Flush)", "name_jp": "清一色", "closed_only": false, "han_closed": 6, "han_open": 5, "desc": "One number suit only, no honors."}
+    ],
+    "yakuman": {
+      "note": "Exactly TWELVE yakuman are permitted in FFXIV (Renhou/Blessing of Man is NOT included). All worth yakuman value (13 han). Stack up to 4. Suuankou-tanki, junsei chuuren, and juusanmen kokushi are each counted as a SINGLE yakuman.",
+      "list": [
+        {"name_en": "Tenhou (Blessing of Heaven)", "name_jp": "天和", "desc": "Dealer wins on their initial 14-tile draw; voided if any call/ankan is made."},
+        {"name_en": "Chiihou (Blessing of Earth)", "name_jp": "地和", "desc": "Non-dealer wins on their first draw; voided by any call/ankan before that draw."},
+        {"name_en": "Kokushi Musou (Thirteen Orphans)", "name_jp": "国士無双", "closed_only": true, "desc": "One of each of the 13 terminal/honor tiles + one duplicate. Cannot rob a closed kan; the 13-sided wait is subject to furiten. Pure 13-sided form counts as a single yakuman."},
+        {"name_en": "Suuankou (Four Concealed Pon)", "name_jp": "四暗刻", "closed_only": true, "desc": "Four concealed triplets; the pair-wait (tanki) form is included as a single yakuman."},
+        {"name_en": "Daisangen (Big Three Dragons)", "name_jp": "大三元", "desc": "Triplets of all three dragons. PAO applies."},
+        {"name_en": "Shousuushii (Little Four Winds)", "name_jp": "小四喜", "desc": "Three wind triplets + a pair of the fourth wind. PAO does NOT apply."},
+        {"name_en": "Daisuushii (Big Four Winds)", "name_jp": "大四喜", "desc": "Triplets of all four winds. PAO applies."},
+        {"name_en": "Tsuuiisou (All Honors)", "name_jp": "字一色", "desc": "Only honor tiles."},
+        {"name_en": "Chinroutou (All Terminals)", "name_jp": "清老頭", "desc": "Only terminal tiles (1s and 9s)."},
+        {"name_en": "Ryuuiisou (All Green)", "name_jp": "緑一色", "desc": "Only green tiles: 2,3,4,6,8 of bamboo + green dragon.", "ffxiv_note": "Can be completed WITHOUT possessing the green dragon (green dragon is allowed but not required)."},
+        {"name_en": "Chuuren Poutou (Nine Gates)", "name_jp": "九蓮宝燈", "closed_only": true, "desc": "1112345678999 + any one extra, all of one suit; any number suit qualifies; pure 9-sided form counts as a single yakuman."},
+        {"name_en": "Suukantsu (Four Kan)", "name_jp": "四槓子", "desc": "Four kans (open or closed); calling does not reduce the value."}
+      ],
+      "explicitly_excluded": ["Renhou (Blessing of Man) — NOT among the permitted yakuman."]
+    }
+  }
+}
