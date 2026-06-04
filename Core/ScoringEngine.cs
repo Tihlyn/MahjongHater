@@ -2,17 +2,13 @@ namespace MahjongHater.Core;
 
 public sealed class ScoringEngine
 {
-    private static bool referenceScoresValidated;
+    private static readonly Lazy<bool> ReferenceScoresValidated = new(ValidateReferenceScores);
     private readonly Configuration configuration;
 
     public ScoringEngine(Configuration configuration)
     {
         this.configuration = configuration;
-        if (!referenceScoresValidated)
-        {
-            ValidateReferenceScores();
-            referenceScoresValidated = true;
-        }
+        _ = ReferenceScoresValidated.Value;
     }
 
     public ScoreResult Calculate(Hand hand, List<YakuResult> yaku, int fu, bool isDealer)
@@ -110,13 +106,14 @@ public sealed class ScoringEngine
         return ((value + 99) / 100) * 100;
     }
 
-    private static void ValidateReferenceScores()
+    private static bool ValidateReferenceScores()
     {
         AssertReferenceRon(1, 30, 1000);
         AssertReferenceRon(2, 30, 2000);
         AssertReferenceRon(3, 30, 3900);
         AssertReferenceRon(3, 40, 5200);
         AssertReferenceRon(4, 30, 7700);
+        return true;
     }
 
     private static void AssertReferenceRon(int han, int fu, int expectedRon)

@@ -43,7 +43,7 @@ public sealed class Meld
 
     public bool IsSequence => this.Type == MeldType.Chi;
 
-    public bool IsTerminalOrHonor => this.Tiles[0].IsTerminalOrHonor;
+    public bool IsTerminalOrHonor => this.Tiles.Any(t => t.IsTerminalOrHonor);
 
     public static Meld MakeChi(Tile t1, Tile t2, Tile t3)
     {

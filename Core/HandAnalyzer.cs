@@ -19,13 +19,14 @@ public sealed class HandAnalyzer
         List<Tile> bestWaits = [];
         var bestProbability = 0d;
 
+        var allTiles = hand.AllTiles;
         foreach (var candidate in hand.ClosedTiles)
         {
             var remaining = RemoveOne(hand.ClosedTiles, candidate);
             var shanten = Shanten.Calculate(remaining);
             var useful = Shanten.GetUsefulTiles(remaining);
-            var ukeire = useful.Sum(tile => Math.Max(0, 4 - TileHelpers.CountKind(hand.AllTiles, tile)));
-            var wallRemaining = Math.Max(1, 70 - hand.AllTiles.Count);
+            var ukeire = useful.Sum(tile => Math.Max(0, 4 - TileHelpers.CountKind(allTiles, tile)));
+            var wallRemaining = Math.Max(1, 70 - allTiles.Count);
             var probability = shanten == 0 ? (double)ukeire / wallRemaining : 0d;
 
             if (bestDiscard is null

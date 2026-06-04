@@ -97,7 +97,13 @@ public static class Shanten
             return;
         }
 
-        var theoreticalBest = 8 - (melds * 2) - Math.Min(4 - melds, partials + (counts.Skip(index).Sum() / 2)) - (hasPair ? 1 : 0);
+        var remainingSum = 0;
+        for (var i = index; i < counts.Length; i++)
+        {
+            remainingSum += counts[i];
+        }
+
+        var theoreticalBest = 8 - (melds * 2) - Math.Min(4 - melds, partials + (remainingSum / 2)) - (hasPair ? 1 : 0);
         if (theoreticalBest >= best)
         {
             return;

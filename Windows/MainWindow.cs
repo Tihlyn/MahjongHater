@@ -10,7 +10,7 @@ public sealed class MainWindow : Window
     private static readonly Vector4 Gold = new(0.96f, 0.82f, 0.26f, 1f);
     private static readonly Vector4 Green = new(0.35f, 0.9f, 0.45f, 1f);
     private static readonly Vector4 Red = new(0.95f, 0.35f, 0.35f, 1f);
-    private static readonly Vector4 Active = new(0.35f, 0.9f, 0.45f, 1f);
+    private static readonly Vector4 Active = Green;
     private static readonly Vector4 Inactive = new(0.85f, 0.3f, 0.3f, 1f);
 
     private readonly Plugin plugin;
@@ -19,6 +19,11 @@ public sealed class MainWindow : Window
     private readonly HandAnalyzer handAnalyzer;
     private readonly YakuDetector yakuDetector;
     private readonly ScoringEngine scoringEngine;
+
+    private string? cachedAnalysisKey;
+    private AnalysisResult? cachedAnalysis;
+    private string? cachedScoringKey;
+    private (HandDecomposition? Decomposition, List<YakuResult> Yaku, int Fu, ScoreResult? Score)? cachedScoring;
 
     public MainWindow(Plugin plugin, Configuration configuration, GameStateReader gameStateReader, HandAnalyzer handAnalyzer)
         : base("Mahjong Hater", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
@@ -101,8 +106,15 @@ public sealed class MainWindow : Window
 
     private void DrawCurrentHand(GameState state)
     {
-        var hand = CreateAnalysisHand(state);
-        var analysis = this.handAnalyzer.Analyze(hand);
+        var key = GetHandFingerprint(state);
+        if (this.cachedAnalysisKey != key || this.cachedAnalysis is null)
+        {
+            var hand = CreateAnalysisHand(state);
+            this.cachedAnalysis = this.handAnalyzer.Analyze(hand);
+            this.cachedAnalysisKey = key;
+        }
+
+        var analysis = this.cachedAnalysis;
         ImGui.TextUnformatted($"Score: {state.CurrentScore:N0}");
         ImGui.TextUnformatted($"Seat Wind: {state.SeatWind}   Round Wind: {state.RoundWind}");
         if (analysis.ShantenAfterDiscard == 0)
@@ -137,45 +149,64 @@ public sealed class MainWindow : Window
             return;
         }
 
-        var hand = CreateScoringHand(state);
-        var decomposition = HandDecomposer.GetBestDecomposition(hand);
-        if (decomposition is null)
+        var key = GetHandFingerprint(state) + ":" + state.IsRiichi;
+        if (this.cachedScoringKey != key || this.cachedScoring is null)
+        {
+            var hand = CreateScoringHand(state);
+            var decomposition = HandDecomposer.GetBestDecomposition(hand);
+            List<YakuResult> yaku = [];
+            int fu = 0;
+            ScoreResult? score = null;
+            if (decomposition is not null)
+            {
+                yaku = this.yakuDetector.Detect(hand, decomposition.Melds, decomposition.Pair, decomposition.Wait);
+                if (yaku.Count > 0)
+                {
+                    fu = yaku.Any(entry => entry.Name == "Chiitoitsu") ? 25 : FuCalculator.Calculate(hand, decomposition.Melds, decomposition.Pair, decomposition.Wait, this.configuration.DoubleWindPairFu);
+                    score = this.scoringEngine.Calculate(hand, yaku, fu, state.SeatWind == Wind.East);
+                }
+            }
+
+            this.cachedScoring = (decomposition, yaku, fu, score);
+            this.cachedScoringKey = key;
+        }
+
+        var (cachedDecomposition, cachedYaku, cachedFu, cachedScore) = this.cachedScoring.Value;
+
+        if (cachedDecomposition is null)
         {
             ImGui.TextUnformatted("Current tiles do not form a complete winning hand.");
             return;
         }
 
-        var yaku = this.yakuDetector.Detect(hand, decomposition.Melds, decomposition.Pair, decomposition.Wait);
-        if (yaku.Count == 0)
+        if (cachedYaku.Count == 0)
         {
             ImGui.TextUnformatted("No yaku detected.");
             return;
         }
 
-        foreach (var entry in yaku)
+        foreach (var entry in cachedYaku)
         {
             ImGui.BulletText(entry.IsYakuman ? $"{entry.Name} (yakuman)" : $"{entry.Name} ({entry.Han} han)");
         }
 
-        var fu = yaku.Any(entry => entry.Name == "Chiitoitsu") ? 25 : FuCalculator.Calculate(hand, decomposition.Melds, decomposition.Pair, decomposition.Wait, this.configuration.DoubleWindPairFu);
-        var score = this.scoringEngine.Calculate(hand, yaku, fu, state.SeatWind == Wind.East);
-        ImGui.TextUnformatted($"{score.Han} han / {score.Fu} fu");
-        if (hand.WinMethod == WinMethod.Ron)
+        ImGui.TextUnformatted($"{cachedScore!.Han} han / {cachedFu} fu");
+        if (cachedScore.RonPayment > 0)
         {
-            ImGui.TextColored(Gold, $"Ron: {score.RonPayment:N0}");
+            ImGui.TextColored(Gold, $"Ron: {cachedScore.RonPayment:N0}");
         }
         else if (state.SeatWind == Wind.East)
         {
-            ImGui.TextColored(Gold, $"Tsumo: {score.TsumoPaymentDealer:N0} all");
+            ImGui.TextColored(Gold, $"Tsumo: {cachedScore.TsumoPaymentDealer:N0} all");
         }
         else
         {
-            ImGui.TextColored(Gold, $"Tsumo: {score.TsumoPaymentDealer:N0}/{score.TsumoPaymentNonDealer:N0}");
+            ImGui.TextColored(Gold, $"Tsumo: {cachedScore.TsumoPaymentDealer:N0}/{cachedScore.TsumoPaymentNonDealer:N0}");
         }
 
-        if (score.IsLimit)
+        if (cachedScore.IsLimit)
         {
-            ImGui.TextUnformatted($"Limit: {score.LimitName}");
+            ImGui.TextUnformatted($"Limit: {cachedScore.LimitName}");
         }
     }
 
@@ -189,6 +220,13 @@ public sealed class MainWindow : Window
         hand.ClosedTiles.AddRange(state.ClosedTiles);
         hand.CalledMelds.AddRange(state.CalledMelds);
         return hand;
+    }
+
+    private static string GetHandFingerprint(GameState state)
+    {
+        var tiles = string.Join(",", state.ClosedTiles.Select(t => TileHelpers.ToIndex(TileHelpers.Normalize(t))));
+        var melds = string.Join("|", state.CalledMelds.Select(m => string.Join(",", m.Tiles.Select(t => TileHelpers.ToIndex(t)))));
+        return $"{tiles}:{melds}";
     }
 
     private static Hand CreateScoringHand(GameState state)
