@@ -605,14 +605,27 @@ internal static class HandDecomposer
 
     private static bool IsChiitoitsu(List<Tile> tiles)
     {
-        return tiles.Count == 14 && tiles.GroupBy(TileHelpers.ToIndex).Count() == 7 && tiles.GroupBy(TileHelpers.ToIndex).All(group => group.Count() == 2);
+        if (tiles.Count != 14)
+        {
+            return false;
+        }
+
+        // Evaluate the grouping once; ruleset requires exactly 7 DISTINCT pairs.
+        // A 4-of-a-kind produces one group with count 4, which fails the == 2 check.
+        var groups = tiles.GroupBy(TileHelpers.ToIndex).ToList();
+        return groups.Count == 7 && groups.All(group => group.Count() == 2);
     }
 
     private static bool IsKokushi(List<Tile> tiles)
     {
-        return tiles.Count == 14
-               && tiles.All(t => t.IsTerminalOrHonor)
-               && tiles.GroupBy(TileHelpers.ToIndex).Count() == 13
-               && tiles.GroupBy(TileHelpers.ToIndex).Any(group => group.Count() == 2);
+        if (tiles.Count != 14)
+        {
+            return false;
+        }
+
+        var groups = tiles.Where(t => t.IsTerminalOrHonor).GroupBy(TileHelpers.ToIndex).ToList();
+        return tiles.All(t => t.IsTerminalOrHonor)
+               && groups.Count == 13
+               && groups.Any(group => group.Count() == 2);
     }
 }

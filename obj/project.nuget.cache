@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "dgSpecHash": "6lPqk6q/WAw=",
+  "success": true,
+  "projectFilePath": "/tmp/workspace/Tihlyn/MahjongHater/MahjongHater.csproj",
+  "expectedPackageFiles": [
+    "/tmp/codeql-scratch-233fff3c3e4333ee/dbs/csharp/working/packages/dalamudpackager/2.1.13/dalamudpackager.2.1.13.nupkg.sha512",
+    "/tmp/codeql-scratch-233fff3c3e4333ee/dbs/csharp/working/packages/microsoft.netcore.app.ref/9.0.16/microsoft.netcore.app.ref.9.0.16.nupkg.sha512",
+    "/tmp/codeql-scratch-233fff3c3e4333ee/dbs/csharp/working/packages/microsoft.windowsdesktop.app.ref/9.0.16/microsoft.windowsdesktop.app.ref.9.0.16.nupkg.sha512",
+    "/tmp/codeql-scratch-233fff3c3e4333ee/dbs/csharp/working/packages/microsoft.aspnetcore.app.ref/9.0.16/microsoft.aspnetcore.app.ref.9.0.16.nupkg.sha512"
+  ],
+  "logs": []
+}

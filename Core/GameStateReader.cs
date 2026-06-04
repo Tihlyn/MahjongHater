@@ -82,7 +82,7 @@ public unsafe sealed class GameStateReader
                 }
             }
 
-            // TODO(WiP): If AgentEmj gets mapped in FFXIVClientStructs, prefer reading the canonical Mahjong agent state directly.
+            // TODO(WIP): If AgentEmj gets mapped in FFXIVClientStructs, prefer reading the canonical Mahjong agent state directly.
             var tileNodes = InferTileNodes(imageNodes);
             var inferredHand = PartitionTiles(tileNodes);
             var score = ExtractScore(textNodes);
