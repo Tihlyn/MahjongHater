@@ -1,6 +1,6 @@
 using System.Numerics;
 using Dalamud.Interface.Windowing;
-using ImGuiNET;
+using Dalamud.Bindings.ImGui;
 using MahjongHater.Core;
 
 namespace MahjongHater.Windows;
@@ -240,6 +240,7 @@ public sealed class MainWindow : Window
 
     private static void DrawHeader(string text)
     {
-        ImGui.SeparatorText(text);
+        ImGui.Separator();
+        ImGui.TextUnformatted(text);
     }
 }

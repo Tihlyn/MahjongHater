@@ -44,13 +44,13 @@ public unsafe sealed class GameStateReader
         try
         {
             var addonPtr = this.gameGui.GetAddonByName("Emj");
-            if (addonPtr == 0)
+            if (addonPtr.IsNull)
             {
                 this.CurrentState = null;
                 return;
             }
 
-            var addon = (AtkUnitBase*)addonPtr;
+            var addon = (AtkUnitBase*)addonPtr.Address;
             if (addon->RootNode == null)
             {
                 this.CurrentState = null;
@@ -192,7 +192,7 @@ public unsafe sealed class GameStateReader
     private static bool TryReadText(AtkTextNode* textNode, out TextNodeSnapshot snapshot)
     {
         snapshot = default;
-        var raw = Marshal.PtrToStringUTF8((nint)textNode->NodeText.StringPtr);
+        var raw = Marshal.PtrToStringUTF8((nint)(byte*)textNode->NodeText.StringPtr);
         if (string.IsNullOrWhiteSpace(raw))
         {
             return false;

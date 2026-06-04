@@ -1,5 +1,5 @@
 using Dalamud.Interface.Windowing;
-using ImGuiNET;
+using Dalamud.Bindings.ImGui;
 
 namespace MahjongHater.Windows;
 
@@ -26,7 +26,8 @@ public sealed class ConfigWindow : Window
             this.configuration.PluginEnabled = pluginEnabled;
         }
 
-        ImGui.SeparatorText("Rules");
+        ImGui.Separator();
+        ImGui.TextUnformatted("Rules");
 
         var kuitan = this.configuration.Kuitan;
         if (ImGui.Checkbox("Kuitan (Open Tanyao)", ref kuitan))
