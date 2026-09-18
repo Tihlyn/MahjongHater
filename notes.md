@@ -1,0 +1,4 @@
+Plugin still relies on hovering over tiles at every step for recommendation. a background scanning engine should run and get tiles id without relying on image nodes to get the correct tile id -> tile name. with the goal being no to have to hover tiles anymore.
+recommendations hand after prompt on action like chi/pon/pass appear on screen.
+the tile highlight still highly the wrong tile randomly, pushing the idea of mismatch between tile id and tile name further.
+a global scanning engine of the entire emj tree would be a nice addition, adding basically a /analyze command to the plugin for debug and reversing purposes. the engine would run and scanner and collect data from every aspect of the emj addon during a match play, it would help see tiles, on screen action prompt, discarded tile pile. result from that analysis would greatly help building a more accurate and efficient solver.

@@ -1,12 +1,19 @@
 namespace MahjongHater.Core;
 
+// Ruleset switches the analysis core needs, kept free of Dalamud/Configuration types
+// so the whole analysis path stays unit-testable.
+public readonly record struct RulesetOptions(bool Kuitan)
+{
+    public static RulesetOptions Default => new(Kuitan: true);
+}
+
 public sealed class YakuDetector
 {
-    private readonly Configuration configuration;
+    private readonly RulesetOptions options;
 
-    public YakuDetector(Configuration configuration)
+    public YakuDetector(RulesetOptions options)
     {
-        this.configuration = configuration;
+        this.options = options;
     }
 
     public List<YakuResult> Detect(Hand hand, List<Meld> decomposition, Tile pair, WaitType wait)
@@ -144,7 +151,7 @@ public sealed class YakuDetector
             results.Add(new YakuResult("Iipeikou", 1, false, false));
         }
 
-        if (tiles.All(t => t.IsSimple) && (!hand.IsOpen || this.configuration.Kuitan))
+        if (tiles.All(t => t.IsSimple) && (!hand.IsOpen || this.options.Kuitan))
         {
             results.Add(new YakuResult("Tanyao", 1, false, false));
         }

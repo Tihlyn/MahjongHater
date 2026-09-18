@@ -217,22 +217,22 @@ internal static class TileHelpers
         tile = Normalize(tile);
         return tile.Suit switch
         {
-            TileSuit.Man => $"{tile.Number}-man",
-            TileSuit.Pin => $"{tile.Number}-pin",
-            TileSuit.Sou => $"{tile.Number}-sou",
+            TileSuit.Man => $"{tile.Number} Characters",
+            TileSuit.Pin => $"{tile.Number} Dots",
+            TileSuit.Sou => $"{tile.Number} Bamboo",
             TileSuit.Wind => tile.Number switch
             {
-                1 => "East",
-                2 => "South",
-                3 => "West",
-                4 => "North",
+                1 => "East Wind",
+                2 => "South Wind",
+                3 => "West Wind",
+                4 => "North Wind",
                 _ => throw new InvalidOperationException(),
             },
             TileSuit.Dragon => tile.Number switch
             {
-                1 => "Haku",
-                2 => "Hatsu",
-                3 => "Chun",
+                1 => "White Dragon",
+                2 => "Green Dragon",
+                3 => "Red Dragon",
                 _ => throw new InvalidOperationException(),
             },
             _ => throw new InvalidOperationException(),
@@ -242,6 +242,32 @@ internal static class TileHelpers
     public static int CountKind(IEnumerable<Tile> tiles, Tile tile)
     {
         return tiles.Count(candidate => SameKind(candidate, tile));
+    }
+
+    // Maps FFXIV tile icon IDs to tiles.
+    // 76041-76049: 1m-9m | 76050-76058: 1p-9p | 76059-76067: 1s-9s
+    // 76068-76071: E/S/W/N winds | 76072-76074: Haku/Hatsu/Chun
+    // 76075-76077: red fives 0m/0p/0s (confirmed via hover pairing: 76076 → red 5p).
+    public static bool TryTileFromIconId(int iconId, out Tile tile)
+    {
+        tile = default;
+        switch (iconId - 76041)
+        {
+            case >= 0 and <= 8:   tile = new Tile(TileSuit.Man,    iconId - 76041 + 1); return true;
+            case >= 9 and <= 17:  tile = new Tile(TileSuit.Pin,    iconId - 76050 + 1); return true;
+            case >= 18 and <= 26: tile = new Tile(TileSuit.Sou,    iconId - 76059 + 1); return true;
+            case 27: tile = new Tile(TileSuit.Wind,   1); return true;
+            case 28: tile = new Tile(TileSuit.Wind,   2); return true;
+            case 29: tile = new Tile(TileSuit.Wind,   3); return true;
+            case 30: tile = new Tile(TileSuit.Wind,   4); return true;
+            case 31: tile = new Tile(TileSuit.Dragon, 1); return true;
+            case 32: tile = new Tile(TileSuit.Dragon, 2); return true;
+            case 33: tile = new Tile(TileSuit.Dragon, 3); return true;
+            case 34: tile = new Tile(TileSuit.Man, 5, isRedFive: true); return true;
+            case 35: tile = new Tile(TileSuit.Pin, 5, isRedFive: true); return true;
+            case 36: tile = new Tile(TileSuit.Sou, 5, isRedFive: true); return true;
+            default: return false;
+        }
     }
 
     public static List<Tile> Sort(IEnumerable<Tile> tiles)

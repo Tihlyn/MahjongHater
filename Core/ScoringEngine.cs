@@ -3,11 +3,9 @@ namespace MahjongHater.Core;
 public sealed class ScoringEngine
 {
     private static readonly Lazy<bool> ReferenceScoresValidated = new(ValidateReferenceScores);
-    private readonly Configuration configuration;
 
-    public ScoringEngine(Configuration configuration)
+    public ScoringEngine()
     {
-        this.configuration = configuration;
         _ = ReferenceScoresValidated.Value;
     }
 

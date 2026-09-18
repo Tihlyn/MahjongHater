@@ -1,0 +1,26 @@
+{
+  "name": "Emj",
+  "addonName": "Emj",
+  "tileIconBase": 76041,
+  "offsets": {
+    "handArray": "0x0DB8",
+    "handSlots": 14,
+    "scores": ["0x0500", "0x07E0", "0x0AC0", "0x0DA0"],
+    "discardCounts": ["0x04FE", "0x07DE", "0x0ABE", "0x0D9E"],
+    "discardArrays": [null, null, null, null],
+    "discardArrayMaxLen": 24,
+    "doraIndicator": "0x0FD8",
+    "uraDoraIndicator": null,
+    "melds": null,
+    "riichiFlags": null,
+    "roundWind": null,
+    "seatWind": null,
+    "dealerSeat": null,
+    "honba": null,
+    "riichiSticks": null,
+    "wallRemaining": null
+  },
+  "atkValues": { "stateCode": 0, "wallCount": 1 },
+  "stateCodes": { "ourTurn": 6, "othersTurn": 15, "callPrompt": 19, "deal": 21, "score": 29, "win": 32 },
+  "nodes": { "handSlotFirst": 134, "handSlotDraw": 135, "handSlotButton": 9, "callList": "104/3", "recapNext": 97 }
+}

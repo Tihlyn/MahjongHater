@@ -14,9 +14,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="MahjongHater.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Remove="validation-libs/**/*.cs" />
     <EmbeddedResource Remove="validation-libs/**/*" />
     <None Remove="validation-libs/**/*" />
+    <Compile Remove="MahjongHater.Tests/**/*.cs" />
+    <EmbeddedResource Remove="MahjongHater.Tests/**/*" />
+    <None Remove="MahjongHater.Tests/**/*" />
   </ItemGroup>
 
   <ItemGroup>
