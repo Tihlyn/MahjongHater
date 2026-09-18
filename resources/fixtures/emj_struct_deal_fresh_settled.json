@@ -1,0 +1,77 @@
+{
+ "fixture": "emj_struct_deal_fresh_settled.hex",
+ "capturedUtc": "2026-09-18T21:07:10Z",
+ "description": "Same deal ~6 s later: all counts 13, dora indicator count 1, no discards yet.",
+ "state0": 2,
+ "range": "AddonEmj +0x0000..+0x1100",
+ "client": "EU, Dalamud 15.0.3.5, CS 7.56.2.9089",
+ "struct": {
+  "hand": [
+   "1m",
+   "7m",
+   "1p",
+   "3p",
+   "3p",
+   "4s",
+   "5s",
+   "7s",
+   "7s",
+   "E",
+   "E",
+   "G",
+   "G"
+  ],
+  "drawnTile": null,
+  "doraIndicator": "Wh",
+  "doraIndicatorCount": 1,
+  "seats": [
+   {
+    "seat": 0,
+    "closedTileCount": 13,
+    "meldCount": 0,
+    "discardCount": 0,
+    "riichiDiscardIndex": null,
+    "score": 11600,
+    "pointDifference": 11600,
+    "melds": []
+   },
+   {
+    "seat": 1,
+    "closedTileCount": 13,
+    "meldCount": 0,
+    "discardCount": 0,
+    "riichiDiscardIndex": null,
+    "score": 28400,
+    "pointDifference": -16800,
+    "melds": []
+   },
+   {
+    "seat": 2,
+    "closedTileCount": 13,
+    "meldCount": 0,
+    "discardCount": 0,
+    "riichiDiscardIndex": null,
+    "score": 44000,
+    "pointDifference": -32400,
+    "melds": []
+   },
+   {
+    "seat": 3,
+    "closedTileCount": 13,
+    "meldCount": 0,
+    "discardCount": 0,
+    "riichiDiscardIndex": null,
+    "score": 16000,
+    "pointDifference": -4400,
+    "melds": []
+   }
+  ]
+ },
+ "discards": {
+  "0": [],
+  "1": [],
+  "2": [],
+  "3": []
+ },
+ "discardsComplete": true
+}

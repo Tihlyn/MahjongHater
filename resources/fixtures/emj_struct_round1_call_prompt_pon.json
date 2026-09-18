@@ -1,0 +1,77 @@
+{
+ "fixture": "emj_struct_round1_call_prompt_pon.hex",
+ "capturedUtc": "2026-09-18T20:53:12Z",
+ "description": "Round 1: kamicha (seat 3) discarded 5s, Pon offered (we hold 5s + red 5s). Call list rows: 0=Pon, 1=Pass. AtkValues[0]=15 while the list is open.",
+ "state0": 15,
+ "range": "AddonEmj +0x0000..+0x1100",
+ "client": "EU, Dalamud 15.0.3.5, CS 7.56.2.9089",
+ "struct": {
+  "hand": [
+   "1m",
+   "8m",
+   "3p",
+   "3p",
+   "1s",
+   "1s",
+   "5s",
+   "r5s",
+   "8s",
+   "8s",
+   "9s",
+   "S",
+   "W"
+  ],
+  "drawnTile": null,
+  "doraIndicator": "5p",
+  "doraIndicatorCount": 1,
+  "seats": [
+   {
+    "seat": 0,
+    "closedTileCount": 13,
+    "meldCount": 0,
+    "discardCount": 9,
+    "riichiDiscardIndex": null,
+    "score": 25000,
+    "pointDifference": 25000,
+    "melds": []
+   },
+   {
+    "seat": 1,
+    "closedTileCount": 13,
+    "meldCount": 0,
+    "discardCount": 9,
+    "riichiDiscardIndex": 7,
+    "score": 25000,
+    "pointDifference": 0,
+    "melds": []
+   },
+   {
+    "seat": 2,
+    "closedTileCount": 13,
+    "meldCount": 0,
+    "discardCount": 9,
+    "riichiDiscardIndex": null,
+    "score": 25000,
+    "pointDifference": 0,
+    "melds": []
+   },
+   {
+    "seat": 3,
+    "closedTileCount": 13,
+    "meldCount": 0,
+    "discardCount": 9,
+    "riichiDiscardIndex": null,
+    "score": 25000,
+    "pointDifference": 0,
+    "melds": []
+   }
+  ]
+ },
+ "callTile": "5s",
+ "callFromSeat": 3,
+ "callOptions": [
+  "Pon",
+  "Pass"
+ ],
+ "discardsComplete": false
+}
