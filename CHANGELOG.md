@@ -4,6 +4,8 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+## [1.3.0] - 2026-09-19
+
 ### Added
 
 - Auto play and requeue in the main window (dev tooling): the overlay's decisions are
