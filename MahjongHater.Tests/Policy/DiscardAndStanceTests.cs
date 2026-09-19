@@ -99,6 +99,36 @@ public class DiscardAndStanceTests
     }
 
     [Fact]
+    public void Tenpai_pushes_against_a_soft_estimate_and_a_riichi_with_a_real_wait()
+    {
+        // 24 discards each and no riichi: the estimate is high for everyone.
+        var late = Snap();
+        foreach (var seat in new[] { 1, 2, 3 })
+            late = Seat(late, seat, discards: "1m2m3m4m6m7m8m9m1p2p3p4p6p7p8p9p1s2s3s4s6s7s8s9s");
+        Assert.Equal(PushFoldStance.Push,
+            new PushFoldPolicy().Evaluate(late, Model(late), Candidate(shanten: 0, value: 1, ukeire: 4), out var soft));
+        Assert.Contains("Push", soft.Display);
+
+        var riichi = Seat(Snap(), riichi: true);
+        Assert.Equal(PushFoldStance.Push,
+            new PushFoldPolicy().Evaluate(riichi, Model(riichi), Candidate(shanten: 0, value: 1, ukeire: 4), out _));
+        Assert.Equal(PushFoldStance.Fold,
+            new PushFoldPolicy().Evaluate(riichi, Model(riichi), Candidate(shanten: 0, value: 1, ukeire: 2), out _));
+    }
+
+    [Fact]
+    public void One_shanten_does_not_fold_on_the_soft_estimate_alone()
+    {
+        var late = Snap();
+        foreach (var seat in new[] { 1, 2, 3 })
+            late = Seat(late, seat, discards: "1m2m3m4m6m7m8m9m1p2p3p4p6p7p8p9p1s2s3s4s6s7s8s9s");
+        Assert.Equal(PushFoldStance.Push,
+            new PushFoldPolicy().Evaluate(late, Model(late), Candidate(shanten: 1, value: 0), out _));
+        Assert.Equal(PushFoldStance.Fold,
+            new PushFoldPolicy().Evaluate(late, Model(late), Candidate(shanten: 2, value: 0), out _));
+    }
+
+    [Fact]
     public void No_threat_means_push()
     {
         var state = Snap();

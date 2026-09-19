@@ -25,7 +25,8 @@ public class DecisionPolicyTests
     public void Folding_never_declares_riichi()
     {
         var state = Seat(Snap(legal: LegalAction.Discard | LegalAction.Riichi), riichi: true);
-        var policy = new DecisionPolicy(discards: new FixedDiscards(Candidate(shanten: 0, value: 0)));
+        // Cheap tenpai on a 2-tile wait against a declared riichi: fold, hence no riichi.
+        var policy = new DecisionPolicy(discards: new FixedDiscards(Candidate(shanten: 0, value: 0, ukeire: 2)));
         Assert.Equal(ActionKind.Discard, policy.Choose(state, default).Kind);
     }
 
