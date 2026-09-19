@@ -164,8 +164,12 @@ public sealed unsafe partial class EmjStateReader : IDisposable
         if (any)
             this.tracker.HintSeatWinds(winds);
 
-        if (this.Layout.RoundWind is null
-            && EmjScanner.ParseWindText(EmjScanner.ReadTextAtPath(addon, nodes.RoundWindText)) is { } round)
+        // "South 4 South Wind": the round is the leading word; the string is win-screen
+        // residue, so it lags by at most one hand and beats the East default on a
+        // mid-session load (docs/EMJ_STRUCT.md, "Not in the struct").
+        var roundText = this.Layout.RoundWind is null ? EmjScanner.ReadTextAtPath(addon, nodes.RoundWindText) : null;
+        var leading = roundText?.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        if (EmjScanner.ParseWindText(leading) is { } round)
             this.tracker.HintRoundWind(round);
     }
 
