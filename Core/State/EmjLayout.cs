@@ -173,7 +173,9 @@ public sealed class EmjLayout
                 ScoreTexts: FourPaths(nodes?.ScoreTexts),
                 HonbaText: nodes?.HonbaText,
                 RoundWindText: nodes?.RoundWindText,
-                WallCounterDigits: nodes?.WallCounterDigits ?? []),
+                WallCounterDigits: nodes?.WallCounterDigits ?? [],
+                ChiShapeButtons: nodes?.ChiShapeButtons ?? ["1/46/52/5", "1/46/52/6", "1/46/52/7", "1/46/52/8"],
+                ChiShapeCancel: nodes?.ChiShapeCancel ?? "1/46/52/11"),
         };
     }
 
@@ -399,6 +401,8 @@ public sealed class EmjLayout
         [JsonPropertyName("honbaText")] public string? HonbaText { get; set; }
         [JsonPropertyName("roundWindText")] public string? RoundWindText { get; set; }
         [JsonPropertyName("wallCounterDigits")] public string[]? WallCounterDigits { get; set; }
+        [JsonPropertyName("chiShapeButtons")] public string[]? ChiShapeButtons { get; set; }
+        [JsonPropertyName("chiShapeCancel")] public string? ChiShapeCancel { get; set; }
     }
 }
 
@@ -411,4 +415,5 @@ public readonly record struct StateCodeTable(
 // and overlay act on or read text from.
 public readonly record struct NodeTable(
     int HandSlotFirst, int HandSlotDraw, int HandSlotButton, string CallList, int RecapNext,
-    string?[] SeatWindTexts, string?[] ScoreTexts, string? HonbaText, string? RoundWindText, string[] WallCounterDigits);
+    string?[] SeatWindTexts, string?[] ScoreTexts, string? HonbaText, string? RoundWindText, string[] WallCounterDigits,
+    string[] ChiShapeButtons, string? ChiShapeCancel);

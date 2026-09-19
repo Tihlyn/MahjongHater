@@ -78,6 +78,10 @@ public sealed record StateSnapshot(
     // compositions, layout shift…). Empty when everything reconciled.
     public IReadOnlyList<string> Notes { get; init; } = [];
 
+    // Chi-shape chooser (game state 25): the sequences the game offers, in its button
+    // order. Non-empty only after a Chi was accepted and more than one shape fits.
+    public IReadOnlyList<Meld> CallShapes { get; init; } = [];
+
     public SeatState Us => this.Seats[0];
 
     public bool IsOpen => this.OurMelds.Any(m => m.IsOpen);

@@ -87,7 +87,11 @@ public sealed class CallPolicy : ICallPolicy
                 yield return Make(ActionKind.MinKan, copies.Take(3).ToArray(), called, MeldType.Daiminkan);
             if (state.Can(LegalAction.Chi) && state.CallFromSeat == 3 && !called.IsHonor)
             {
-                for (var start = Math.Max(1, called.Number - 2); start <= Math.Min(7, called.Number); start++)
+                // With the chooser open only the game's shapes are on offer.
+                var starts = state.CallShapes.Count > 0
+                    ? state.CallShapes.Select(m => m.Tiles.Min(t => t.Number)).Distinct()
+                    : Enumerable.Range(Math.Max(1, called.Number - 2), Math.Min(7, called.Number) - Math.Max(1, called.Number - 2) + 1);
+                foreach (var start in starts)
                 {
                     var consumed = new List<Tile>();
                     foreach (var number in Enumerable.Range(start, 3).Where(n => n != called.Number))

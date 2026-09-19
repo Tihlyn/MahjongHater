@@ -179,4 +179,24 @@ public class CallPolicyTests
         var state = Offered("123m456p67s1155z9s", "5z", LegalAction.Pon);
         Assert.Throws<OperationCanceledException>(() => new CallPolicy().Evaluate(state, Model(state), new CancellationToken(true)));
     }
+
+    [Fact]
+    public void Chooser_restricts_chi_to_the_offered_shapes()
+    {
+        // 456s is the tenpai shape; with only 234s and 345s on offer the policy must not pick it.
+        var state = Snap("233m2345p0p23456s", LegalAction.Chi | LegalAction.Pass) with
+        {
+            CallTile = Tile.Parse("4s"),
+            CallFromSeat = 3,
+            CallShapes = [Meld.MakeChi(Tile.Parse("2s"), Tile.Parse("3s"), Tile.Parse("4s")), Meld.MakeChi(Tile.Parse("3s"), Tile.Parse("4s"), Tile.Parse("5s"))],
+        };
+        var decision = new CallPolicy().Evaluate(state, Model(state), default);
+        if (decision.Accept)
+            Assert.Contains(decision.Meld!.Tiles.Min(t => t.Number), new[] { 2, 3 });
+
+        var open = state with { CallShapes = [Meld.MakeChi(Tile.Parse("4s"), Tile.Parse("5s"), Tile.Parse("6s"))] };
+        var best = new CallPolicy().Evaluate(open, Model(open), default);
+        Assert.True(best.Accept);
+        Assert.Equal(4, best.Meld!.Tiles.Min(t => t.Number));
+    }
 }

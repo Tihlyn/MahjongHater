@@ -129,6 +129,9 @@ public sealed class SnapshotBuilder
             LayoutHealthy: healthy)
         {
             Notes = notes,
+            CallShapes = t.CallWindowActive
+                ? t.CallShapes.Select(s => new Meld(MeldType.Chi, s, true)).ToList()
+                : [],
         };
 
         var key = ContentKey(snapshot);
@@ -258,6 +261,7 @@ public sealed class SnapshotBuilder
           .Append('|').Append(s.Honba).Append(s.RiichiSticks).Append('|').Append(s.OurRiichi ? 1 : 0)
           .Append('|').Append((int)s.Legal).Append('|').Append(s.CallTile).Append(s.CallFromSeat)
           .Append('|').Append(string.Join(",", s.CallOptions)).Append('|').Append(s.LayoutHealthy ? 1 : 0)
+          .Append('|').Append(s.CallShapes.Count)
           .Append('|').Append(string.Join(";", s.Notes));
         return sb.ToString();
     }

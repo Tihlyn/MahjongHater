@@ -399,6 +399,34 @@ reason — they can legitimately disagree.
   only "End match" remains — state code 27 with an empty hand and final scores.
 
 
+### Verified live 2026-09-19, second match (full hanchan driven by the policy, finished 1st)
+
+- **Self-declare prompt** = type-23 `[6]="Riichi!" [7]="Riichi" [8]="Pass"` (or `"Tsumo!","Tsumo","Riichi"`)
+  right after our type-5 draw; the list `104/3` shows the same labels. `Riichi!`/`Tsumo!` is the
+  announcement banner echoing the option (dedupe on `TrimEnd('!')`).
+- **Riichi selection**: `ListItemClick` row 0 → the game fires type-7, then **type-6 with
+  `[1]=count, [2..]=closed-slot indices whose discard would break tenpai`** (the greyed-out
+  tiles; the draw slot is never listed), and waits for the discard. Any tenpai-keeping slot
+  click completes it; the struct riichi index (`+0x2C7`) flips on that discard. No further
+  event marks the selection, so the operator must clear its own window after answering.
+- **Answer echo**: every accepted row (Pon/Chi/Riichi/Tsumo/Ron) is echoed as a type-19 with
+  the *same* `[6..8]` labels — not a new prompt.
+- **Chi-shape chooser = state 25**: after "Chi" when more than one sequence fits:
+  `[0]=25 [1]=6 [2]="Chi" [3]=count`, then 4 ints per option from `[4]` (three tile icons +
+  a 76041 placeholder), e.g. `2s3s4s·, 3s4s5s·, 4s5s6s·`. Panel `1/46/52`: option buttons
+  `52/5, 52/6, 52/7, 52/8` (`ButtonClick` params 9–12, left→right = AtkValues order),
+  `52/11` (param 8) = Cancel. The list `104/3` is hidden meanwhile. A single fitting shape
+  skips the chooser. No auto-pick timer observed (it waited ~2 min for a click).
+- **atkType-74 payload is unsafe**: for a chi its `[8]` was the 76041 placeholder, parsed
+  as 1m → a bogus `Daiminkan [1m 4s 5s 6s]` that outranked the correct type-13
+  `Chi [4s 5s 6s]` (`[6]=255, [7]=3`) when the struct meld count trimmed the list. The
+  tracker now books our melds only from type-13 / the hand delta; 74 only closes the window.
+- The call panel keeps `"Tsumo"`/`"Riichi"` texts across the next deal: a label-edge
+  self-declare must require the draw in hand.
+- `Pass` on a 3-row list (`Kan`,`Pon`,`Pass`) resolves to row 2 by renderer text — worked.
+- Plugin hot-reload mid-hand (Dalamud dev auto-reload) is safe: the tracker cold-starts from
+  the struct; only event-only data (opponent discards before the reload) is missing.
+
 ## Discard pile reading
 
 Two independent sources are merged (`MergeDiscardPiles`):

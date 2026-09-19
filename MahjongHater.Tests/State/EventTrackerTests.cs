@@ -132,7 +132,7 @@ public class EventTrackerTests
     }
 
     [Fact]
-    public void AtkType74_payload_is_deduped_and_hand_delta_does_not_double_add()
+    public void AtkType74_does_not_book_and_hand_delta_books_once()
     {
         var t = new EventTracker();
         t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), [], T0);
@@ -140,6 +140,8 @@ public class EventTrackerTests
         var payload = AtkFrame.OfInts([74, 0, 0, 0, 0, 0, 0, 0, 76069, 76069, 76069, 0]);
         t.OnReceiveEvent(74, payload);
         t.OnReceiveEvent(74, payload);
+        Assert.Empty(t.Melds);
+        t.OnTick(StructFixture.PostPon, [], T0);   // hand delta 13→11 books the pon
         Assert.Single(t.Melds);
         t.OnTick(StructFixture.PostPon, [], T0);
         Assert.Single(t.Melds);
@@ -243,5 +245,54 @@ public class EventTrackerTests
         t.OnTick(StructFixture.Decoded("15m6m12p568p5s1356z", "9m"), ["Tsumo", "Riichi", "Pass"], T0);
         Assert.True(t.CallWindowActive);
         Assert.False(t.CallIsClaim);
+    }
+
+    // Live 2026-09-19 (AtkValues verbatim): after "Chi" the game asks which sequence:
+    // [0]=25 [1]=6 [2]="Chi" [3]=3, then 2s3s4s·, 3s4s5s·, 4s5s6s· (· = 76041 placeholder).
+    [Fact]
+    public void Type25_offers_chi_shapes_and_keeps_the_claimed_tile()
+    {
+        var t = new EventTracker();
+        var hand = StructFixture.Decoded("233m2345p0p23456s", null);
+        t.OnTick(hand, [], T0);
+        t.OnRefresh(Discard(3, "4s"), T0);
+        t.OnRefresh(CallWindow("Chi", "Pass", "Pass"), T0);
+        Assert.True(t.CallWindowActive);
+        t.MarkCallAnswered(isWin: false);                          // "Chi" row clicked
+        Assert.False(t.CallWindowActive);
+
+        int I(string tile) => StructFixture.IconOf(Tile.Parse(tile), 76041);
+        t.OnRefresh(AtkFrame.OfInts(25, 6, 0, 3,
+            I("2s"), I("3s"), I("4s"), 76041,
+            I("3s"), I("4s"), I("5s"), 76041,
+            I("4s"), I("5s"), I("6s"), 76041).WithString(2, "Chi"), T0);
+        Assert.True(t.CallWindowActive);
+        Assert.True(t.CallIsClaim);
+        Assert.Equal(["Chi"], t.CallOptions);
+        Assert.Equal(Tile.Parse("4s"), t.CallTile);
+        Assert.Equal(3, t.CallFromSeat);
+        Assert.Equal(3, t.CallShapes.Count);
+        Assert.Equal(TestTiles.Parse("4s5s6s"), t.CallShapes[2]);
+
+        // The chosen shape arrives as type-13 (chi: [6]=255, claimed tile first) and closes it.
+        t.OnRefresh(AtkFrame.OfInts(13, 0, 1, 5, 1, 3, 255, 3, I("4s"), I("5s"), I("6s")), T0);
+        Assert.False(t.CallWindowActive);
+        Assert.Empty(t.CallShapes);
+        Assert.Single(t.SeatMeldsOf(0));
+        Assert.Equal(TestTiles.Parse("4s5s6s"), t.SeatMeldsOf(0)[0].Tiles);
+    }
+
+    // Live 2026-09-19: the 74 payload read the placeholder as 1m and booked a bogus kan.
+    [Fact]
+    public void AtkType74_closes_the_window_but_never_books_a_meld()
+    {
+        var t = new EventTracker();
+        t.OnTick(StructFixture.Decoded("233m2345p0p23456s", null), [], T0);
+        t.OnRefresh(Discard(3, "4s"), T0);
+        t.OnRefresh(CallWindow("Chi", "Pass", "Pass"), T0);
+        int I(string tile) => StructFixture.IconOf(Tile.Parse(tile), 76041);
+        t.OnReceiveEvent(74, AtkFrame.OfInts([0, .. new int[7], 76041, I("4s"), I("5s"), I("6s")]));
+        Assert.False(t.CallWindowActive);
+        Assert.Empty(t.SeatMeldsOf(0));
     }
 }

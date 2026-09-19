@@ -535,6 +535,7 @@ public sealed class Plugin : IDalamudPlugin
             return new Dictionary<string, object?> { ["error"] = "decision is stale for the current state", ["action"] = choice.Kind.ToString() };
 
         const string addon = "Emj";
+        var chooser = state.CallShapes.Count > 0;
         object? outcome = choice.Kind switch
         {
             ActionKind.Discard => this.Reader.DebugDiscard(null, choice.Tile?.ToString()),
@@ -542,15 +543,17 @@ public sealed class Plugin : IDalamudPlugin
             ActionKind.Tsumo => this.Reader.DebugClickLabel(addon, "Tsumo"),
             ActionKind.Ron => this.Reader.DebugClickLabel(addon, "Ron"),
             ActionKind.Pon => this.Reader.DebugClickLabel(addon, "Pon"),
+            ActionKind.Chi when chooser => this.ClickChiShape(state, choice),
             ActionKind.Chi => this.Reader.DebugClickLabel(addon, "Chi"),
             ActionKind.MinKan or ActionKind.AnKan or ActionKind.ShouMinKan => this.Reader.DebugClickLabel(addon, "Kan"),
+            ActionKind.Pass when chooser => this.Reader.DebugClickPath(this.Reader.Layout.Nodes.ChiShapeCancel ?? string.Empty),
             ActionKind.Pass when state.Phase is GamePhase.CallPrompt or GamePhase.SelfDeclare => this.Reader.DebugClickLabel(addon, "Pass"),
             _ => new Dictionary<string, object?> { ["skipped"] = "nothing to execute", ["action"] = choice.Kind.ToString() },
         };
 
         // A list answer (call / pass / win / riichi) is final for that window; the game echoes
         // it as another type-19, which the tracker must not treat as a new prompt.
-        var answered = outcome is Dictionary<string, object?> o && o.ContainsKey("clicked") && !o.ContainsKey("error");
+        var answered = outcome is Dictionary<string, object?> o && (o.ContainsKey("clicked") || o.ContainsKey("path")) && !o.ContainsKey("error");
         if (answered && choice.Kind != ActionKind.Discard)
             this.Reader.Tracker.MarkCallAnswered(choice.IsWin);
 
@@ -558,9 +561,35 @@ public sealed class Plugin : IDalamudPlugin
         {
             ["action"] = choice.Kind.ToString(),
             ["tile"] = choice.Tile?.ToString(),
+            ["meld"] = choice.Call is { } meld ? string.Join(" ", meld.Tiles.Select(t => t.ToString())) : null,
             ["summary"] = choice.Summary,
             ["outcome"] = outcome,
             ["answered"] = answered,
         };
+    }
+
+    // State 25: pick the option whose three tiles are the policy's meld (button order =
+    // AtkValues order); a meld the game did not offer is a policy bug, not a click.
+    private object? ClickChiShape(StateSnapshot state, ActionChoice choice)
+    {
+        if (choice.Call is not { } wanted)
+            return new Dictionary<string, object?> { ["error"] = "chi decision carries no meld" };
+        var index = -1;
+        for (var i = 0; i < state.CallShapes.Count; i++)
+        {
+            var offered = state.CallShapes[i].Tiles.Select(TileHelpers.ToIndex).Order();
+            if (offered.SequenceEqual(wanted.Tiles.Select(TileHelpers.ToIndex).Order()))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        var buttons = this.Reader.Layout.Nodes.ChiShapeButtons;
+        if (index < 0 || index >= buttons.Length)
+            return new Dictionary<string, object?> { ["error"] = $"shape {string.Join(" ", wanted.Tiles)} is not among the offered {state.CallShapes.Count} shapes" };
+        var result = this.Reader.DebugClickPath(buttons[index]);
+        result["shapeIndex"] = index;
+        return result;
     }
 }

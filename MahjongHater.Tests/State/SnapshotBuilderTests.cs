@@ -152,4 +152,26 @@ public class SnapshotBuilderTests
         Assert.Same(first, second);
         Assert.Equal(GamePhase.NotInGame, first.Phase);
     }
+
+    [Fact]
+    public void Chi_shape_chooser_is_a_claim_prompt_with_the_offered_shapes()
+    {
+        var b = new SnapshotBuilder();
+        var t = new EventTracker();
+        var hand = StructFixture.Decoded("233m2345p0p23456s", null);
+        Build(b, t, hand);
+        t.OnRefresh(AtkFrame.OfInts(8, 3, StructFixture.IconOf(Tile.Parse("4s"), 76041)), default);
+        int I(string tile) => StructFixture.IconOf(Tile.Parse(tile), 76041);
+        t.OnRefresh(AtkFrame.OfInts(25, 6, 0, 2,
+            I("2s"), I("3s"), I("4s"), 76041,
+            I("4s"), I("5s"), I("6s"), 76041).WithString(2, "Chi"), default);
+        var s = Build(b, t, hand with { StateCode = 25 });
+        Assert.Equal(GamePhase.CallPrompt, s.Phase);
+        Assert.True(s.Can(LegalAction.Chi));
+        Assert.True(s.Can(LegalAction.Pass));
+        Assert.Equal(Tile.Parse("4s"), s.CallTile);
+        Assert.Equal(3, s.CallFromSeat);
+        Assert.Equal(2, s.CallShapes.Count);
+        Assert.Equal(TestTiles.Parse("4s5s6s"), s.CallShapes[1].Tiles);
+    }
 }

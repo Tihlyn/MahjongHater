@@ -26,6 +26,8 @@ public sealed class EventTracker
 
     private bool callWindowActive;
     private List<string> callOptions = [];
+    // Type-25 chi-shape chooser: the sequences offered, in the game's button order.
+    private List<Tile[]> callShapes = [];
     private Tile? callTile;
     private int callFromSeat = -1;
     private string lastPromptSignature = string.Empty;
@@ -69,6 +71,9 @@ public sealed class EventTracker
 
     public IReadOnlyList<string> CallOptions => this.callOptions;
 
+    // Non-empty while the game asks which two hand tiles form the chi (state 25).
+    public IReadOnlyList<Tile[]> CallShapes => this.callShapes;
+
     public Tile? CallTile => this.callTile;
 
     public int CallFromSeat => this.callFromSeat;
@@ -98,8 +103,13 @@ public sealed class EventTracker
             return;
         this.answeredSignature = string.Join(",", this.callOptions);
         this.WinDeclared |= isWin;
+        this.answeredCallTile = this.callTile;
+        this.answeredCallFromSeat = this.callFromSeat;
         this.ClearCallWindow("answered by operator");
     }
+
+    private Tile? answeredCallTile;
+    private int answeredCallFromSeat = -1;
 
     public bool RiichiDeclared => this.riichiDeclared;
 
@@ -228,6 +238,46 @@ public sealed class EventTracker
 
                 break;
 
+            case 25: // chi-shape chooser (live 2026-09-19): [2]="Chi", [3]=count, then per option
+                     // [4+4i..6+4i] = three tile icons, [7+4i] = 76041 placeholder
+            {
+                if (!string.Equals(f.Str(2), "Chi", StringComparison.OrdinalIgnoreCase))
+                    break;
+                var count = Math.Clamp(f.Int(3), 0, 4);
+                var shapes = new List<Tile[]>(count);
+                for (var i = 0; i < count; i++)
+                {
+                    var shape = new List<Tile>(3);
+                    for (var k = 0; k < 3; k++)
+                    {
+                        if (f.IsInt(4 + (4 * i) + k) && TileHelpers.TryTileFromIconId(f.Int(4 + (4 * i) + k), out var tile))
+                            shape.Add(tile);
+                    }
+
+                    if (shape.Count == 3)
+                        shapes.Add(shape.ToArray());
+                }
+
+                if (shapes.Count == 0)
+                    break;
+
+                // The claimed tile is the one every shape contains; the answered window or the
+                // fresh opponent discard names it when the shapes are ambiguous.
+                var common = shapes.Skip(1).Aggregate(shapes[0].AsEnumerable(),
+                    (acc, s) => acc.Where(t => s.Any(x => TileHelpers.SameKind(x, t)))).ToList();
+                var claimed = this.answeredCallTile ?? this.FreshOpponentDiscard(utc) ?? (common.Count == 1 ? common[0] : (Tile?)null);
+                this.answeredSignature = null;
+                this.callWindowActive = true;
+                this.callWindowFromLabels = false;
+                this.callOptions = ["Chi"];
+                this.callShapes = shapes;
+                this.CallIsClaim = true;
+                this.callTile = claimed;
+                this.callFromSeat = this.answeredCallFromSeat >= 0 ? this.answeredCallFromSeat : 3;
+                this.Note($"chi shapes (type-25): [{string.Join(" | ", shapes.Select(s => string.Join("", s.Select(x => x.ToString()))))}] tile={claimed?.ToString() ?? "-"}");
+                break;
+            }
+
             case 29: // post-round score delta: [1]=seat-0 delta ×100
             {
                 this.roundEnded = true;
@@ -256,28 +306,21 @@ public sealed class EventTracker
         }
     }
 
-    // PostReceiveEvent atkType=74: meld accepted, [8..11] = meld tile icons. Fires
-    // constantly without payload (noise) and repeatedly WITH the same payload — dedupe.
+    // PostReceiveEvent atkType=74: our meld was accepted. Its [8..11] payload is not a
+    // safe tile source (live 2026-09-19: the 76041 placeholder of a chi read as a real 1m
+    // and produced a bogus kan that outranked the correct type-13 meld); the type-13 that
+    // follows within a frame names the tiles for every seat, and the hand-delta inference
+    // covers a missed one. Here it only closes the window.
     public void OnReceiveEvent(int atkType, AtkFrame f)
     {
         if (atkType != 74)
             return;
 
-        var tiles = new List<Tile>(4);
+        var tiles = 0;
         for (var i = 8; i < 12; i++)
-        {
-            if (!f.IsInt(i) || !TileHelpers.TryTileFromIconId(f.Int(i), out var t))
-                break;
-            tiles.Add(t);
-        }
-
-        if (tiles.Count < 3)
-            return;
-
-        var type = tiles.Count == 4 ? MeldType.Daiminkan
-            : TileHelpers.SameKind(tiles[0], tiles[1]) ? MeldType.Pon
-            : MeldType.Chi;
-        if (this.TryAddMeld(0, new Meld(type, [.. tiles], true), "atkType=74"))
+            if (f.IsInt(i) && TileHelpers.TryTileFromIconId(f.Int(i), out _))
+                tiles++;
+        if (tiles >= 3)
             this.ClearCallWindow("meld accepted (atkType=74)");
     }
 
@@ -453,6 +496,7 @@ public sealed class EventTracker
         this.callWindowActive = false;
         this.callWindowFromLabels = false;
         this.callOptions = [];
+        this.callShapes = [];
         this.CallIsClaim = false;
         this.callTile = null;
         this.callFromSeat = -1;

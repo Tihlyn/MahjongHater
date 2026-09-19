@@ -247,6 +247,29 @@ public sealed unsafe partial class EmjStateReader
         return result;
     }
 
+    // Full click on a node addressed by a Cartographer-style path ("1/46/52/7").
+    public Dictionary<string, object?> DebugClickPath(string path)
+    {
+        var result = new Dictionary<string, object?>();
+        var addon = this.GetDebugAddon(result);
+        if (addon == null)
+            return result;
+
+        var node = EmjScanner.FindNodeByPath(addon, path);
+        if (node == null || !node->IsVisible())
+        {
+            result["error"] = $"node {path} not found or not visible";
+            return result;
+        }
+
+        var fired = EmjOperator.ClickNode(addon, node, null);
+        this.tracker.Note($"op click {path}: {string.Join("; ", fired)}");
+        result["path"] = path;
+        result["fired"] = fired;
+        this.AppendOperateState(result);
+        return result;
+    }
+
     public Dictionary<string, object?> DebugClickLabel(string addonName, string label)
     {
         var result = new Dictionary<string, object?>();
