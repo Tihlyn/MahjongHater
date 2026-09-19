@@ -2,8 +2,7 @@
 
 `Directory.Build.props` is the version source (`major.minor.patch`). The SDK turns it
 into an assembly version with a fourth `.0` component, and DalamudPackager stamps
-the packaged manifest. `Plugin.cs` still contains a legacy attribute: MSBuild compiles
-an intermediate copy without it, leaving that source file untouched. The development
+the packaged manifest. No source file carries a version attribute. The development
 DLL stays at `bin/Release/net10.0-windows/MahjongHater.dll`.
 
 CI uses Windows and .NET 10. It downloads Dalamud and sets `DALAMUD_HOME`; local builds
@@ -49,8 +48,8 @@ commit the generated entry manually from the affected tag's stamped manifest and
 If the local atomic push fails, the release commit and tag remain locally: resolve the
 push rejection before retrying that push, rather than running the bump again.
 
-Offline verification passed with both local fallback and `DALAMUD_HOME`, a stamped
-1.1.0.0 package containing the DLL, manifest and layout, valid repository JSON, and
-all 241 tests present in this checkout (the task described 265). Release-helper behavior
-was checked with mocked Git and dotnet commands. Distribution downloads, hosted Actions,
-GitHub Releases, and the authenticated push to main require online verification.
+Offline verification passed with both the local fallback and `DALAMUD_HOME`: a stamped
+1.1.0.0 package containing the DLL, manifest and layout, valid repository JSON, and the
+full test suite. Release-helper behaviour was checked with mocked Git and dotnet
+commands. Distribution downloads, hosted Actions, GitHub Releases, and the authenticated
+push to `main` are verified by the first real release.
