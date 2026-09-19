@@ -1,0 +1,94 @@
+{
+ "fixture": "emj_struct_round1_midround.hex",
+ "capturedUtc": "2026-09-18T20:51:58Z",
+ "description": "Round 1 after our 6th discard (9m), captured during the opponents' turns.",
+ "state0": 15,
+ "range": "AddonEmj +0x0000..+0x1100",
+ "client": "EU, Dalamud 15.0.3.5, CS 7.56.2.9089",
+ "struct": {
+  "hand": [
+   "1m",
+   "8m",
+   "3p",
+   "3p",
+   "1s",
+   "1s",
+   "5s",
+   "r5s",
+   "8s",
+   "8s",
+   "9s",
+   "S",
+   "W"
+  ],
+  "drawnTile": null,
+  "doraIndicator": "5p",
+  "doraIndicatorCount": 1,
+  "seats": [
+   {
+    "seat": 0,
+    "closedTileCount": 13,
+    "meldCount": 0,
+    "discardCount": 6,
+    "riichiDiscardIndex": null,
+    "score": 25000,
+    "pointDifference": 25000,
+    "melds": []
+   },
+   {
+    "seat": 1,
+    "closedTileCount": 13,
+    "meldCount": 0,
+    "discardCount": 5,
+    "riichiDiscardIndex": null,
+    "score": 25000,
+    "pointDifference": 0,
+    "melds": []
+   },
+   {
+    "seat": 2,
+    "closedTileCount": 13,
+    "meldCount": 0,
+    "discardCount": 5,
+    "riichiDiscardIndex": null,
+    "score": 25000,
+    "pointDifference": 0,
+    "melds": []
+   },
+   {
+    "seat": 3,
+    "closedTileCount": 13,
+    "meldCount": 0,
+    "discardCount": 5,
+    "riichiDiscardIndex": null,
+    "score": 25000,
+    "pointDifference": 0,
+    "melds": []
+   }
+  ]
+ },
+ "discards": {
+  "0": [
+   "E",
+   "Wh",
+   "6p",
+   "8p",
+   "9p",
+   "9m"
+  ],
+  "1": [
+   "S",
+   "R"
+  ],
+  "2": [
+   "E",
+   "N"
+  ],
+  "3": [
+   "S",
+   "W"
+  ]
+ },
+ "discardsComplete": false,
+ "note": "opponent lists hold only the first two discards; later ones were not logged"
+}

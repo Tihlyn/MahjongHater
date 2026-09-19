@@ -145,6 +145,14 @@ name, full in-game hover name, icon id, and texture path — for all 37 faces
 
 ## Tile reading methods
 
+> **Superseded for the local hand (2026-09-18).** The full 14-slot hand is a plain `int32[14]` of icon
+> IDs at `AddonEmj + 0x0DB8` (slot 13 = drawn/claimed tile), verified live across deals, discards,
+> draws, call prompts and win screens. Per-seat discard counts, meld count/tile indices, riichi
+> index and scores are in the addon struct too. Hover tracking and node-face scanning are no longer
+> needed to read the hand; see [`EMJ_STRUCT.md`](EMJ_STRUCT.md) for the offset table, what is *not*
+> in the struct (discard tiles, chi tiles, winds, wall — still events/nodes), and the hex fixtures
+> under `resources/fixtures/`. The methods below remain valid as cross-checks and for the operate side.
+
 Five independent tile-identity sources exist, in descending order of trust. **None is
 unconditionally correct** — every one of them has been caught wrong at least once in
 live testing, which is why the plugin cross-checks rather than trusting any single

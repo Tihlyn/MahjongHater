@@ -11,8 +11,22 @@
     "discardArrayMaxLen": 24,
     "doraIndicator": "0x0FD8",
     "uraDoraIndicator": null,
-    "melds": null,
-    "riichiFlags": null,
+    "melds": {
+      "tileIndexArrays": ["0x0478", "0x0758", "0x0A38", "0x0D18"],
+      "tileIndexSlots": 4,
+      "tileIndexEmpty": -1,
+      "tileIndexChi": 255,
+      "fromDirectionBytes": ["0x0488", "0x0768", "0x0A48", "0x0D28"],
+      "fromDirection": { "1": "shimocha", "2": "toimen", "3": "kamicha" },
+      "countBytes": ["0x04FD", "0x07DD", "0x0ABD", "0x0D9D"],
+      "closedTileCountBytes": ["0x04FC", "0x07DC", "0x0ABC", "0x0D9C"]
+    },
+    "riichiFlags": {
+      "discardIndexBytes": ["0x04FF", "0x07DF", "0x0ABF", "0x0D9F"],
+      "none": 255
+    },
+    "pointDifferences": ["0x0504", "0x07E4", "0x0AC4", "0x0DA4"],
+    "doraIndicatorCount": "0x0FDC",
     "roundWind": null,
     "seatWind": null,
     "dealerSeat": null,
@@ -20,7 +34,15 @@
     "riichiSticks": null,
     "wallRemaining": null
   },
+  "seatPanels": { "base": ["0x0238", "0x0518", "0x07F8", "0x0AD8"], "size": "0x02E0" },
   "atkValues": { "stateCode": 0, "wallCount": 1 },
-  "stateCodes": { "ourTurn": 6, "othersTurn": 15, "callPrompt": 19, "deal": 21, "score": 29, "win": 32 },
-  "nodes": { "handSlotFirst": 134, "handSlotDraw": 135, "handSlotButton": 9, "callList": "104/3", "recapNext": 97 }
+  "stateCodes": { "deal": 2, "draw": 5, "ourTurn": 6, "discard": 8, "riichi": 12, "meld": 13, "othersTurn": 15, "callPrompt": 19, "postMeldRefresh": 21, "callWindowOpened": 22, "callOptions": 23, "postWin": 27, "score": 29, "win": 32 },
+  "nodes": {
+    "handSlotFirst": 134, "handSlotDraw": 135, "handSlotButton": 9,
+    "callList": "1/46/104/3", "recapNext": 97,
+    "seatWindTexts": ["1/36/37/38/7/9", "1/36/39/40/8/10", "1/36/41/42/8/10", "1/36/43/44/8/10"],
+    "scoreTexts": ["1/36/37/38/10/12/2", "1/36/39/40/11/13/2", "1/36/41/42/11/13/2", "1/36/43/44/11/13/2"],
+    "honbaText": "1/46/48/2",
+    "wallCounterDigits": ["1/46/105/2/2", "1/46/105/3/2"]
+  }
 }

@@ -104,7 +104,7 @@ build+test, layout self-check surfaced in the UI ("layout OK / shifted / unknown
 ## Branching
 
 `rework` is the integration branch (checkpoint of the uncommitted July work). Sub-work happens in
-worktrees branched from it: `rework/reader`, `rework/policy`. Phase 0 writes docs/resources only and
+worktrees branched from it: `rework-reader`, `rework-policy`. Phase 0 writes docs/resources only and
 commits to `rework` directly. Merge order: reader → policy → wiring.
 
 ## Layout JSON schema (`resources/layouts/emj.json`)
