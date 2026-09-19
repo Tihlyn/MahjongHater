@@ -5,9 +5,9 @@ using System.Text.Json.Serialization;
 namespace MahjongHater.Core.State;
 
 // Memory layout of the AddonEmj struct + the AtkValues/state-code/node ids the reader
-// needs, loaded from resources/layouts/<variant>.json (schema in docs/REWORK_PLAN.md).
-// Every number that belongs to the game client lives here, never in reader code.
-// Unknown fields are null; the reader must tolerate that.
+// needs, loaded from resources/layouts/<variant>.json (schema: docs/REWORK_PLAN.md,
+// offsets: docs/EMJ_STRUCT.md). Every number that belongs to the game client lives
+// here, never in reader code. Unknown JSON keys are ignored; missing ones stay null.
 public sealed class EmjLayout
 {
     public const string DefaultResourcePath = "resources/layouts/emj.json";
@@ -25,6 +25,7 @@ public sealed class EmjLayout
 
     public required int HandSlots { get; init; }
 
+    // Per relative seat (0 = us, 1 = shimocha, 2 = toimen, 3 = kamicha).
     public required int?[] Scores { get; init; }
 
     public required int?[] DiscardCounts { get; init; }
@@ -33,13 +34,31 @@ public sealed class EmjLayout
 
     public int DiscardArrayMaxLen { get; init; } = 24;
 
+    public required int?[] PointDifferences { get; init; }
+
+    public required int?[] ClosedTileCounts { get; init; }
+
+    public required int?[] MeldCounts { get; init; }
+
+    public required int?[] MeldTileIndexArrays { get; init; }
+
+    public int MeldTileIndexSlots { get; init; } = 4;
+
+    public int MeldTileIndexEmpty { get; init; } = -1;
+
+    public int MeldTileIndexChi { get; init; } = 255;
+
+    public required int?[] MeldFromDirectionBytes { get; init; }
+
+    public required int?[] RiichiDiscardIndexBytes { get; init; }
+
+    public int RiichiNone { get; init; } = 255;
+
     public int? DoraIndicator { get; init; }
 
+    public int? DoraIndicatorCount { get; init; }
+
     public int? UraDoraIndicator { get; init; }
-
-    public int? Melds { get; init; }
-
-    public int? RiichiFlags { get; init; }
 
     public int? RoundWind { get; init; }
 
@@ -61,19 +80,29 @@ public sealed class EmjLayout
 
     public required NodeTable Nodes { get; init; }
 
-    // Bytes the struct reader must copy to cover every mapped offset (int32 fields).
+    // Bytes the struct reader must copy to cover every mapped offset.
     public int RequiredBytes
     {
         get
         {
             var end = this.HandArray + (this.HandSlots * 4);
-            foreach (var o in this.Scores.Concat(this.DiscardCounts))
+            foreach (var o in this.Scores.Concat(this.PointDifferences))
                 end = Math.Max(end, (o ?? 0) + 4);
+            foreach (var o in this.DiscardCounts.Concat(this.ClosedTileCounts).Concat(this.MeldCounts).Concat(this.RiichiDiscardIndexBytes))
+                end = Math.Max(end, (o ?? 0) + 1);
+            foreach (var o in this.MeldTileIndexArrays)
+                if (o is { } arr)
+                    end = Math.Max(end, arr + (this.MeldTileIndexSlots * 4));
+            foreach (var o in this.MeldFromDirectionBytes)
+                if (o is { } dir)
+                    end = Math.Max(end, dir + this.MeldTileIndexSlots);
             foreach (var o in this.DiscardArrays)
                 if (o is { } arr)
                     end = Math.Max(end, arr + (this.DiscardArrayMaxLen * 4));
-            foreach (var o in new[] { this.DoraIndicator, this.UraDoraIndicator, this.Melds, this.RiichiFlags, this.RoundWind, this.SeatWind, this.DealerSeat, this.Honba, this.RiichiSticks, this.WallRemaining })
+            foreach (var o in new[] { this.DoraIndicator, this.UraDoraIndicator, this.RoundWind, this.SeatWind, this.DealerSeat, this.Honba, this.RiichiSticks, this.WallRemaining })
                 end = Math.Max(end, (o ?? 0) + 4);
+            if (this.DoraIndicatorCount is { } dc)
+                end = Math.Max(end, dc + 1);
             return Math.Min(end, MaxReadBytes);
         }
     }
@@ -83,6 +112,10 @@ public sealed class EmjLayout
         var dto = JsonSerializer.Deserialize<LayoutDto>(json, JsonOptions)
                   ?? throw new InvalidDataException("Layout JSON is empty.");
         var o = dto.Offsets ?? throw new InvalidDataException("Layout JSON has no 'offsets'.");
+        var melds = o.Melds;
+        var riichi = o.RiichiFlags;
+        var codes = dto.StateCodes;
+        var nodes = dto.Nodes;
         return new EmjLayout
         {
             Name = dto.Name ?? "Emj",
@@ -94,10 +127,19 @@ public sealed class EmjLayout
             DiscardCounts = FourOffsets(o.DiscardCounts),
             DiscardArrays = FourOffsets(o.DiscardArrays),
             DiscardArrayMaxLen = o.DiscardArrayMaxLen ?? 24,
+            PointDifferences = FourOffsets(o.PointDifferences),
+            ClosedTileCounts = FourOffsets(melds?.ClosedTileCountBytes),
+            MeldCounts = FourOffsets(melds?.CountBytes),
+            MeldTileIndexArrays = FourOffsets(melds?.TileIndexArrays),
+            MeldTileIndexSlots = melds?.TileIndexSlots ?? 4,
+            MeldTileIndexEmpty = melds?.TileIndexEmpty ?? -1,
+            MeldTileIndexChi = melds?.TileIndexChi ?? 255,
+            MeldFromDirectionBytes = FourOffsets(melds?.FromDirectionBytes),
+            RiichiDiscardIndexBytes = FourOffsets(riichi?.DiscardIndexBytes),
+            RiichiNone = riichi?.None ?? 255,
             DoraIndicator = ParseHex(o.DoraIndicator),
+            DoraIndicatorCount = ParseHex(o.DoraIndicatorCount),
             UraDoraIndicator = ParseHex(o.UraDoraIndicator),
-            Melds = ParseHex(o.Melds),
-            RiichiFlags = ParseHex(o.RiichiFlags),
             RoundWind = ParseHex(o.RoundWind),
             SeatWind = ParseHex(o.SeatWind),
             DealerSeat = ParseHex(o.DealerSeat),
@@ -107,18 +149,31 @@ public sealed class EmjLayout
             StateCodeIndex = dto.AtkValues?.StateCode ?? 0,
             WallCountIndex = dto.AtkValues?.WallCount ?? 1,
             StateCodes = new StateCodeTable(
-                dto.StateCodes?.OurTurn ?? 6,
-                dto.StateCodes?.OthersTurn ?? 15,
-                dto.StateCodes?.CallPrompt ?? 19,
-                dto.StateCodes?.Deal ?? 21,
-                dto.StateCodes?.Score ?? 29,
-                dto.StateCodes?.Win ?? 32),
+                Deal: codes?.Deal ?? 2,
+                Draw: codes?.Draw ?? 5,
+                OurTurn: codes?.OurTurn ?? 6,
+                Discard: codes?.Discard ?? 8,
+                Riichi: codes?.Riichi ?? 12,
+                Meld: codes?.Meld ?? 13,
+                OthersTurn: codes?.OthersTurn ?? 15,
+                CallPrompt: codes?.CallPrompt ?? 19,
+                PostMeldRefresh: codes?.PostMeldRefresh ?? 21,
+                CallWindowOpened: codes?.CallWindowOpened ?? 22,
+                CallOptions: codes?.CallOptions ?? 23,
+                PostWin: codes?.PostWin ?? 27,
+                Score: codes?.Score ?? 29,
+                Win: codes?.Win ?? 32),
             Nodes = new NodeTable(
-                dto.Nodes?.HandSlotFirst ?? 134,
-                dto.Nodes?.HandSlotDraw ?? 135,
-                dto.Nodes?.HandSlotButton ?? 9,
-                dto.Nodes?.CallList ?? "104/3",
-                dto.Nodes?.RecapNext ?? 97),
+                HandSlotFirst: nodes?.HandSlotFirst ?? 134,
+                HandSlotDraw: nodes?.HandSlotDraw ?? 135,
+                HandSlotButton: nodes?.HandSlotButton ?? 9,
+                CallList: nodes?.CallList ?? "1/46/104/3",
+                RecapNext: nodes?.RecapNext ?? 97,
+                SeatWindTexts: FourPaths(nodes?.SeatWindTexts),
+                ScoreTexts: FourPaths(nodes?.ScoreTexts),
+                HonbaText: nodes?.HonbaText,
+                RoundWindText: nodes?.RoundWindText,
+                WallCounterDigits: nodes?.WallCounterDigits ?? []),
         };
     }
 
@@ -154,7 +209,13 @@ public sealed class EmjLayout
         tile = default;
         if (raw <= 0)
             return false;
-        var idx = raw - iconBase;
+        return TryTileFromIndex(raw - iconBase, out tile);
+    }
+
+    // 34-index (same space as icon − base; the struct's meld records use it directly).
+    public static bool TryTileFromIndex(int idx, out Tile tile)
+    {
+        tile = default;
         switch (idx)
         {
             case >= 0 and <= 33:
@@ -235,6 +296,16 @@ public sealed class EmjLayout
         return result;
     }
 
+    private static string?[] FourPaths(string?[]? values)
+    {
+        var result = new string?[4];
+        if (values is null)
+            return result;
+        for (var i = 0; i < 4 && i < values.Length; i++)
+            result[i] = string.IsNullOrWhiteSpace(values[i]) ? null : values[i];
+        return result;
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -261,16 +332,35 @@ public sealed class EmjLayout
         [JsonPropertyName("discardCounts")] public string?[]? DiscardCounts { get; set; }
         [JsonPropertyName("discardArrays")] public string?[]? DiscardArrays { get; set; }
         [JsonPropertyName("discardArrayMaxLen")] public int? DiscardArrayMaxLen { get; set; }
+        [JsonPropertyName("pointDifferences")] public string?[]? PointDifferences { get; set; }
+        [JsonPropertyName("melds")] public MeldsDto? Melds { get; set; }
+        [JsonPropertyName("riichiFlags")] public RiichiDto? RiichiFlags { get; set; }
         [JsonPropertyName("doraIndicator")] public string? DoraIndicator { get; set; }
+        [JsonPropertyName("doraIndicatorCount")] public string? DoraIndicatorCount { get; set; }
         [JsonPropertyName("uraDoraIndicator")] public string? UraDoraIndicator { get; set; }
-        [JsonPropertyName("melds")] public string? Melds { get; set; }
-        [JsonPropertyName("riichiFlags")] public string? RiichiFlags { get; set; }
         [JsonPropertyName("roundWind")] public string? RoundWind { get; set; }
         [JsonPropertyName("seatWind")] public string? SeatWind { get; set; }
         [JsonPropertyName("dealerSeat")] public string? DealerSeat { get; set; }
         [JsonPropertyName("honba")] public string? Honba { get; set; }
         [JsonPropertyName("riichiSticks")] public string? RiichiSticks { get; set; }
         [JsonPropertyName("wallRemaining")] public string? WallRemaining { get; set; }
+    }
+
+    private sealed class MeldsDto
+    {
+        [JsonPropertyName("tileIndexArrays")] public string?[]? TileIndexArrays { get; set; }
+        [JsonPropertyName("tileIndexSlots")] public int? TileIndexSlots { get; set; }
+        [JsonPropertyName("tileIndexEmpty")] public int? TileIndexEmpty { get; set; }
+        [JsonPropertyName("tileIndexChi")] public int? TileIndexChi { get; set; }
+        [JsonPropertyName("fromDirectionBytes")] public string?[]? FromDirectionBytes { get; set; }
+        [JsonPropertyName("countBytes")] public string?[]? CountBytes { get; set; }
+        [JsonPropertyName("closedTileCountBytes")] public string?[]? ClosedTileCountBytes { get; set; }
+    }
+
+    private sealed class RiichiDto
+    {
+        [JsonPropertyName("discardIndexBytes")] public string?[]? DiscardIndexBytes { get; set; }
+        [JsonPropertyName("none")] public int? None { get; set; }
     }
 
     private sealed class AtkValuesDto
@@ -281,10 +371,18 @@ public sealed class EmjLayout
 
     private sealed class StateCodesDto
     {
+        [JsonPropertyName("deal")] public int? Deal { get; set; }
+        [JsonPropertyName("draw")] public int? Draw { get; set; }
         [JsonPropertyName("ourTurn")] public int? OurTurn { get; set; }
+        [JsonPropertyName("discard")] public int? Discard { get; set; }
+        [JsonPropertyName("riichi")] public int? Riichi { get; set; }
+        [JsonPropertyName("meld")] public int? Meld { get; set; }
         [JsonPropertyName("othersTurn")] public int? OthersTurn { get; set; }
         [JsonPropertyName("callPrompt")] public int? CallPrompt { get; set; }
-        [JsonPropertyName("deal")] public int? Deal { get; set; }
+        [JsonPropertyName("postMeldRefresh")] public int? PostMeldRefresh { get; set; }
+        [JsonPropertyName("callWindowOpened")] public int? CallWindowOpened { get; set; }
+        [JsonPropertyName("callOptions")] public int? CallOptions { get; set; }
+        [JsonPropertyName("postWin")] public int? PostWin { get; set; }
         [JsonPropertyName("score")] public int? Score { get; set; }
         [JsonPropertyName("win")] public int? Win { get; set; }
     }
@@ -296,9 +394,21 @@ public sealed class EmjLayout
         [JsonPropertyName("handSlotButton")] public int? HandSlotButton { get; set; }
         [JsonPropertyName("callList")] public string? CallList { get; set; }
         [JsonPropertyName("recapNext")] public int? RecapNext { get; set; }
+        [JsonPropertyName("seatWindTexts")] public string?[]? SeatWindTexts { get; set; }
+        [JsonPropertyName("scoreTexts")] public string?[]? ScoreTexts { get; set; }
+        [JsonPropertyName("honbaText")] public string? HonbaText { get; set; }
+        [JsonPropertyName("roundWindText")] public string? RoundWindText { get; set; }
+        [JsonPropertyName("wallCounterDigits")] public string[]? WallCounterDigits { get; set; }
     }
 }
 
-public readonly record struct StateCodeTable(int OurTurn, int OthersTurn, int CallPrompt, int Deal, int Score, int Win);
+// AtkValues[0] values (docs/EMJ_STRUCT.md, "State codes seen").
+public readonly record struct StateCodeTable(
+    int Deal, int Draw, int OurTurn, int Discard, int Riichi, int Meld, int OthersTurn,
+    int CallPrompt, int PostMeldRefresh, int CallWindowOpened, int CallOptions, int PostWin, int Score, int Win);
 
-public readonly record struct NodeTable(int HandSlotFirst, int HandSlotDraw, int HandSlotButton, string CallList, int RecapNext);
+// Node ids / Cartographer-style paths ("1/46/104/3" = NodeIds root→…→list) the operator
+// and overlay act on or read text from.
+public readonly record struct NodeTable(
+    int HandSlotFirst, int HandSlotDraw, int HandSlotButton, string CallList, int RecapNext,
+    string?[] SeatWindTexts, string?[] ScoreTexts, string? HonbaText, string? RoundWindText, string[] WallCounterDigits);

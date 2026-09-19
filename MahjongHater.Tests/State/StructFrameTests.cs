@@ -25,6 +25,46 @@ public class StructFrameTests
         Assert.Equal(6, d.StateCode);
         Assert.Null(d.WallRemaining);
         Assert.All(d.SeatDiscards, l => Assert.Null(l));
+        Assert.Equal(13, d.Us.ClosedTileCount);
+        Assert.Equal(0, d.Us.MeldCount);
+        Assert.Null(d.Us.RiichiDiscardIndex);
+    }
+
+    [Fact]
+    public void Seat_panel_meld_records_decode_and_stale_entries_beyond_the_count_are_ignored()
+    {
+        // Seat 2: pon 5s claimed from toimen, pon 8m from shimocha; a stale third record.
+        var records = new StructFixture.MeldRecord[]?[]
+        {
+            null, null,
+            [new StructFixture.MeldRecord(22, 2), new StructFixture.MeldRecord(7, 1), new StructFixture.MeldRecord(255, 3)],
+            null,
+        };
+        var buf = StructFixture.BytesFor("124589m1589p69s6z", null, melds: records, riichiIndices: [255, 7, 255, 255]);
+        buf[StructFixture.Layout.MeldCounts[2]!.Value] = 2;
+        var d = StructFrame.FromBytes(buf, StructFixture.Layout, 15, 0, 50).Decode(StructFixture.Layout);
+
+        var seat2 = d.Seats[2];
+        Assert.Equal(2, seat2.MeldCount);
+        Assert.Equal(2, seat2.Melds.Count);
+        Assert.Equal(Tile.Parse("5s"), seat2.Melds[0].Tile);
+        Assert.Equal(2, seat2.Melds[0].FromDirection);
+        Assert.Equal(Tile.Parse("8m"), seat2.Melds[1].Tile);
+        Assert.False(seat2.Melds[1].IsChi);
+        Assert.Equal(7, d.Seats[1].RiichiDiscardIndex);
+        Assert.Null(d.Seats[0].RiichiDiscardIndex);
+    }
+
+    [Fact]
+    public void Chi_records_carry_no_tile()
+    {
+        var records = new StructFixture.MeldRecord[]?[] { null, null, null, [new StructFixture.MeldRecord(255, 3)] };
+        var d = StructFrame.FromBytes(StructFixture.BytesFor("124589m1589p69s6z", null, melds: records), StructFixture.Layout, 15, 0, 50)
+            .Decode(StructFixture.Layout);
+        var meld = Assert.Single(d.Seats[3].Melds);
+        Assert.True(meld.IsChi);
+        Assert.Null(meld.Tile);
+        Assert.Equal(3, meld.FromDirection);
     }
 
     [Fact]
@@ -50,10 +90,14 @@ public class StructFrameTests
     {
         var layout = EmjLayout.Parse("""{ "tileIconBase": 76041, "offsets": { "handArray": "0x0DB8" } }""");
         var frame = StructFrame.FromBytes(StructFixture.Bytes(layout), layout, 6, 0, 50);
-        Assert.All(frame.Scores, s => Assert.Null(s));
-        Assert.All(frame.DiscardCounts, c => Assert.Null(c));
+        Assert.All(frame.Seats, s => Assert.Null(s.Score));
+        Assert.All(frame.Seats, s => Assert.Null(s.DiscardCount));
+        Assert.All(frame.Seats, s => Assert.Null(s.MeldTileIndices));
         Assert.Null(frame.DoraIndicator);
-        Assert.Null(frame.Decode(layout).DoraIndicator);
+        var d = frame.Decode(layout);
+        Assert.Null(d.DoraIndicator);
+        Assert.All(d.Seats, s => Assert.Empty(s.Melds));
+        Assert.All(d.Seats, s => Assert.Null(s.RiichiDiscardIndex));
     }
 
     [Fact]
