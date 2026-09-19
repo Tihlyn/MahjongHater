@@ -1,71 +1,107 @@
-# Phase 2 policy notes
+# Policy notes
 
-Implemented `OpponentModel`, `HeuristicDiscardPolicy`, `PushFoldPolicy`, `CallPolicy`,
-`RiichiPolicy`, and constructor-injected `DecisionPolicy`. Existing contract members
-are unchanged; additional heuristic weights are additive. All code is pure C#.
-Shanten, ukeire, discard value, and winning yaku come from the existing engine.
+`Core/Policy/` is the decision layer: pure C#, no Dalamud types, every sub-policy
+constructor-injected into `DecisionPolicy` and unit-tested alone (`MahjongHater.Tests/Policy/`).
+It composes the existing engine — `Shanten` (exact, per suit), `HandAnalyzer` (ukeire, two-step
+ukeire, kept-hand value, waits), `YakuDetector` — into one `ActionChoice` per snapshot with a
+`Reason` per stage. All tunables are the `PolicyWeights` record (defaults = shipped behaviour).
 
-## Formulas and decisions
+## Decision order (`DecisionPolicy.Choose`)
 
-- Non-riichi tenpai probability is clamped to [0, 0.99]:
-  `0.05 + 0.025 * discards + 0.12 * openMelds + 0.08 * earlyOutside + 0.12 * lateMiddle`.
-  `earlyOutside` counts honors/terminals in the first six discards divided by six;
-  `lateMiddle` counts ranks 3–7 thereafter divided by twelve, capped at one.
-  Fixed denominators preserve monotonicity as discards arrive. Riichi gives 1.
-- Base danger: honors 0.16, terminals 0.12, ranks 2/8 0.18, other numbers 0.24.
-  Honor danger scales by `(4 - visibleCopies) / 4`. Suji multiplies by 0.5;
-  middle suji needs both sides. Four visible copies of a neighboring rank
-  multiply danger by 0.4. Genbutsu uses `GenbutsuDanger` (default zero).
-- Estimated opponent value is `2000 + 800 * melds + 2000 * riichi + 1000 * visibleDora`.
-  Visible dora counts indicator dora and red fives in that opponent's melds.
-  Expected cost is the sum of `tenpaiProbability * danger * value` over seats 1–3.
-- Candidate risk is `1 - product(1 - tenpaiProbability * danger)`.
-  Candidate score is `analyzerScore - DealInRiskWeight * expectedCost`.
-  Shanten remains the first ranking key because analyzer scores use different
-  scales for tenpai and non-tenpai. Existing analyzer tuning remains authoritative.
-- Fold at the configured threat threshold if shanten is too high or estimated
-  value is below `FoldMinValue` (default 2). Folding sorts all legal candidates
-  by risk and suppresses riichi. An existing riichi permits only the exact draw,
-  including its red/plain identity.
-- Pon/chi must improve shanten after the mandatory discard and retain yakuhai,
-  kuitan, or a compatible honitsu route. Chi is kamicha-only and protects the
-  sole pair; pon wins equal-shanten ties. Kan is treated as the specified exception
-  to strict shanten improvement: it must preserve shanten and ukeire. Open kan
-  requires an already-open hand; riichi ankan also preserves the wait kinds.
-- Winning declarations use `YakuDetector` across engine decompositions, exclude
-  dora from the minimum-yaku gate, and use the snapshot's winds and riichi flag.
-  Closed tsumo itself provides a yaku; the yakuless tsumo regression is open.
+1. **Win** — if Tsumo/Ron is legal, count yaku han across every winning decomposition
+   (`YakuDetector`, dora excluded from the gate); declare when `han ≥ MinHanDoman` (1).
+2. **Opponent model update** — one transaction for the whole decision (the model is locked so two
+   concurrent evaluations never interleave update/query).
+3. **Call prompt** — `CallPolicy.Evaluate`; accept → that call; decline without a legal discard
+   (a claim window) → `Pass`.
+4. **No legal discard** → `Pass` with a 13-tile hand summary (shanten/ukeire/waits) for the overlay.
+5. **Hand arithmetic** — closed tiles + 3·melds must be 14 (a kan counts as one set of 3, like
+   `HandAnalyzer`); otherwise `None` ("hand out of sync") until the reader settles.
+6. **Discard ranking** — `HeuristicDiscardPolicy.Rank`; no candidates → `None`.
+7. **Push/fold** — `PushFoldPolicy`; folding re-sorts candidates by deal-in risk, then shanten,
+   then score.
+8. **Riichi** — only when pushing, `Legal.Riichi`, and the best candidate leaves tenpai; the
+   choice then carries `Kind = Riichi` with the same discard tile.
 
-## Contract limits and integration notes
+`ActionKind.None` decisions are the ones an auto player cannot act on; they are the first
+suspects when the game waits and nothing happens (see the stall dump in
+[`EMJ_ADDON_REFERENCE.md`](EMJ_ADDON_REFERENCE.md)).
 
-- The snapshot has no global discard chronology. Before open calls, dealer order
-  and discard indices identify post-riichi discards. After calls can skip turns,
-  only the current offered discard and the target's own discards are treated as
-  known genbutsu. Historical cross-seat post-riichi safety after calls needs
-  reader-provided chronology; inferring it from equal discard indices is unsafe.
-- The explicitly requested discard guard counts physical meld tiles and requires
-  exactly 14. Thus a normal post-kan draw with 15 physical tiles is rejected.
-  The existing winning decomposer has the same physical-count limitation.
-  Integration needs a contract/engine change to support kan-adjusted totals;
-  those files were outside this task's scope.
-- `Meld` factories normalize red fives and `MakeChi` defaults to closed. The call
-  policy creates an appropriately open meld and restores physical tile copies
-  on that new instance. The analyzer input puts the explicit drawn tile last,
-  as required by the engine's riichi lock.
-- Opponent estimates are deterministic heuristics, not calibrated probabilities.
-  Concurrent choices serialize the injected model's update/query transaction;
-  cancellation is checked between stages and while waiting for that transaction.
+## Opponent model (`OpponentModel`, `TenpaiEstimator`)
 
-## Validation and delivery
+- **Tenpai probability** per seat 1–3: riichi → 1; otherwise logistic
+  `σ(intercept + perDiscard·discards + perMeld·openMelds + earlyOutside·early + lateMiddle·late)`
+  clamped to `TenpaiMaxWithoutRiichi` (0.9). Defaults (−4.1, 0.25, 0.95, 0.3, 0.5) reproduce the
+  tenpai-rate-by-turn curves quoted in riichi literature (no calls ≈ 5 % at turn 6, 17 % at 10,
+  35 % at 14, 60 % at 18; one call ≈ 35 % at 10; two calls ≈ 70 % at 12). `early` = share of the
+  first six discards that are terminals/honors; `late` = middle tiles (3–7) discarded from turn 7
+  on, /12, capped at 1 — fixed denominators keep both monotone as discards arrive. The previous
+  additive formula climbed to ~90 % late in every hand; that is why the estimate is **soft**
+  everywhere it is used.
+- **Ground truth** — every hand end appends one `TenpaiSample` per opponent (features at the
+  freeze + tenpai yes/no: draw screens label every seat, a win proves the winner) to
+  `pluginConfigs/MahjongHater/tenpai_calibration.csv`; `python tools/fit_tenpai.py` re-fits the
+  same logistic form (plain gradient descent, L2), prints log-loss/Brier vs the shipped weights and
+  a reliability table, and emits the `PolicyWeights` initializers to paste.
+- **Danger** of a tile against a seat: genbutsu (in that seat's discards, or discarded by anyone
+  after its riichi — tracked only before calls skip turns, via round indices) → `GenbutsuDanger`
+  (0); honors → `HonorDanger` (0.16) × (4 − visible copies)/4; terminals 0.12, ranks 2/8 0.18,
+  other numbers 0.24; ×`SujiDiscount` (0.5) when the suji is in that seat's discards (middle tiles
+  need both sides); ×`KabeDiscount` (0.4) when a neighbouring rank shows four copies.
+- **Value** of a seat's hand: `2000 + 800·melds + 2000·riichi + 1000·visibleDora` (indicator dora
+  and red fives inside that seat's melds). **Expected deal-in cost** of a tile =
+  Σ over seats of `tenpai × danger × value`.
 
-`dotnet build MahjongHater.csproj -c Debug -nologo -v q` and
-`dotnet test MahjongHater.Tests -nologo -v q` both passed. All 201 tests are green:
-the original 119 plus 82 focused policy cases covering
-danger, calls, defensive selection, win gates, red copies, cancellation,
-concurrency, and complete decision flows. Only NU1900 warnings remain because the
-NuGet vulnerability feed is inaccessible in this session.
+## Discard ranking (`HeuristicDiscardPolicy`)
 
-Commits are blocked by the session filesystem policy: this worktree's Git
-metadata is in `../MahjongHater/.git/worktrees/MahjongHater-policy`, outside the
-writable root. `git add`/`git commit` fail creating `index.lock`. Changes remain
-in the worktree; no Git permissions or external files were altered.
+- Candidates come from `HandAnalyzer.Analyze` (never a second shanten implementation): for each
+  discard the shanten after, ukeire, two-step ukeire, kept value (dora + red fives + best wait
+  yaku), waits, and the open-yakuless flag.
+- Per candidate: `DealInRisk = 1 − Π(1 − tenpai_s × danger_s)` over seats; ranking
+  `Score = analyzerScore − DealInRiskWeight × expectedCost`; ordered by shanten first (analyzer
+  scores use different scales per shanten), then score, then tile.
+- **Riichi lock**: with `OurRiichi` only the drawn tile is a candidate (its exact red/plain copy);
+  a red draw with a plain copy in hand is normalised so the analyzer does not "keep the red".
+  No draw in hand → no candidates → `None`.
+
+## Push/fold (`PushFoldPolicy`)
+
+A declared opponent riichi is a hard threat; the tenpai estimate is soft. Fold when:
+tenpai-after (`ShantenAfter = 0`) and riichi and value < `FoldMinValue` (2) and ukeire < 3;
+1-shanten and riichi and cheap; otherwise `ShantenAfter ≥ FoldMinShanten` (2) and (riichi or
+max tenpai estimate ≥ `FoldTenpaiThreshold` 0.6). Folding picks the lowest deal-in risk and
+suppresses riichi. (Live 2026-09-19: the estimate alone used to fold a tenpai into 1-shanten
+with nobody in riichi — hence the riichi gate on near-tenpai hands.)
+
+## Calls (`CallPolicy`)
+
+- Options built from the prompt: pon (two copies, plain before red), daiminkan (open hand, three
+  copies), chi (kamicha only, honors excluded; with the chooser open only the game's offered
+  shapes), ankan (four in hand; in riichi only the drawn kind), shouminkan (open hand, not in
+  riichi).
+- Pon/chi are accepted only if some post-call discard **lowers shanten** and keeps an **open yaku
+  route**: a yakuhai triplet/claim (dragons, seat or round wind), all-simples with kuitan, or a
+  ≥ 9-tile honitsu skeleton whose melds fit the suit. A chi that breaks the only pair is skipped.
+- Kan must preserve shanten and ukeire (the claimed tile is removed from the seen set once); in
+  riichi the wait kinds must be unchanged.
+- Ties: lower shanten, then pon > chi > kan. Otherwise decline ("no call improves the hand while
+  preserving a yaku route or safe kan shape").
+
+## Riichi (`RiichiPolicy`)
+
+Declare when: not already in riichi, closed hand, tenpai after the discard, wall ≥ `RiichiMinWall`
+(4), ukeire ≥ `RiichiMinUkeire` (2 — tanki/shanpon/kanchan waits live on 2–3 tiles), and against
+an opponent riichi ukeire ≥ 4. A dead wait (0 live tiles) never declares.
+
+## Limits
+
+- No global discard chronology in the snapshot: post-riichi genbutsu across seats is inferred
+  from round indices only while no seat has called; after calls only the current offered discard
+  and the target's own discards count as safe.
+- Honba, riichi sticks and ura dora are 0 in the snapshot (unsourced); hand value ignores them.
+- `ScoringEngine`/`FuCalculator` (han/fu/points, self-validated against reference scores) are not
+  on the live path; value is yaku han + dora.
+- Opponent estimates are heuristics plus one logistic fit; a few dozen matches of calibration rows
+  are needed before `fit_tenpai.py` says anything the defaults do not.
+- Cancellation: every stage checks the token; `AnalysisService` cancels after 2 s and publishes
+  `TimedOut` so the overlay never waits on a stuck evaluation.

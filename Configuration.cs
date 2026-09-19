@@ -21,6 +21,14 @@ public sealed class Configuration : IPluginConfiguration
 
     public bool ShowOverlay { get; set; } = true;
 
+    // Auto play / requeue (dev tooling for unattended matches; both live in the main
+    // window). Persisted so a hot reload mid-session picks up where it left off.
+    public bool AutoPlay { get; set; }
+
+    public bool Requeue { get; set; }
+
+    public uint RequeueDuty { get; set; } = 766;   // Novice Mahjong (Quick Ranked Match)
+
     public static Configuration Load(IDalamudPluginInterface pluginInterface)
     {
         var config = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();

@@ -4,6 +4,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using MahjongHater.Core;
+using MahjongHater.Core.Operate;
 using MahjongHater.Core.Policy;
 using MahjongHater.Core.State;
 
@@ -63,6 +64,7 @@ public sealed class MainWindow : Window
         this.DrawHeader();
         var state = this.reader.Current;
         this.DrawSession(state);
+        this.DrawAutoPlay();
 
         if (state is { Phase: not GamePhase.NotInGame })
         {
@@ -163,6 +165,86 @@ public sealed class MainWindow : Window
             ImGui.SetCursorScreenPos(origin + new Vector2(column * 2f, 0f));
             DrawMetric("WIN RATE", this.winRateText, column);
         }
+    }
+
+    // Dev tooling for unattended matches: the auto player executes the overlay's own
+    // decisions, the queuer keeps the Duty Finder fed. Both report one status line each;
+    // a stall is called out loudly because it is what these runs are looking for.
+    private void DrawAutoPlay()
+    {
+        var player = this.plugin.AutoPlayer;
+        var queuer = this.plugin.Queuer;
+        using (Widgets.Card())
+        {
+            Widgets.Label("AUTO PLAY");
+            if (Widgets.ToggleRow("Play the recommended actions", "##autoplay", player.Enabled))
+            {
+                player.SetEnabled(!player.Enabled);
+                this.configuration.AutoPlay = player.Enabled;
+                this.configuration.Save();
+            }
+
+            if (player.IsStalled)
+                Widgets.Badge($"STALLED {player.StalledFor.TotalSeconds:F0} s — dump #{player.StallsThisSession} written", warning: true);
+            Widgets.Wrapped(player.Status);
+
+            if (Widgets.ToggleRow("Requeue when a match ends", "##requeue", queuer.Enabled))
+            {
+                queuer.Enabled = !queuer.Enabled;
+                this.configuration.Requeue = queuer.Enabled;
+                this.configuration.Save();
+            }
+
+            Widgets.Wrapped(queuer.Status);
+            this.DrawDutyPicker(queuer);
+
+            Widgets.Wrapped($"{player.DecisionsExecuted} decisions · {player.StallsThisSession} stalls · {player.RecoveriesThisSession} recoveries · {queuer.MatchesQueued} queued", false);
+            if (player.StallsThisSession > 0)
+            {
+                Widgets.Wrapped($"Stall log: {this.plugin.StallLogPath}");
+                if (ImGui.IsItemHovered())
+                    Widgets.Tooltip("Each stall appends the snapshot, the decision, the prompt rows, slot clickability and the tracker's recent events.");
+            }
+
+            var journal = player.Journal;
+            for (var i = Math.Max(0, journal.Count - 3); i < journal.Count; i++)
+                Widgets.Wrapped(journal[i]);
+        }
+    }
+
+    // Rank × length → the ContentFinderCondition the queuer registers for.
+    private void DrawDutyPicker(MatchQueuer queuer)
+    {
+        var half = (Widgets.ContentWidth - Theme.Px(Theme.Gap)) / 2f;
+        var advanced = queuer.Duty is MahjongDuty.AdvancedFull or MahjongDuty.AdvancedQuick;
+        var full = queuer.Duty is MahjongDuty.NoviceFull or MahjongDuty.AdvancedFull;
+        Widgets.Label("DUTY");
+        if (Widgets.Pill("Novice##rank", !advanced, half))
+            this.SetDuty(queuer, advanced: false, full);
+        ImGui.SameLine();
+        if (Widgets.Pill("Advanced##rank", advanced, half))
+            this.SetDuty(queuer, advanced: true, full);
+        if (ImGui.IsItemHovered())
+            Widgets.Tooltip("Advanced Mahjong needs 1st dan or higher.");
+        if (Widgets.Pill("Quick (East)##length", !full, half))
+            this.SetDuty(queuer, advanced, full: false);
+        ImGui.SameLine();
+        if (Widgets.Pill("Full (East + South)##length", full, half))
+            this.SetDuty(queuer, advanced, full: true);
+        Widgets.Wrapped(MatchQueuer.Describe(queuer.Duty));
+    }
+
+    private void SetDuty(MatchQueuer queuer, bool advanced, bool full)
+    {
+        queuer.Duty = (advanced, full) switch
+        {
+            (false, false) => MahjongDuty.NoviceQuick,
+            (false, true) => MahjongDuty.NoviceFull,
+            (true, false) => MahjongDuty.AdvancedQuick,
+            (true, true) => MahjongDuty.AdvancedFull,
+        };
+        this.configuration.RequeueDuty = (uint)queuer.Duty;
+        this.configuration.Save();
     }
 
     private static void DrawMetric(string label, string value, float width)

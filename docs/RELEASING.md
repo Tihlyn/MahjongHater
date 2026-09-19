@@ -28,9 +28,10 @@ It rejects tag/version mismatches, builds and tests, generates notes from commit
 since the previous reachable version tag, and publishes `latest.zip` plus
 `MahjongHater-v<version>.zip`. It then generates `repo.json` from the stamped manifest
 and commits it to `main` with `[skip ci]` using `GITHUB_TOKEN`. Branch rules must permit
-that push. Older releases cannot replace a newer repository entry. The initial
-`repo.json` points to v1.1.0; its download becomes available only after that release
-is published.
+that push. Older releases cannot replace a newer repository entry. `repo.json` on
+`main` is whatever the last release workflow committed (v1.2.2 as of 2026-09-19); pull
+that bot commit before starting the next release or the script's clean-checkout check
+fails.
 
 To regenerate the repository entry locally after a Release build:
 
@@ -48,8 +49,8 @@ commit the generated entry manually from the affected tag's stamped manifest and
 If the local atomic push fails, the release commit and tag remain locally: resolve the
 push rejection before retrying that push, rather than running the bump again.
 
-Offline verification passed with both the local fallback and `DALAMUD_HOME`: a stamped
-1.1.0.0 package containing the DLL, manifest and layout, valid repository JSON, and the
-full test suite. Release-helper behaviour was checked with mocked Git and dotnet
-commands. Distribution downloads, hosted Actions, GitHub Releases, and the authenticated
-push to `main` are verified by the first real release.
+The pipeline has shipped v1.2.0 and v1.2.2 end to end (release workflow, GitHub Release
+assets, and the bot's `chore(release): update repository for vX.Y.Z [skip ci]` commits
+`99fe44f` / `94dd725`). Local builds work with both the `%APPDATA%` fallback and
+`DALAMUD_HOME`; the packaged zip contains the DLL, the stamped manifest and
+`resources/layouts/emj.json`.

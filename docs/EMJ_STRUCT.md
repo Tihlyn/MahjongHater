@@ -9,6 +9,14 @@ actions. Offsets are from the `AtkUnitBase*` returned by `IGameGui.GetAddonByNam
 Status legend: **verified** = written/read against a known screen state at least twice;
 *plausible* = consistent with one observation or with a sibling field; unknown = not identified.
 
+**Implementation.** Every offset here is data, not code: `resources/layouts/emj.json` (shipped next
+to the DLL, embedded copy as fallback) → `EmjLayout` → `EmjStructReader` copies `RequiredBytes`
+(currently 4061) from the addon each tick into a `StructFrame`, and `StructFrame.Decode` turns it
+into a `DecodedStruct` (tiles, per-seat counters, meld records). `MahjongHater.Tests/State/
+StructFrameTests` + `LiveFixtureTests` replay the hex fixtures below through the same path.
+Everything this table lists as *not in the struct* comes from `AtkValues` events and text nodes —
+see [`EMJ_ADDON_REFERENCE.md`](EMJ_ADDON_REFERENCE.md), "Reading model".
+
 ## Headline
 
 - The addon keeps **only display state**: local hand, per-seat counters, scores, meld tile indices,
@@ -79,16 +87,18 @@ Absolute offsets for the four seats (seat 0..3):
 
 | Datum | Source | Notes |
 |---|---|---|
-| Opponent discard tiles | `AtkValues` refresh type **8**: `[1]` = seat, `[2]` = tile icon | Fires once per discard for every seat incl. us. Opponent type-5/20 `[3]` is the 76041 placeholder. |
+| Opponent discard tiles | `AtkValues` refresh type **8**: `[1]` = seat, `[2]` = tile icon (`EventTracker`) | Fires once per discard for every seat incl. us. Opponent type-5/20 `[3]` is the 76041 placeholder. The struct only counts them (`+0x2C6`). |
 | Own discard | type 8 with `[1]=0`, or the ButtonClick callback `[15, icon]` | |
-| Draw / wall | type **5**: `[1]` = live wall remaining (70 → 0), `[2]` = seat that drew, `[3]` = drawn icon for us (placeholder for others) | The centre counter node `1/46/105/{2,3}/2` (two `Counter` digits) shows the same number. |
-| Meld composition | type **13**: `[1]` caller, `[3]` 4=pon / 5=chi, `[5]` from-direction (as `+0x250`), `[6]` tile index or 255, `[7]` tile count, `[8..10]` tile icons (chi: claimed tile first) | Only source for chi tiles and for red fives inside melds. |
-| Riichi declaration | state code **12** on the declaring seat's turn; struct riichi index set the same frame | |
-| Seat winds | Text nodes `1/36/37/38/7/9` (us), `1/36/39/40/8/10`, `1/36/41/42/8/10`, `1/36/43/44/8/10` — "East"/"South"/"West"/"North" | Dealer = the seat whose text is "East". Round wind: win-screen string (`AtkValues[2]` on type 32, e.g. "East 4 North Wind") or the hidden text `1/46/54/57`. |
-| Honba | Hidden text `1/46/48/2` "Honba N" | Only visible during the announcement; residue afterwards. |
-| Riichi sticks / honba counters | Text nodes `1/46/54/86/88` and `/91` ("0") | On the recap panel; unverified during play. |
+| Draw / wall | type **5**: `[1]` = live wall remaining (70 → 0), `[2]` = seat that drew, `[3]` = drawn icon for us (placeholder for others) | `SnapshotBuilder` uses the type-5 wall, else `70 − Σ discard counts`. The centre counter node `1/46/105/{2,3}/2` (two `Counter` digits) shows the same number. |
+| Meld composition | type **13**: `[1]` caller, `[3]` 4=pon / 5=chi, `[5]` from-direction (as `+0x250`), `[6]` tile index or 255, `[7]` tile count, `[8..10]` tile icons (chi: claimed tile first) | Only source for chi tiles and for red fives inside melds; a missed one is inferred from our closed-hand delta (`MeldInference`). |
+| Riichi declaration | struct riichi index (`+0x2C7`) flips on the riichi discard; state code **12** on the declaring seat's turn | The snapshot's `Seats[i].Riichi` is the struct index ≠ 255. |
+| Seat winds | Text nodes `1/36/37/38/7/9` (us), `1/36/39/40/8/10`, `1/36/41/42/8/10`, `1/36/43/44/8/10` — "East"/"South"/"West"/"North" (`EmjStateReader.ScanWinds`, every 30 ticks) | Dealer = the seat whose text is "East". Round wind: the hidden text `1/46/54/57` (`nodes.roundWindText`, win-screen residue — leading word) or `AtkValues[2]` on type 32 ("East 4 North Wind"). |
+| Honba | Hidden text `1/46/48/2` "Honba N" | Only visible during the announcement; residue afterwards. **Not read** — the snapshot reports 0. |
+| Riichi sticks / honba counters | Text nodes `1/46/54/86/88` and `/91` ("0") | On the recap panel; unverified during play. **Not read.** |
+| Ura dora | — | Not found; `uraDoraIndicator` is `null` in the layout. |
 | Scores (redundant) | Text nodes `1/36/{37/38/10/12, 39/40/11/13, 41/42/11/13, 43/44/11/13}/2` | Same values as the struct. |
-| Call prompt rows | List `1/46/104/3` (`ListItemClick → addon`), rows in y order: e.g. row 0 "Pon"/"Chi", row 1 "Pass" | `/listclick index=1` declined every prompt cleanly. The panel and labels persist after the window closes; use the stall (state 15, no draw, no struct writes for >3 s) or the type-23 event as the edge. |
+| Hand-end tenpai / winner | Result banner texts `1/36/{37/38,39/40,41/42,43/44}/2/2/3` ("Tenpai!"/"Noten…" on a draw); type-32 `[1]` = winner seat | Feeds the tenpai calibration CSV. |
+| Call prompt rows | List `1/46/104/3` (`ListItemClick → addon`), rows by item-table index: e.g. row 0 "Pon"/"Chi", row 1 "Pass" (labels from the renderer text — the item table's `Label` is empty) | Open = type-19/23/25, close = type-5/8/13/74/29/32. The panel and labels persist after the window closes and never serve as a close signal. |
 
 ## State codes seen (`AtkValues[0]`)
 
@@ -145,6 +155,9 @@ sequences where they could be reconstructed from type-8 events.
 - Grouping of the 62 + 13 node pointers per seat (which are pile slots vs meld slots) — resolve by
   reading `NodeId` through each pointer.
 - `+0x2D8` "tsumogiri" reading, `0x0FDC` behaviour after a kan, `0x0FF8`, `0x12BC/0x12C0`.
-- Seat 0 meld record never exercised (we never called) — assumed identical to seats 1–3.
-- Kan (any kind): tile-count deltas and whether `+0x240` stores the tile the same way.
+- Seat 0 meld record: exercised live 2026-09-19 for pon and chi (the meld count drove the
+  tracker's meld-list trim; the tile index was not separately checked against type-13); kans of
+  any kind are still unobserved — tile-count deltas and whether `+0x240` stores a kan the same way
+  are unknown.
 - Whether `+0x2C6` is capped / how furiten and the "Calls Off" toggle surface.
+- Honba, riichi sticks and ura dora have no struct field; the text-node candidates above are unread.

@@ -1,22 +1,23 @@
 # Tile Table
 
-Full identity mapping for all 37 renderable tile faces (34 kinds + 3 red fives) in
-the Emj addon, derived from `Core/Tile.cs`, `Core/TileHelpers.cs`, and the icon-path
-parsing confirmed in `Core/EmjScanner.cs` (see `docs/EMJ_ADDON_REFERENCE.md` for the
-full reverse-engineering writeup this table summarizes).
+Full identity mapping for all 37 renderable tile faces (34 kinds + 3 red fives) in the
+Emj addon, derived from `Core/Tile.cs` and `Core/TileHelpers.cs` (see
+[`EMJ_ADDON_REFERENCE.md`](EMJ_ADDON_REFERENCE.md), "Tile identity", for where these ids
+show up in the addon).
 
 - **Short name** — `Tile.ToString()` output; the compact code used throughout this
-  codebase and its logs/tests (`Tile.Parse("7p")`, `TileHelpers.ToIndex`, etc.).
-- **Full name** — `TileHelpers.GetDisplayName`, which matches the game's own hover
-  tooltip text format exactly (live-confirmed via hundreds of `OnHoverEvent` reads
-  this session — e.g. `"Bamboo (9)"`, `"Characters (2)"`, `"East Wind"`).
-- **Icon ID** — the FFXIV icon id backing the tile's face texture (`Core/
-  TileHelpers.TryTileFromIconId`).
-- **Texture path** — `ui/icon/076000/{iconId:D6}_hr1.tex`, confirmed live via
-  `EmjScanner.IconIdFromTexPath` parsing (e.g. `"ui/icon/076000/076050_hr1.tex"` →
-  `76050` → `1p`). A bare `{iconId:D6}.tex` (no `_hr1` suffix) form also exists for
-  the same id — the `_hr1` (high-res) variant is what actually renders in every
-  live capture this session, so it's listed as the canonical path.
+  codebase and its logs/tests (`Tile.Parse("7p")`, `TileHelpers.ToIndex`, etc.). Red
+  fives parse as `0m`/`0p`/`0s`.
+- **Full name** — `TileHelpers.GetDisplayName`, which matches the game's own tooltip
+  text (e.g. `"Bamboo (9)"`, `"Characters (2)"`, `"East Wind"`); shown as the chip
+  tooltip in the overlay.
+- **Icon ID** — `tileIconBase` (76041, `resources/layouts/emj.json`) + 34-index; red
+  fives at +34..+36. This is what the `AddonEmj` hand array and every `AtkValues` tile
+  field carry (`EmjLayout.TryDecodeTile`, `TileHelpers.TryTileFromIconId`), and what the
+  overlay loads through Dalamud's texture provider for the tile chips (`Windows/TileArt`).
+- **Texture path** — `ui/icon/076000/{iconId:D6}_hr1.tex`, the high-res variant the game
+  renders; a bare `{iconId:D6}.tex` also exists. The plugin no longer parses texture
+  paths (that was the hover/node-face era); the column is kept as a lookup aid.
 
 ## Man (Characters) — 萬子
 

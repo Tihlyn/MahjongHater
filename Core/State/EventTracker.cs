@@ -7,8 +7,12 @@ namespace MahjongHater.Core.State;
 // "Event model". No Dalamud types; fed by EmjStateReader, replayable in tests.
 public sealed class EventTracker
 {
+    private const int NoteRingCap = 400;
 
     private readonly Action<string>? logInfo;
+    // Last NoteRingCap tracker lines (events, decisions, operator actions) so a stall
+    // dump can show what led up to it without digging through dalamud.log.
+    private readonly Queue<string> noteRing = new(NoteRingCap);
 
     private readonly List<Tile>[] seatDiscards = [[], [], [], []];
     // Meld compositions per relative seat from type-13 (all seats) / atkType=74 (us);
@@ -30,6 +34,11 @@ public sealed class EventTracker
     private int callFromSeat = -1;
     private string lastPromptSignature = string.Empty;
     private bool callWindowFromLabels;
+    // Options of the window the actuator already answered: the game echoes the selection
+    // as a type-19 with the same labels (verified live 2026-09-19), which must not re-open it.
+    private string? answeredSignature;
+    private Tile? answeredCallTile;
+    private int answeredCallFromSeat = -1;
     // True after a score/win screen (or at load): the next type-21 Layout-1 deal is a
     // real round start; mid-round type-21 refreshes must not wipe state (reference doc,
     // "Cold-start reader lifecycle").
@@ -63,6 +72,10 @@ public sealed class EventTracker
 
     public bool CallWindowActive => this.callWindowActive;
 
+    // True when only the panel texts opened this window (no type-19/23/25 seen). Real
+    // prompts always come with the event, so an actuator should not answer such a window.
+    public bool CallWindowFromLabels => this.callWindowActive && this.callWindowFromLabels;
+
     public IReadOnlyList<string> CallOptions => this.callOptions;
 
     // Non-empty while the game asks which two hand tiles form the chi (state 25).
@@ -85,6 +98,24 @@ public sealed class EventTracker
     public IReadOnlyList<Tile> EventDoras => this.eventDoras;
 
     public bool RoundEnded => this.roundEnded;
+
+    // True from an answered Tsumo/Ron until the win screen, so nothing is decided in between.
+    public bool WinDeclared { get; private set; }
+
+    // The actuator answered the open window (list row clicked). Clears it so the next
+    // snapshot moves on (a riichi needs its discard right after), and ignores the echo.
+    public void MarkCallAnswered(bool isWin)
+    {
+        if (!this.callWindowActive)
+            return;
+        this.answeredSignature = string.Join(",", this.callOptions);
+        this.WinDeclared |= isWin;
+        this.answeredCallTile = this.callTile;
+        this.answeredCallFromSeat = this.callFromSeat;
+        this.ClearCallWindow("answered by operator");
+    }
+
+    public IReadOnlyList<string> RecentNotes(int tail) => this.noteRing.TakeLast(Math.Clamp(tail, 1, NoteRingCap)).ToList();
 
     // Relative seat named by the last type-32 win screen this round; -1 until then (a
     // draw never sets it). Consumed by the tenpai calibration recorder.
@@ -127,6 +158,7 @@ public sealed class EventTracker
                 if (f.Int(1) is > 0 and <= 70)
                     this.eventWallRemaining = f.Int(1);
                 this.ClearCallWindow("turn advance (type-5)");
+                this.DropWinDeclared("turn advance (type-5)");
                 break;
 
             case 8: // THE discard event: [1]=seat, [2]=real tile icon, every seat
@@ -147,6 +179,7 @@ public sealed class EventTracker
 
                 this.roundEnded = false;
                 this.ClearCallWindow($"discard (type-8) seat={seat} {tile}");
+                this.DropWinDeclared($"discard (type-8) seat={seat}");
                 this.Note($"discard seat={seat} {tile}");
                 break;
             }
@@ -238,11 +271,13 @@ public sealed class EventTracker
                     break;
 
                 // The claimed tile is the one every shape contains; the window that was just
-                // answered or the fresh opponent discard names it when the shapes are ambiguous.
+                // answered (still open when a human clicked) or the fresh opponent discard names
+                // it when the shapes are ambiguous.
                 var common = shapes.Skip(1).Aggregate(shapes[0].AsEnumerable(),
                     (acc, s) => acc.Where(t => s.Any(x => TileHelpers.SameKind(x, t)))).ToList();
-                var claimed = this.callTile ?? this.FreshOpponentDiscard(utc) ?? (common.Count == 1 ? common[0] : (Tile?)null);
-                var fromSeat = this.callFromSeat;
+                var claimed = this.callTile ?? this.answeredCallTile ?? this.FreshOpponentDiscard(utc) ?? (common.Count == 1 ? common[0] : (Tile?)null);
+                var fromSeat = this.callFromSeat >= 0 ? this.callFromSeat : this.answeredCallFromSeat;
+                this.answeredSignature = null;
                 this.callWindowActive = true;
                 this.callWindowFromLabels = false;
                 this.callOptions = ["Chi"];
@@ -257,6 +292,7 @@ public sealed class EventTracker
             case 29: // post-round score delta: [1]=seat-0 delta ×100
             {
                 this.roundEnded = true;
+                this.WinDeclared = false;
                 this.ClearCallWindow("score (type-29)");
                 var delta = f.Int(1) * 100;
                 if (delta >= 100)
@@ -269,6 +305,7 @@ public sealed class EventTracker
             case 32: // win screen: [1]=winner seat, [2]="East 3 South Wind"
             {
                 this.roundEnded = true;
+                this.WinDeclared = false;
                 this.LastWinnerSeat = f.Int(1) is >= 0 and <= 3 ? f.Int(1) : -1;
                 this.ClearCallWindow("win screen (type-32)");
                 var round = f.Str(2) ?? string.Empty;
@@ -398,9 +435,25 @@ public sealed class EventTracker
         this.LossesThisSession = 0;
     }
 
-    // Tracker decisions go to the Dalamud log (verbose) so a session can still be
-    // reconstructed from dalamud.log after the debug API was removed.
-    public void Note(string message) => this.logInfo?.Invoke($"[Tracker] {message}");
+    // Tracker decisions go to the Dalamud log (verbose) and into the note ring, so a
+    // session can be reconstructed from dalamud.log and a stall dump from the ring.
+    public void Note(string message)
+    {
+        this.logInfo?.Invoke($"[Tracker] {message}");
+        if (this.noteRing.Count >= NoteRingCap)
+            this.noteRing.Dequeue();
+        this.noteRing.Enqueue($"{DateTime.UtcNow:HH:mm:ss.fff} {message}");
+    }
+
+    // A declared win is final; a later discard or turn advance proves the click never
+    // landed, and holding the phase at RoundEnd would freeze every decision after it.
+    private void DropWinDeclared(string why)
+    {
+        if (!this.WinDeclared)
+            return;
+        this.WinDeclared = false;
+        this.Note($"win declaration dropped: {why}");
+    }
 
     // ──────────────────────────────────────── INTERNALS ─────────────────────────────────────
 
@@ -419,6 +472,11 @@ public sealed class EventTracker
     {
         // "Pon!" / "Riichi!" is the announcement banner echoing the same option.
         options = options.Select(o => o.TrimEnd('!')).Distinct().ToList();
+        if (this.answeredSignature is { } answered && answered == string.Join(",", options))
+        {
+            this.Note($"call window ({source}) [{answered}] is the echo of the answered one; ignoring");
+            return;
+        }
 
         var meldCount = this.seatMelds[0].Count;
         var expected = HandTracking.MaxClosedTiles(meldCount) - 1;
@@ -454,6 +512,13 @@ public sealed class EventTracker
     {
         if (this.callWindowActive)
             this.Note($"call window cleared: {why}");
+        if (why != "answered by operator")
+        {
+            this.answeredSignature = null;
+            this.answeredCallTile = null;
+            this.answeredCallFromSeat = -1;
+        }
+
         this.callWindowActive = false;
         this.callWindowFromLabels = false;
         this.callOptions = [];
@@ -477,6 +542,10 @@ public sealed class EventTracker
 
     private void ResetRound(string why)
     {
+        this.WinDeclared = false;
+        this.answeredSignature = null;
+        this.answeredCallTile = null;
+        this.answeredCallFromSeat = -1;
         this.LastWinnerSeat = -1;
         foreach (var list in this.seatDiscards)
             list.Clear();

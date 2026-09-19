@@ -112,6 +112,26 @@ public class SnapshotBuilderTests
         Assert.Equal(good.Hand, s.Hand);
     }
 
+    // An answered Tsumo/Ron parks the snapshot at RoundEnd (nothing legal) until the win
+    // screen, so the auto player never discards from a hand the game is scoring.
+    [Fact]
+    public void Answered_win_parks_the_snapshot_at_round_end()
+    {
+        var t = new EventTracker();
+        var b = new SnapshotBuilder();
+        var d = StructFixture.Decoded("44m77m3p55p556s6699s", "3p");
+        t.OnTick(d, [], T0);
+        t.OnRefresh(AtkFrame.OfInts([23, .. new int[21]]).WithString(6, "Tsumo!").WithString(7, "Tsumo").WithString(8, "Riichi"), T0);
+        var before = Build(b, t, d);
+        Assert.Equal(GamePhase.SelfDeclare, before.Phase);
+        Assert.True(before.Can(LegalAction.Tsumo));
+
+        t.MarkCallAnswered(isWin: true);
+        var after = Build(b, t, d);
+        Assert.Equal(GamePhase.RoundEnd, after.Phase);
+        Assert.Equal(LegalAction.None, after.Legal);
+    }
+
     [Fact]
     public void Round_end_state_codes_map_to_round_end()
     {

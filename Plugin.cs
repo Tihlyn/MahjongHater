@@ -3,6 +3,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using MahjongHater.Core;
+using MahjongHater.Core.Operate;
 using MahjongHater.Core.Policy;
 using MahjongHater.Core.State;
 using MahjongHater.Windows;
@@ -46,6 +47,18 @@ public sealed class Plugin : IDalamudPlugin
         this.AnalysisService = new AnalysisService(this.Policy, (ex, msg) => pluginLog.Error(ex, msg));
         this.Reader.CalibrationSink = this.AppendCalibration;
 
+        var actuator = new EmjActuator(gameGui, this.Reader);
+        this.AutoPlayer = new AutoPlayer(this.Reader, this.AnalysisService, actuator,
+            msg => pluginLog.Information(msg), msg => pluginLog.Warning(msg), () => this.StallLogPath)
+        {
+            Enabled = this.Configuration.AutoPlay,
+        };
+        this.Queuer = new MatchQueuer(gameGui, clientState, msg => pluginLog.Information(msg))
+        {
+            Enabled = this.Configuration.Requeue,
+            Duty = Enum.IsDefined(typeof(MahjongDuty), this.Configuration.RequeueDuty) ? (MahjongDuty)this.Configuration.RequeueDuty : MahjongDuty.NoviceQuick,
+        };
+
         this.WindowSystem = new WindowSystem("MahjongHater");
         this.MainWindow = new MainWindow(this, this.Configuration, this.Reader);
         this.ConfigWindow = new ConfigWindow(this.Configuration);
@@ -85,6 +98,12 @@ public sealed class Plugin : IDalamudPlugin
     public IPolicy Policy { get; }
 
     public AnalysisService AnalysisService { get; }
+
+    public AutoPlayer AutoPlayer { get; }
+
+    public MatchQueuer Queuer { get; }
+
+    public string StallLogPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "autoplay_stalls.log");
 
     public void Dispose()
     {
@@ -164,6 +183,8 @@ public sealed class Plugin : IDalamudPlugin
 
         this.Reader.Tick();
         this.AnalysisService.Update(this.Reader.Current);
+        this.AutoPlayer.Tick(this.Reader.Current);
+        this.Queuer.Tick(this.AutoPlayer.InMatch);
     }
 
     private string CalibrationPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "tenpai_calibration.csv");
