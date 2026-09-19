@@ -4,6 +4,8 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+## [1.2.2] - 2026-09-19
+
 ## [1.2.0] - 2026-09-19
 
 ### Added
