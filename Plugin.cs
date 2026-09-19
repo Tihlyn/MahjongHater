@@ -70,6 +70,11 @@ public sealed class Plugin : IDalamudPlugin
         this.clientState.Logout += this.OnLogout;
         this.framework.Update += this.OnFrameworkUpdate;
 
+        // Dev-loaded builds always expose the loopback API so a terminal can drive tests
+        // right after a hot reload; release users opt in with /mhater debug.
+        if (this.Configuration.DebugServerAutoStart || pluginInterface.IsDev)
+            this.StartDebugServer(this.Configuration.DebugServerPort);
+
         this.MainWindow.IsOpen = this.Configuration.ShowOverlay;
     }
 
@@ -222,28 +227,42 @@ public sealed class Plugin : IDalamudPlugin
         {
             this.debugServer.Dispose();
             this.debugServer = null;
+            this.Configuration.DebugServerAutoStart = false;
+            this.Configuration.Save();
             this.chatGui.Print("[MahjongHater] Debug API stopped.");
             return;
         }
 
-        var port = 9787;
+        var port = this.Configuration.DebugServerPort;
         var parts = arg.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length > 1 && int.TryParse(parts[1], out var customPort))
             port = customPort;
 
+        if (this.StartDebugServer(port))
+        {
+            this.Configuration.DebugServerAutoStart = true;
+            this.Configuration.DebugServerPort = port;
+            this.Configuration.Save();
+        }
+    }
+
+    private bool StartDebugServer(int port)
+    {
         try
         {
             this.debugServer = new DebugServer(port, this.RouteDebugRequest, (ex, msg) => this.pluginLog.Warning(ex, msg));
             this.debugServer.Start();
             this.chatGui.Print($"[MahjongHater] Debug API on http://127.0.0.1:{port}/  " +
                                "(read: /status /state /struct /hand /piles /frame /prompt /reco /events /tree /nodes /addons — " +
-                               "operate: /discard /hover /call /click /listclick /fire /callback /riichi)");
+                               "operate: /discard /hover /call /click /listclick /fire /callback /riichi /act /enable)");
+            return true;
         }
         catch (Exception ex)
         {
             this.pluginLog.Error(ex, "[Debug] Failed to start debug server.");
             this.chatGui.Print($"[MahjongHater] Debug API failed to start: {ex.Message}");
             this.debugServer = null;
+            return false;
         }
     }
 
@@ -283,6 +302,7 @@ public sealed class Plugin : IDalamudPlugin
                         "/callback?values=3,0[&addon=] — FireCallback with int values",
                         "/riichi?declared=true|false — manual riichi-lock override",
                         "/act — execute the latest policy decision once (discard / call / pass / win), only if it is fresh",
+                        "/enable?on=true|false — plugin on/off (framework tick)   /overlay?on=true|false — show/hide the window",
                     },
                 });
             case "/status":
@@ -396,6 +416,26 @@ public sealed class Plugin : IDalamudPlugin
             // Manual riichi-lock override until a riichi signal is mapped in the struct.
             case "/act":
                 return this.OnFramework(this.ExecuteLatestChoice);
+
+            case "/enable":
+            case "/overlay":
+            {
+                if (!query.TryGetValue("on", out var ov) || !bool.TryParse(ov, out var on))
+                    return Error("need on=true|false");
+                return this.OnFramework(() =>
+                {
+                    if (path == "/enable")
+                        this.Configuration.PluginEnabled = on;
+                    else
+                        this.Configuration.ShowOverlay = on;
+                    this.Configuration.Save();
+                    return new Dictionary<string, object?>
+                    {
+                        ["pluginEnabled"] = this.Configuration.PluginEnabled,
+                        ["showOverlay"] = this.Configuration.ShowOverlay,
+                    };
+                });
+            }
 
             case "/riichi":
             {

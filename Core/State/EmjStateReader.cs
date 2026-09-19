@@ -90,8 +90,7 @@ public sealed unsafe partial class EmjStateReader : IDisposable
             this.LastFrame = frame;
             this.LastDecoded = decoded;
 
-            var labels = EmjScanner.ScanCallButtonTexts(addon);
-            this.tracker.OnTick(decoded, labels);
+            this.tracker.OnTick(decoded, this.PromptLabels(addon));
 
             // Winds live in text nodes only (docs/EMJ_STRUCT.md, "Not in the struct").
             if (++this.ticks % WindScanInterval == 0)
@@ -168,6 +167,17 @@ public sealed unsafe partial class EmjStateReader : IDisposable
         if (this.Layout.RoundWind is null
             && EmjScanner.ParseWindText(EmjScanner.ReadTextAtPath(addon, nodes.RoundWindText)) is { } round)
             this.tracker.HintRoundWind(round);
+    }
+
+    // Labels of the open decision list (Pon/Chi/Pass, Riichi/Tsumo/…). The list's item
+    // table only carries labels while a prompt is open; the panel's text nodes and an
+    // allocated-but-empty list persist after it closes, so neither is a prompt signal.
+    private List<string> PromptLabels(AtkUnitBase* addon)
+    {
+        var list = EmjScanner.FindNodeByPath(addon, this.Layout.Nodes.CallList);
+        if (list == null || !list->IsVisible())
+            return [];
+        return EmjOperator.ListRows(list).Select(r => r.Label).Where(l => l.Length > 0).ToList();
     }
 
     private AtkUnitBase* GetAddon()

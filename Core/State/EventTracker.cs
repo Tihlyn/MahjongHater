@@ -320,7 +320,7 @@ public sealed class EventTracker
 
         // Prompt panel labels: edge-triggered — in count=109 mode the panel keeps stale
         // labels on screen after a window closes (reference doc, "Call window lifecycle").
-        var labels = promptLabels.Where(l => l is "Chi" or "Pon" or "Kan" or "Ron" or "Riichi" or "Tsumo").ToList();
+        var labels = promptLabels.Select(l => l.TrimEnd('!')).Where(l => l is "Chi" or "Pon" or "Kan" or "Ron" or "Riichi" or "Tsumo").ToList();
         var signature = string.Join(",", labels);
         if (labels.Count == 0)
         {
