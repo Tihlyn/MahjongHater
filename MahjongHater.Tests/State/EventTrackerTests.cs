@@ -194,4 +194,54 @@ public class EventTrackerTests
         t.OnRefresh(AtkFrame.OfInts([5, 50, 1, 76068]), T0);  // type-5 reuses [2]: ignored
         Assert.Equal(Wind.West, t.SeatWind);
     }
+
+    // Live 2026-09-19: after the operator picks a row, the game echoes a type-19 with the
+    // same labels; a riichi then waits for our discard, so the window must be gone.
+    [Fact]
+    public void Answered_window_clears_and_ignores_its_echo()
+    {
+        var t = new EventTracker();
+        var hand = StructFixture.Decoded("34m788m111p789p99s", "5m");
+        t.OnTick(hand, [], T0);
+        t.OnRefresh(CallWindow("Riichi!", "Riichi", "Pass"), T0);
+        Assert.True(t.CallWindowActive);
+        Assert.Equal(["Riichi"], t.CallOptions); // banner deduped
+
+        t.MarkCallAnswered(isWin: false);
+        Assert.False(t.CallWindowActive);
+        t.OnRefresh(CallWindow("Riichi!", "Riichi", "Pass"), T0); // echo
+        Assert.False(t.CallWindowActive);
+        t.OnTick(hand, ["Riichi", "Pass"], T0);                     // panel texts persist
+        Assert.False(t.CallWindowActive);
+
+        t.OnRefresh(Discard(0, "8m"), T0);                          // our riichi discard
+        t.OnRefresh(Discard(1, "1p"), T0);                          // we hold three 1p
+        t.OnRefresh(CallWindow("Pass", "Pon", "Pass"), T0);         // a genuinely new window
+        Assert.True(t.CallWindowActive);
+    }
+
+    [Fact]
+    public void Answered_win_holds_until_the_win_screen()
+    {
+        var t = new EventTracker();
+        t.OnTick(StructFixture.Decoded("44m77m3p55p556s6699s", "3p"), [], T0);
+        t.OnRefresh(CallWindow("Tsumo!", "Tsumo", "Riichi"), T0);
+        t.MarkCallAnswered(isWin: true);
+        Assert.True(t.WinDeclared);
+        t.OnRefresh(AtkFrame.OfInts([32, .. new int[21]]).WithString(2, "East 2 East Wind"), T0);
+        Assert.False(t.WinDeclared);
+    }
+
+    // Live 2026-09-19: the panel still shows "Tsumo"/"Riichi" on the next deal (13 tiles).
+    [Fact]
+    public void Self_declare_label_edge_needs_the_draw_in_hand()
+    {
+        var t = new EventTracker();
+        t.OnTick(StructFixture.Decoded("15m6m12p568p5s1356z", null), ["Tsumo", "Riichi", "Pass"], T0);
+        Assert.False(t.CallWindowActive);
+        t.OnTick(StructFixture.Decoded("15m6m12p568p5s1356z", null), [], T0);
+        t.OnTick(StructFixture.Decoded("15m6m12p568p5s1356z", "9m"), ["Tsumo", "Riichi", "Pass"], T0);
+        Assert.True(t.CallWindowActive);
+        Assert.False(t.CallIsClaim);
+    }
 }

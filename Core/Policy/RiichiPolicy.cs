@@ -18,6 +18,7 @@ public sealed class RiichiPolicy : IRiichiPolicy
             : best.ShantenAfter != 0 ? "Hand is not tenpai."
             : state.WallRemaining < this.weights.RiichiMinWall ? "Too few tiles remain in the wall."
             : state.Seats.Any(s => s.Seat != 0 && s.Riichi) && best.Ukeire < 4 ? "Bad wait against an opponent's riichi."
+            : best.Ukeire == 0 ? "Wait is dead (no live winning tiles)."
             : best.Ukeire < this.weights.RiichiMinUkeire ? "Too few live winning tiles."
             : null;
         reason = new Reason("riichi", why ?? $"Declare riichi with {best.Ukeire} live winning tiles.");

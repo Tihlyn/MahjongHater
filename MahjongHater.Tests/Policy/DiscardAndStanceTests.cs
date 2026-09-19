@@ -122,7 +122,9 @@ public class DiscardAndStanceTests
         var policy = new RiichiPolicy();
         var state = Snap();
         Assert.False(policy.ShouldDeclare(state, Model(state), Candidate(shanten: 1), out _));
-        Assert.False(policy.ShouldDeclare(state, Model(state), Candidate(shanten: 0, ukeire: 3), out _));
+        Assert.False(policy.ShouldDeclare(state, Model(state), Candidate(shanten: 0, ukeire: 1), out _));
+        Assert.False(policy.ShouldDeclare(state, Model(state), Candidate(shanten: 0, ukeire: 0), out _));
+        Assert.True(policy.ShouldDeclare(state, Model(state), Candidate(shanten: 0, ukeire: 3), out _)); // tanki: 3 live copies
         var open = state with { OurMelds = [Meld.MakePon(Tile.Parse("5z"), true)] };
         Assert.False(policy.ShouldDeclare(open, Model(open), Candidate(shanten: 0), out _));
         Assert.False(policy.ShouldDeclare(state with { OurRiichi = true }, Model(state), Candidate(shanten: 0), out _));

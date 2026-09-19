@@ -127,7 +127,7 @@ public sealed record PolicyWeights
     public int UkeireWeight { get; init; } = 10_000;
     public double KeptValueWeight { get; init; } = 50;
     public int RiichiMinWall { get; init; } = 4;
-    public int RiichiMinUkeire { get; init; } = 4;
+    public int RiichiMinUkeire { get; init; } = 2;             // tanki/shanpon/kanchan waits live on 2-3 tiles
     public double DealInRiskWeight { get; init; } = 1.0;     // scales ExpectedDealInCost in the ranking
     public double FoldTenpaiThreshold { get; init; } = 0.6;  // fold when an opponent's tenpai prob ≥ this and we're far
     public int FoldMinShanten { get; init; } = 2;            // ...and our best shanten-after ≥ this

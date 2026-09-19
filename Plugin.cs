@@ -548,12 +548,19 @@ public sealed class Plugin : IDalamudPlugin
             _ => new Dictionary<string, object?> { ["skipped"] = "nothing to execute", ["action"] = choice.Kind.ToString() },
         };
 
+        // A list answer (call / pass / win / riichi) is final for that window; the game echoes
+        // it as another type-19, which the tracker must not treat as a new prompt.
+        var answered = outcome is Dictionary<string, object?> o && o.ContainsKey("clicked") && !o.ContainsKey("error");
+        if (answered && choice.Kind != ActionKind.Discard)
+            this.Reader.Tracker.MarkCallAnswered(choice.IsWin);
+
         return new Dictionary<string, object?>
         {
             ["action"] = choice.Kind.ToString(),
             ["tile"] = choice.Tile?.ToString(),
             ["summary"] = choice.Summary,
             ["outcome"] = outcome,
+            ["answered"] = answered,
         };
     }
 }

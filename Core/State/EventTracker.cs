@@ -30,6 +30,9 @@ public sealed class EventTracker
     private int callFromSeat = -1;
     private string lastPromptSignature = string.Empty;
     private bool callWindowFromLabels;
+    // Options of the window the operator already answered: the game echoes the selection
+    // as a type-19 with the same labels (verified live 2026-09-19), which must not re-open it.
+    private string? answeredSignature;
 
     // True after a score/win screen (or at load): the next type-21 Layout-1 deal is a
     // real round start; mid-round type-21 refreshes must not wipe state (reference doc,
@@ -83,6 +86,20 @@ public sealed class EventTracker
     public IReadOnlyList<Tile> EventDoras => this.eventDoras;
 
     public bool RoundEnded => this.roundEnded;
+
+    // True from an answered Tsumo/Ron until the win screen, so nothing is decided in between.
+    public bool WinDeclared { get; private set; }
+
+    // The operator answered the open window (list row clicked). Clears it so the next
+    // snapshot moves on (a riichi needs its discard right after), and ignores the echo.
+    public void MarkCallAnswered(bool isWin)
+    {
+        if (!this.callWindowActive)
+            return;
+        this.answeredSignature = string.Join(",", this.callOptions);
+        this.WinDeclared |= isWin;
+        this.ClearCallWindow("answered by operator");
+    }
 
     public bool RiichiDeclared => this.riichiDeclared;
 
@@ -214,6 +231,7 @@ public sealed class EventTracker
             case 29: // post-round score delta: [1]=seat-0 delta ×100
             {
                 this.roundEnded = true;
+                this.WinDeclared = false;
                 this.ClearCallWindow("score (type-29)");
                 var delta = f.Int(1) * 100;
                 if (delta >= 100)
@@ -226,6 +244,7 @@ public sealed class EventTracker
             case 32: // win screen: [2]="East 3 South Wind"
             {
                 this.roundEnded = true;
+                this.WinDeclared = false;
                 this.ClearCallWindow("win screen (type-32)");
                 var round = f.Str(2) ?? string.Empty;
                 if (round.StartsWith("East", StringComparison.OrdinalIgnoreCase)) this.trackedRoundWind = Wind.East;
@@ -335,8 +354,11 @@ public sealed class EventTracker
         }
         else if (signature != this.lastPromptSignature && !this.callWindowActive)
         {
+            // A self-declare window only exists on our draw (14 - 3*melds closed); the panel
+            // keeps "Tsumo"/"Riichi" texts across the next deal (verified live 2026-09-19).
             var offered = this.FreshOpponentDiscard(utc);
-            var selfDeclare = labels.All(l => l is "Riichi" or "Tsumo" or "Kan");
+            var selfDeclare = labels.All(l => l is "Riichi" or "Tsumo" or "Kan")
+                              && this.prevClosedAll.Count == HandTracking.MaxClosedTiles(this.seatMelds[0].Count);
             if (offered is not null || selfDeclare)
                 this.OpenCallWindow(labels, offered ?? this.callTile, "label edge");
         }
@@ -384,6 +406,14 @@ public sealed class EventTracker
     // when the hand is not a plausible claim-time size (mid-transition).
     private void OpenCallWindow(List<string> options, Tile? offered, string source)
     {
+        // "Pon!" / "Riichi!" is the announcement banner echoing the same option.
+        options = options.Select(o => o.TrimEnd('!')).Distinct().ToList();
+        if (this.answeredSignature is { } answered && answered == string.Join(",", options))
+        {
+            this.Note($"call window ({source}) [{answered}] is the echo of the answered one; ignoring");
+            return;
+        }
+
         var meldCount = this.seatMelds[0].Count;
         var expected = HandTracking.MaxClosedTiles(meldCount) - 1;
         var claimShape = this.lastClosed.Count == expected;
@@ -418,6 +448,8 @@ public sealed class EventTracker
     {
         if (this.callWindowActive)
             this.Note($"call window cleared: {why}");
+        if (why != "answered by operator")
+            this.answeredSignature = null;
         this.callWindowActive = false;
         this.callWindowFromLabels = false;
         this.callOptions = [];
@@ -440,6 +472,8 @@ public sealed class EventTracker
 
     private void ResetRound(string why)
     {
+        this.WinDeclared = false;
+        this.answeredSignature = null;
         foreach (var list in this.seatDiscards)
             list.Clear();
         foreach (var list in this.seatMelds)

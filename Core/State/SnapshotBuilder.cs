@@ -73,10 +73,12 @@ public sealed class SnapshotBuilder
 
         var codes = layout.StateCodes;
         var totalClosed = hand.Count + (3 * m);
-        var phase = ComputePhase(s.StateCode, codes, t.CallWindowActive, selfDeclare, totalClosed, hand.Count);
+        var phase = t.WinDeclared
+            ? GamePhase.RoundEnd
+            : ComputePhase(s.StateCode, codes, t.CallWindowActive, selfDeclare, totalClosed, hand.Count);
 
         var legal = LegalAction.None;
-        if (t.CallWindowActive)
+        if (t.CallWindowActive && !t.WinDeclared)
         {
             legal |= LegalAction.Pass;
             foreach (var o in options)
@@ -94,7 +96,7 @@ public sealed class SnapshotBuilder
             }
         }
 
-        if (phase == GamePhase.OurTurn || (selfDeclare && totalClosed == 14))
+        if (phase == GamePhase.OurTurn || (selfDeclare && totalClosed == 14 && !t.WinDeclared))
             legal |= LegalAction.Discard;
 
         var countsMapped = s.Seats.Any(x => x.DiscardCount is not null);

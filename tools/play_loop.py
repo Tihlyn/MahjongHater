@@ -48,6 +48,9 @@ def main():
             break
         seq = s.get("sequence")
         phase = s.get("phase")
+        if seq is not None and last_seq is not None and seq < last_seq:
+            acted.clear()          # plugin reloaded: sequence numbers restarted
+            log("sequence restarted (plugin reload) - forgetting acted set")
         if seq != last_seq:
             last_seq, seq_since = seq, time.time()
             hand = " ".join(s.get("hand") or [])
