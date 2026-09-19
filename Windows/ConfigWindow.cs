@@ -6,130 +6,144 @@ namespace MahjongHater.Windows;
 public sealed class ConfigWindow : Window
 {
     private readonly Configuration configuration;
+    private Theme.Scope theme;
+    private bool saved;
 
     public ConfigWindow(Configuration configuration)
-        : base("Mahjong Hater – Settings")
+        : base("Mahjong Hater \u2013 Settings", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse)
     {
         this.configuration = configuration;
+        // WindowSystem applies GlobalScale to window sizes and constraints.
+        this.Size = Theme.ConfigSize;
+        this.SizeCondition = ImGuiCond.FirstUseEver;
         this.SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new System.Numerics.Vector2(420f, 320f),
-            MaximumSize = new System.Numerics.Vector2(700f, 700f),
+            MinimumSize = Theme.MinimumSize,
+            MaximumSize = Theme.MaximumSize,
         };
     }
 
+    public override void PreDraw() => this.theme = new Theme.Scope();
+
+    public override void PostDraw() => this.theme.Dispose();
+
+    public override void OnOpen() => this.saved = false;
+
     public override void Draw()
     {
-        var pluginEnabled = this.configuration.PluginEnabled;
-        if (ImGui.Checkbox("Enable Plugin", ref pluginEnabled))
-        {
-            this.configuration.PluginEnabled = pluginEnabled;
-        }
-
-        ImGui.Separator();
-        ImGui.TextUnformatted("Rules");
-
-        var kuitan = this.configuration.Kuitan;
-        if (ImGui.Checkbox("Kuitan (Open Tanyao)", ref kuitan))
-        {
-            this.configuration.Kuitan = kuitan;
-        }
-        Tooltip("Enable open tanyao except in the special kuitan-disabled room.");
-
-        DrawGameLengthCombo();
-        Tooltip("Tonpuusen is East-only; Hanchan is East+South.");
-
-        DrawDoraDisplayCombo();
-        Tooltip("Doman matches FFXIV's default dora display; Traditional shows indicators.");
-
-        var fuMode = this.configuration.DoubleWindPairFu;
-        ImGui.TextUnformatted("Double-Wind Pair Fu");
-        if (ImGui.RadioButton("2 fu", fuMode == 2))
-        {
-            this.configuration.DoubleWindPairFu = 2;
-        }
+        Theme.Surface();
+        var closeSize = Math.Max(Theme.Px(Theme.ControlHeight), ImGui.GetFrameHeight());
+        var width = ImGui.GetContentRegionAvail().X;
+        Widgets.DisplayText("Settings", Theme.HeadlineScale, Theme.Text, width - closeSize - Theme.Px(Theme.Gap));
         ImGui.SameLine();
-        if (ImGui.RadioButton("4 fu", fuMode == 4))
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - closeSize);
+        if (Widgets.Pill("x##close", width: closeSize))
+            this.IsOpen = false;
+        if (ImGui.IsItemHovered())
+            Widgets.Tooltip("Close settings");
+
+        using (Widgets.Card())
         {
-            this.configuration.DoubleWindPairFu = 4;
+            Widgets.Label("GENERAL");
+            if (Widgets.ToggleRow("Enable Plugin", "##plugin", this.configuration.PluginEnabled))
+            {
+                this.configuration.PluginEnabled = !this.configuration.PluginEnabled;
+                this.saved = false;
+            }
+
+            if (Widgets.ToggleRow("Show overlay", "##overlay", this.configuration.ShowOverlay))
+            {
+                MainWindow.SetOverlayVisibility(this.configuration, !this.configuration.ShowOverlay);
+                this.saved = false;
+            }
         }
-        Tooltip("FFXIV does not document whether seat+round wind pairs grant 2 or 4 fu. Default is 4.");
 
-        ImGui.Separator();
-        ImGui.TextUnformatted("FFXIV Fixed Rules (not configurable):");
-        ImGui.BulletText("atozuke on");
-        ImGui.BulletText("kuikae off");
-        ImGui.BulletText("double ron on");
-        ImGui.BulletText("kazoe yakuman on");
-        ImGui.BulletText("no four-riichi abort");
-        ImGui.BulletText("tobi on <0");
-        ImGui.BulletText("agariyame for 1st-place dealer");
+        using (Widgets.Card())
+        {
+            Widgets.Label("TABLE RULES");
+            if (Widgets.ToggleRow("Kuitan (open tanyao)", "##kuitan", this.configuration.Kuitan))
+            {
+                this.configuration.Kuitan = !this.configuration.Kuitan;
+                this.saved = false;
+            }
 
-        if (ImGui.Button("Save"))
+            Tooltip("Enable open tanyao except in the special kuitan-disabled room.");
+            this.DrawGameLength();
+            Widgets.Label("DOUBLE-WIND PAIR FU");
+            var half = (Widgets.ContentWidth - Theme.Px(Theme.Gap)) / 2f;
+            if (Widgets.Pill("2 fu", this.configuration.DoubleWindPairFu == 2, half))
+            {
+                this.configuration.DoubleWindPairFu = 2;
+                this.saved = false;
+            }
+
+            Tooltip("FFXIV does not document whether seat + round wind pairs grant 2 or 4 fu. Default is 4.");
+            ImGui.SameLine();
+            if (Widgets.Pill("4 fu", this.configuration.DoubleWindPairFu == 4, half))
+            {
+                this.configuration.DoubleWindPairFu = 4;
+                this.saved = false;
+            }
+
+            Tooltip("FFXIV does not document whether seat + round wind pairs grant 2 or 4 fu. Default is 4.");
+        }
+
+        using (Widgets.Card())
+        {
+            Widgets.Label("DORA DISPLAY");
+            var half = (Widgets.ContentWidth - Theme.Px(Theme.Gap)) / 2f;
+            if (Widgets.Pill("Doman", this.configuration.DoraDisplayMode == DoraDisplayMode.Doman, half))
+            {
+                this.configuration.DoraDisplayMode = DoraDisplayMode.Doman;
+                this.saved = false;
+            }
+
+            ImGui.SameLine();
+            if (Widgets.Pill("Traditional", this.configuration.DoraDisplayMode == DoraDisplayMode.Traditional, half))
+            {
+                this.configuration.DoraDisplayMode = DoraDisplayMode.Traditional;
+                this.saved = false;
+            }
+
+            Widgets.Wrapped("Doman matches FFXIV's default display. Traditional shows dora indicators.");
+        }
+
+        using (Widgets.Card())
+        {
+            Widgets.Label("FIXED FFXIV RULES");
+            Widgets.Wrapped("Atozuke on / Kuikae off / Double ron on\nKazoe yakuman on / No four-riichi abort\nTobi below 0 / Agariyame for the 1st-place dealer");
+        }
+
+        if (Widgets.Pill(this.saved ? "Saved##save" : "Save##save", selected: true, width: ImGui.GetContentRegionAvail().X))
         {
             this.configuration.Save();
+            this.saved = true;
         }
     }
 
-    private void DrawGameLengthCombo()
+    private void DrawGameLength()
     {
-        var current = this.configuration.GameLength;
-        if (!ImGui.BeginCombo("Game Length", current.ToString()))
+        Widgets.Label("GAME LENGTH");
+        var half = (Widgets.ContentWidth - Theme.Px(Theme.Gap)) / 2f;
+        if (Widgets.Pill("Tonpuusen", this.configuration.GameLength == GameLength.Tonpuusen, half))
         {
-            return;
+            this.configuration.GameLength = GameLength.Tonpuusen;
+            this.saved = false;
         }
 
-        foreach (var value in Enum.GetValues<GameLength>())
+        ImGui.SameLine();
+        if (Widgets.Pill("Hanchan", this.configuration.GameLength == GameLength.Hanchan, half))
         {
-            var selected = value == current;
-            if (ImGui.Selectable(value.ToString(), selected))
-            {
-                this.configuration.GameLength = value;
-            }
-
-            if (selected)
-            {
-                ImGui.SetItemDefaultFocus();
-            }
+            this.configuration.GameLength = GameLength.Hanchan;
+            this.saved = false;
         }
 
-        ImGui.EndCombo();
-    }
-
-    private void DrawDoraDisplayCombo()
-    {
-        var current = this.configuration.DoraDisplayMode;
-        if (!ImGui.BeginCombo("Dora Display Mode", current.ToString()))
-        {
-            return;
-        }
-
-        foreach (var value in Enum.GetValues<DoraDisplayMode>())
-        {
-            var selected = value == current;
-            if (ImGui.Selectable(value.ToString(), selected))
-            {
-                this.configuration.DoraDisplayMode = value;
-            }
-
-            if (selected)
-            {
-                ImGui.SetItemDefaultFocus();
-            }
-        }
-
-        ImGui.EndCombo();
+        Widgets.Wrapped("Tonpuusen: East only. Hanchan: East + South.");
     }
 
     private static void Tooltip(string text)
     {
-        if (!ImGui.IsItemHovered())
-        {
-            return;
-        }
-
-        ImGui.BeginTooltip();
-        ImGui.TextWrapped(text);
-        ImGui.EndTooltip();
+        if (ImGui.IsItemHovered())
+            Widgets.Tooltip(text);
     }
 }

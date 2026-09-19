@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
 using FFXIVClientStructs.FFXIV.Component.GUI;
@@ -10,80 +11,88 @@ namespace MahjongHater.Windows;
 
 public sealed class MainWindow : Window
 {
-    private static readonly Vector4 Gold = new(0.96f, 0.82f, 0.26f, 1f);
-    private static readonly Vector4 Green = new(0.35f, 0.9f, 0.45f, 1f);
-    private static readonly Vector4 Red = new(0.95f, 0.35f, 0.35f, 1f);
-    private static readonly Vector4 Active = Green;
-    private static readonly Vector4 Inactive = new(0.85f, 0.3f, 0.3f, 1f);
-
+    private static readonly ConditionalWeakTable<Configuration, MainWindow> Overlays = new();
     private readonly Plugin plugin;
     private readonly Configuration configuration;
     private readonly EmjStateReader reader;
+    private Theme.Scope theme;
+    private ActionChoice? displayedChoice;
+    private CandidateText[] candidateText = [];
+    private string handText = string.Empty;
+    private string scoreText = "0";
+    private string recordText = "0 W / 0 L";
+    private string winRateText = "0.0%";
+    private string tableText = string.Empty;
+    private (int Score, int Wins, int Losses)? sessionKey;
+    private (Wind Seat, Wind Round, int Wall)? tableKey;
 
     public MainWindow(Plugin plugin, Configuration configuration, EmjStateReader reader)
-        : base("Mahjong Hater", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+        : base("Mahjong Hater", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse)
     {
         this.plugin = plugin;
         this.configuration = configuration;
         this.reader = reader;
+        Overlays.AddOrUpdate(configuration, this);
         this.IsOpen = configuration.ShowOverlay;
+        // WindowSystem applies GlobalScale to window sizes and constraints.
+        this.Size = Theme.MainSize;
+        this.SizeCondition = ImGuiCond.FirstUseEver;
         this.SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(420f, 320f),
-            MaximumSize = new Vector2(900f, 900f),
+            MinimumSize = Theme.MinimumSize,
+            MaximumSize = Theme.MaximumSize,
         };
+    }
+
+    public override void PreDraw() => this.theme = new Theme.Scope();
+
+    public override void PostDraw() => this.theme.Dispose();
+
+    internal static void SetOverlayVisibility(Configuration configuration, bool visible)
+    {
+        configuration.ShowOverlay = visible;
+        // Plugin.DrawUi copies IsOpen back into configuration after both windows draw.
+        if (Overlays.TryGetValue(configuration, out var window))
+            window.IsOpen = visible;
     }
 
     public override void Draw()
     {
         this.IsOpen = this.configuration.ShowOverlay;
+        Theme.Surface();
+        this.DrawHeader();
         var state = this.reader.Current;
+        this.DrawSession(state);
 
-        ImGui.SameLine(Math.Max(0f, ImGui.GetContentRegionAvail().X - 28f));
-        if (ImGui.SmallButton("⚙"))
-        {
-            this.plugin.OpenConfigWindow();
-        }
-
-        DrawHeader("Status");
-        var statusText = this.configuration.PluginEnabled ? "Active" : "Inactive";
-        ImGui.PushStyleColor(ImGuiCol.Text, this.configuration.PluginEnabled ? Active : Inactive);
-        ImGui.SetWindowFontScale(1.35f);
-        ImGui.TextUnformatted(statusText);
-        ImGui.SetWindowFontScale(1f);
-        ImGui.PopStyleColor();
-        if (ImGui.Button(this.configuration.PluginEnabled ? "Disable" : "Enable"))
-        {
-            this.configuration.PluginEnabled = !this.configuration.PluginEnabled;
-            this.configuration.Save();
-        }
-
-        DrawHeader("Session");
-        var wins = this.reader.Tracker.WinsThisSession;
-        var losses = this.reader.Tracker.LossesThisSession;
-        var totalGames = wins + losses;
-        var winRate = totalGames == 0 ? 0d : (double)wins / totalGames;
-        ImGui.TextColored(Gold, $"Score: {(state?.Us.Score ?? 0):N0}");
-        ImGui.TextColored(Green, $"Wins: {wins}");
-        ImGui.TextColored(Red, $"Losses: {losses}");
-        ImGui.TextUnformatted($"Win Rate: {winRate:P1}");
-
-        DrawHeader("Current Hand");
         if (state is { Phase: not GamePhase.NotInGame })
         {
-            if (!state.LayoutHealthy)
-                ImGui.TextColored(Red, "Layout check failed — hand read may be stale (see /struct).");
-            foreach (var note in state.Notes)
-                ImGui.TextDisabled(note);
-
+            this.DrawTable(state);
+            ActionChoice? choice = null;
             if (state.Hand.Count > 0 || state.Legal != LegalAction.None)
-                this.DrawDecision(state);
+                choice = this.DrawDecision(state);
             else
-                ImGui.TextUnformatted("Seated — waiting for hand tile data...");
+                DrawWaiting("Waiting for tiles", "Seated at the table. Waiting for hand tile data...");
+
+            // Call options remain visible even while analysis is pending or failed.
+            if (state.Phase is GamePhase.CallPrompt or GamePhase.SelfDeclare && state.CallOptions.Count > 0)
+            {
+                using (Widgets.Card())
+                {
+                    Widgets.Label("AVAILABLE CALLS");
+                    for (var i = 0; i < state.CallOptions.Count; i++)
+                        Widgets.Wrapped(state.CallOptions[i]);
+                }
+            }
+
+            if (choice is not null)
+            {
+                this.DrawCandidates(choice);
+                DrawSteps(choice);
+            }
         }
         else
         {
-            ImGui.TextUnformatted("Not currently seated at a Doman Mahjong table.");
+            DrawWaiting("Ready when you are", "Not currently seated at a Doman Mahjong table.");
         }
 
         this.configuration.ShowOverlay = this.IsOpen;
@@ -101,115 +110,241 @@ public sealed class MainWindow : Window
         this.configuration.Save();
     }
 
-
-    private void DrawDecision(StateSnapshot state)
+    private void DrawHeader()
     {
-        ImGui.TextUnformatted($"Seat Wind: {state.SeatWind}   Round Wind: {state.RoundWind}   Wall: {state.WallRemaining}");
+        var origin = ImGui.GetCursorScreenPos();
+        var width = ImGui.GetContentRegionAvail().X;
+        var buttonSize = Math.Max(Theme.Px(Theme.ControlHeight), ImGui.GetFrameHeight());
+        var stateWidth = ImGui.CalcTextSize("Disabled").X + Theme.Px(Theme.CardPadding * 2f);
+        var titleWidth = width - stateWidth - buttonSize * 2f - Theme.Px(Theme.Gap * 3f);
+        Widgets.DisplayText("Mahjong Hater", Theme.TitleScale, Theme.Text, titleWidth);
+        ImGui.SameLine();
+        ImGui.SetCursorScreenPos(origin + new Vector2(titleWidth + Theme.Px(Theme.Gap), 0f));
+        if (Widgets.Pill(this.configuration.PluginEnabled ? "Enabled##enabled" : "Disabled##enabled", this.configuration.PluginEnabled, stateWidth))
+        {
+            this.configuration.PluginEnabled = !this.configuration.PluginEnabled;
+            this.configuration.Save();
+        }
 
-        // The policy runs on a background thread (AnalysisService); Draw only renders
-        // the latest publication and never blocks.
+        ImGui.SameLine();
+        if (Widgets.Pill("\u2699##settings", width: buttonSize))
+            this.plugin.OpenConfigWindow();
+        if (ImGui.IsItemHovered())
+            Widgets.Tooltip("Settings");
+        ImGui.SameLine();
+        if (Widgets.Pill("x##close", width: buttonSize))
+            this.IsOpen = false;
+        if (ImGui.IsItemHovered())
+            Widgets.Tooltip("Hide overlay");
+    }
+
+    private void DrawSession(StateSnapshot? state)
+    {
+        var wins = this.reader.Tracker.WinsThisSession;
+        var losses = this.reader.Tracker.LossesThisSession;
+        var key = (state?.Us.Score ?? 0, wins, losses);
+        if (this.sessionKey != key)
+        {
+            this.sessionKey = key;
+            this.scoreText = $"{key.Item1:N0}";
+            this.recordText = $"{wins} W / {losses} L";
+            this.winRateText = $"{(wins + losses == 0 ? 0d : (double)wins / (wins + losses)):P1}";
+        }
+
+        using (Widgets.Card())
+        {
+            var origin = ImGui.GetCursorScreenPos();
+            var column = Widgets.ContentWidth / 3f;
+            DrawMetric("SCORE", this.scoreText, column);
+            ImGui.SameLine();
+            ImGui.SetCursorScreenPos(origin + new Vector2(column, 0f));
+            DrawMetric("SESSION W / L", this.recordText, column);
+            ImGui.SameLine();
+            ImGui.SetCursorScreenPos(origin + new Vector2(column * 2f, 0f));
+            DrawMetric("WIN RATE", this.winRateText, column);
+        }
+    }
+
+    private static void DrawMetric(string label, string value, float width)
+    {
+        ImGui.BeginGroup();
+        try
+        {
+            Widgets.DisplayText(label, Theme.LabelScale, Theme.Muted, width);
+            Widgets.DisplayText(value, Theme.BodyScale, Theme.Text, width);
+        }
+        finally
+        {
+            ImGui.EndGroup();
+        }
+    }
+
+    private void DrawTable(StateSnapshot state)
+    {
+        var key = (state.SeatWind, state.RoundWind, state.WallRemaining);
+        if (this.tableKey != key)
+        {
+            this.tableKey = key;
+            this.tableText = $"Seat {state.SeatWind} / Round {state.RoundWind} / Wall {state.WallRemaining}";
+        }
+
+        using (Widgets.Card())
+        {
+            Widgets.Label("TABLE");
+            Widgets.Wrapped(this.tableText, false);
+            if (!state.LayoutHealthy)
+            {
+                Widgets.Badge("Layout check failed", warning: true);
+                Widgets.Wrapped("Hand read may be stale.");
+            }
+
+            for (var i = 0; i < state.Notes.Count; i++)
+                Widgets.Wrapped(state.Notes[i]);
+        }
+    }
+
+    private ActionChoice? DrawDecision(StateSnapshot state)
+    {
+        // Read a single immutable publication; the render thread never runs policy.
         var service = this.plugin.AnalysisService;
         var publication = service.Latest;
         if (publication is null)
         {
-            ImGui.TextUnformatted("Analyzing hand...");
-            return;
+            DrawWaiting(service.IsStalled ? "Analysis stalled" : "Analyzing hand...",
+                service.IsStalled ? "Will retry on the next hand change." : "Your recommendation will appear here.");
+            return null;
         }
 
         if (publication.Status != AnalysisStatus.Ready || publication.Choice is null)
         {
-            ImGui.TextColored(Red, publication.Status == AnalysisStatus.TimedOut
-                ? "Analysis timed out — will retry on the next hand change."
-                : $"Analysis failed: {publication.Error} — will retry on the next hand change.");
-            return;
+            using (Widgets.Card())
+            {
+                Widgets.Badge(publication.Status == AnalysisStatus.TimedOut ? "Analysis timed out" : "Analysis failed", warning: true);
+                if (!string.IsNullOrEmpty(publication.Error))
+                    Widgets.Wrapped(publication.Error);
+                Widgets.Wrapped("Will retry on the next hand change.");
+            }
+
+            return null;
         }
 
         var choice = publication.Choice;
         var isFresh = publication.Fingerprint == AnalysisService.ComputeFingerprint(state);
-        if (!isFresh)
+        this.CacheChoice(choice);
+        using (Widgets.Card(headline: true))
         {
-            ImGui.TextDisabled(service.IsStalled
-                ? "Analysis stalled — showing previous hand; will retry on the next hand change."
-                : "Updating for the new hand...");
+            Widgets.Label(isFresh ? "RECOMMENDED ACTION" : "PREVIOUS HAND");
+            if (!isFresh || service.IsStalled)
+                Widgets.Wrapped(service.IsStalled
+                    ? "Analysis stalled. Showing the previous hand; will retry on the next hand change."
+                    : "Updating for the new hand...");
+            DrawAction(choice);
+            this.DrawHandSummary(choice.Hand);
         }
-
-        DrawHandSummary(choice.Hand);
-        DrawAction(choice, state);
-        DrawCandidates(choice);
-        DrawSteps(choice);
 
         // Never highlight a tile computed for a hand that has since changed.
         if (isFresh && choice.IsDiscard && choice.Tile is { } highlightTile)
             this.DrawBestDiscardHighlight(state, highlightTile);
+        return choice;
     }
 
-    private static void DrawHandSummary(HandSummary? hand)
+    private void CacheChoice(ActionChoice choice)
+    {
+        if (ReferenceEquals(this.displayedChoice, choice))
+            return;
+        this.displayedChoice = choice;
+        this.handText = choice.Hand is { } hand
+            ? $"{(hand.Shanten <= 0 ? "Tenpai!" : $"{hand.Shanten}-shanten")}   /   Ukeire {hand.Ukeire}"
+            : string.Empty;
+        this.candidateText = new CandidateText[Math.Min(Theme.CandidateLimit, choice.Candidates.Count)];
+        for (var i = 0; i < this.candidateText.Length; i++)
+        {
+            var candidate = choice.Candidates[i];
+            this.candidateText[i] = new CandidateText(
+                $"{(candidate.ShantenAfter <= 0 ? "Tenpai" : $"{candidate.ShantenAfter}-shanten")} / {candidate.Ukeire} tiles",
+                $"Risk {candidate.DealInRisk:P0}",
+                $"Two-step ukeire: {candidate.Ukeire2}\nValue: {candidate.Value:0.##}\nRanking score: {candidate.Score:0.##}");
+        }
+    }
+
+    private static void DrawAction(ActionChoice choice)
+    {
+        var headline = choice.Kind switch
+        {
+            ActionKind.Tsumo => "Tsumo!",
+            ActionKind.Ron => "Ron!",
+            ActionKind.Riichi => "Riichi!",
+            ActionKind.Discard => "Discard",
+            ActionKind.Pon => "Pon",
+            ActionKind.Chi => "Chi",
+            ActionKind.MinKan => "Open kan",
+            ActionKind.AnKan => "Closed kan",
+            ActionKind.ShouMinKan => "Added kan",
+            ActionKind.Pass => "Pass",
+            _ => "Standing by",
+        };
+        var color = choice.IsWin || choice.Kind == ActionKind.Riichi ? Theme.Accent
+            : choice.Kind is ActionKind.Pass or ActionKind.None ? Theme.Muted : Theme.Text;
+        Widgets.DisplayText(headline, Theme.HeadlineScale, color, Widgets.ContentWidth);
+        if (choice.IsCall && choice.Call is { } meld)
+            Widgets.Tiles(meld.Tiles);
+        else if (choice.Tile is { } tile)
+        {
+            if (choice.IsDiscard)
+                ImGui.SameLine();
+            Widgets.Tile(tile);
+        }
+        if (!string.IsNullOrEmpty(choice.Summary))
+            Widgets.Wrapped(choice.Summary);
+    }
+
+    private void DrawHandSummary(HandSummary? hand)
     {
         if (hand is null)
             return;
-        if (hand.Shanten <= 0)
-            ImGui.TextColored(Gold, "Tenpai!");
-        else
-            ImGui.TextUnformatted($"Shanten: {hand.Shanten}");
-        ImGui.SameLine();
-        ImGui.TextUnformatted($"   Ukeire: {hand.Ukeire}");
+        Widgets.Wrapped(this.handText, false);
         if (hand.Waits.Count > 0)
-            ImGui.TextWrapped($"Waits: {string.Join(", ", hand.Waits.Select(TileHelpers.GetDisplayName))}");
-    }
-
-    // The headline: what to do right now, coloured by how loud it should be.
-    private static void DrawAction(ActionChoice choice, StateSnapshot state)
-    {
-        switch (choice.Kind)
         {
-            case ActionKind.Tsumo:
-            case ActionKind.Ron:
-                ImGui.TextColored(Gold, $">>> {choice.Kind.ToString().ToUpperInvariant()} — declare the win! <<<");
-                break;
-            case ActionKind.Riichi:
-                ImGui.TextColored(Gold, $"Riichi! Discard {Name(choice.Tile)}");
-                break;
-            case ActionKind.Discard:
-                ImGui.TextColored(Gold, $"Best Discard: {Name(choice.Tile)}");
-                break;
-            case ActionKind.Pon:
-            case ActionKind.Chi:
-            case ActionKind.MinKan:
-            case ActionKind.AnKan:
-            case ActionKind.ShouMinKan:
-                var tiles = choice.Call is { } meld ? string.Join(" ", meld.Tiles.Select(TileHelpers.GetDisplayName)) : Name(choice.Tile);
-                ImGui.TextColored(Gold, $"Call {choice.Kind}: {tiles}");
-                break;
-            case ActionKind.Pass:
-                if (state.Phase is GamePhase.CallPrompt or GamePhase.SelfDeclare)
-                    ImGui.TextColored(Green, $"Pass — {choice.Summary}");
-                else
-                    ImGui.TextDisabled(choice.Summary);
-                break;
-            default:
-                ImGui.TextDisabled(choice.Summary);
-                break;
+            Widgets.Label("WAITS");
+            Widgets.Tiles(hand.Waits);
         }
-
-        if (state.Phase is GamePhase.CallPrompt or GamePhase.SelfDeclare && state.CallOptions.Count > 0)
-            ImGui.TextDisabled($"Options: {string.Join(", ", state.CallOptions)}");
     }
 
-    private static void DrawCandidates(ActionChoice choice)
+    private void DrawCandidates(ActionChoice choice)
     {
-        if (choice.Candidates.Count < 2)
+        if (this.candidateText.Length == 0)
             return;
-
-        ImGui.Spacing();
-        ImGui.TextDisabled("Alternatives:");
-        foreach (var c in choice.Candidates.Take(4))
+        using (Widgets.Card())
         {
-            var line = $"  {TileHelpers.GetDisplayName(c.Tile)} — " +
-                       (c.ShantenAfter == 0 ? "tenpai" : $"{c.ShantenAfter}-shanten") +
-                       $", {c.Ukeire} tiles, risk {c.DealInRisk:P0}";
-            if (c.Note.Length > 0)
-                line += $" ({c.Note})";
-            ImGui.TextDisabled(line);
+            Widgets.Label("DISCARD CANDIDATES");
+            for (var i = 0; i < this.candidateText.Length; i++)
+            {
+                var candidate = choice.Candidates[i];
+                var text = this.candidateText[i];
+                Widgets.Tile(candidate.Tile);
+                ImGui.SameLine();
+                ImGui.BeginGroup();
+                try
+                {
+                    Widgets.Wrapped(text.Summary, false);
+                    if (ImGui.IsItemHovered())
+                        Widgets.Tooltip(text.Details);
+                    Widgets.DisplayText(text.Risk, Theme.LabelScale, Theme.Muted, Widgets.ContentWidth);
+                    ImGui.SameLine();
+                    Widgets.Risk(candidate.DealInRisk);
+                    if (!string.IsNullOrEmpty(candidate.Note))
+                        Widgets.Wrapped(candidate.Note);
+                    if (candidate.Waits.Count > 0)
+                    {
+                        Widgets.Label("WAITS");
+                        Widgets.Tiles(candidate.Waits);
+                    }
+                }
+                finally
+                {
+                    ImGui.EndGroup();
+                }
+            }
         }
     }
 
@@ -217,12 +352,27 @@ public sealed class MainWindow : Window
     {
         if (choice.Steps.Count == 0)
             return;
-        ImGui.Spacing();
-        foreach (var step in choice.Steps)
-            ImGui.TextWrapped($"[{step.Stage}] {step.Display}");
+        using (Widgets.Card())
+        {
+            Widgets.Label("REASONING");
+            for (var i = 0; i < choice.Steps.Count; i++)
+            {
+                var step = choice.Steps[i];
+                Widgets.Label(step.Stage);
+                Widgets.Wrapped(step.Display);
+            }
+        }
     }
 
-    private static string Name(Tile? tile) => tile is { } t ? TileHelpers.GetDisplayName(t) : "?";
+    private static void DrawWaiting(string title, string description)
+    {
+        using (Widgets.Card(headline: true))
+        {
+            Widgets.Label("CURRENT HAND");
+            Widgets.DisplayText(title, Theme.HeadlineScale, Theme.Text, Widgets.ContentWidth);
+            Widgets.Wrapped(description);
+        }
+    }
 
     private unsafe void DrawBestDiscardHighlight(StateSnapshot state, Tile bestDiscard)
     {
@@ -237,8 +387,7 @@ public sealed class MainWindow : Window
         if (targetNode == null || !targetNode->IsVisible())
             return;
 
-        // Walk up the parent chain STOPPING before the RootNode (ParentNode == null):
-        // RootNode->X/Y equals addon->X/Y, so including it would double-count the offset.
+        // RootNode already includes addon X/Y; stop before it to avoid double offsets.
         float relX = 0, relY = 0;
         var cur = targetNode;
         for (var depth = 0; cur != null && cur->ParentNode != null && depth < 20; depth++, cur = cur->ParentNode)
@@ -247,17 +396,12 @@ public sealed class MainWindow : Window
             relY += cur->Y;
         }
 
+        // Game geometry follows addon scale; only the glow uses Dalamud UI scale.
         var s = addon->Scale;
         var topLeft = new Vector2(addon->X + (relX * s), addon->Y + (relY * s));
-        var botRight = topLeft + new Vector2(42 * s, 55 * s);
-
-        ImGui.GetForegroundDrawList().AddRect(topLeft, botRight, ImGui.ColorConvertFloat4ToU32(Gold), 2f, ImDrawFlags.None, 3f);
+        var botRight = topLeft + new Vector2(Theme.GameTileWidth * s, Theme.GameTileHeight * s);
+        Theme.DiscardGlow(ImGui.GetForegroundDrawList(), topLeft, botRight);
     }
 
-
-    private static void DrawHeader(string text)
-    {
-        ImGui.Separator();
-        ImGui.TextUnformatted(text);
-    }
+    private readonly record struct CandidateText(string Summary, string Risk, string Details);
 }
