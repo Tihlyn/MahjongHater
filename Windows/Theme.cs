@@ -28,6 +28,8 @@ internal static class Theme
     public static readonly Vector4 AccentFill = new(0.353f, 0.784f, 0.98f, 0.17f);
     public static readonly Vector4 Safe = new(0.42f, 0.78f, 0.61f, 1f);
     public static readonly Vector4 Danger = new(0.98f, 0.40f, 0.43f, 1f);
+    public static readonly Vector4 Positive = new(0.30f, 0.85f, 0.39f, 1f);   // take the call / declare
+    public static readonly Vector4 Decline = new(1f, 0.80f, 0.20f, 1f);       // pass / stand down
     public static readonly Vector4 ManFace = new(0.28f, 0.16f, 0.18f, 1f);
     public static readonly Vector4 PinFace = new(0.14f, 0.23f, 0.32f, 1f);
     public static readonly Vector4 SouFace = new(0.13f, 0.26f, 0.22f, 1f);

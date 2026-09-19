@@ -283,8 +283,11 @@ public sealed class MainWindow : Window
             ActionKind.Pass => "Pass",
             _ => "Standing by",
         };
-        var color = choice.IsWin || choice.Kind == ActionKind.Riichi ? Theme.Accent
-            : choice.Kind is ActionKind.Pass or ActionKind.None ? Theme.Muted : Theme.Text;
+        // Calls and declarations read green (take it), declining reads yellow (let it go);
+        // an ordinary discard keeps the neutral text colour.
+        var color = choice.IsWin || choice.IsCall || choice.Kind == ActionKind.Riichi ? Theme.Positive
+            : choice.Kind == ActionKind.Pass ? Theme.Decline
+            : choice.Kind == ActionKind.None ? Theme.Muted : Theme.Text;
         Widgets.DisplayText(headline, Theme.HeadlineScale, color, Widgets.ContentWidth);
         if (choice.IsCall && choice.Call is { } meld)
             Widgets.Tiles(meld.Tiles);
