@@ -118,6 +118,21 @@ public sealed record PolicyWeights
     public double SujiDiscount { get; init; } = 0.5;
     public double GenbutsuDanger { get; init; } = 0.0;
     public int MinHanDoman { get; init; } = 1;               // Doman requires a yaku; keep as data
+    public double FoldMinValue { get; init; } = 2;
+    public double TenpaiBase { get; init; } = 0.05;
+    public double TenpaiPerDiscard { get; init; } = 0.025;
+    public double TenpaiPerOpenMeld { get; init; } = 0.12;
+    public double TenpaiEarlyOutsideWeight { get; init; } = 0.08;
+    public double TenpaiLateMiddleWeight { get; init; } = 0.12;
+    public double KabeDiscount { get; init; } = 0.4;
+    public double HonorDanger { get; init; } = 0.16;
+    public double TerminalDanger { get; init; } = 0.12;
+    public double EdgeDanger { get; init; } = 0.18;
+    public double MiddleDanger { get; init; } = 0.24;
+    public double OpponentBaseValue { get; init; } = 2000;
+    public double OpponentMeldValue { get; init; } = 800;
+    public double OpponentRiichiValue { get; init; } = 2000;
+    public double OpponentDoraValue { get; init; } = 1000;
 
     public static PolicyWeights Default { get; } = new();
 }
