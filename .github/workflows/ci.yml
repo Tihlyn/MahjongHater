@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      dalamud_track:
+        description: Dalamud distribution
+        type: choice
+        options: [release, staging]
+        default: release
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: ./.github/actions/setup-dalamud
+        with:
+          track: ${{ inputs.dalamud_track || vars.DALAMUD_TRACK || 'release' }}
+      - name: Build
+        run: dotnet build MahjongHater.csproj -c Release -nologo
+      - name: Test
+        run: dotnet test MahjongHater.Tests -c Release -nologo
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MahjongHater
+          if-no-files-found: error
+          path: |
+            bin/Release/net10.0-windows/MahjongHater/latest.zip
+            bin/Release/net10.0-windows/MahjongHater/MahjongHater.json
