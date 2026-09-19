@@ -1,6 +1,6 @@
 namespace MahjongHater.Core;
 
-// Pure hand-size and call-legality rules shared by the tracker and the debug API.
+// Pure hand-size and call-legality rules used by the tracker.
 // Free of Dalamud types so they are unit-testable.
 public static class HandTracking
 {

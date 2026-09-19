@@ -21,11 +21,6 @@ public sealed class Configuration : IPluginConfiguration
 
     public bool ShowOverlay { get; set; } = true;
 
-    // Loopback debug API (/mhater debug). Dev-loaded builds start it regardless.
-    public bool DebugServerAutoStart { get; set; }
-
-    public int DebugServerPort { get; set; } = 9787;
-
     public static Configuration Load(IDalamudPluginInterface pluginInterface)
     {
         var config = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();

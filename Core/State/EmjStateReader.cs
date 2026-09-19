@@ -8,7 +8,7 @@ namespace MahjongHater.Core.State;
 // Owns the struct reader, the event tracker and the snapshot builder; the only game-
 // memory touching class the plugin talks to. Tick() runs on the framework thread and
 // publishes Current (null while the Emj addon is closed).
-public sealed unsafe partial class EmjStateReader : IDisposable
+public sealed unsafe class EmjStateReader : IDisposable
 {
     private const int WindScanInterval = 30;
 
@@ -56,9 +56,6 @@ public sealed unsafe partial class EmjStateReader : IDisposable
     public StructFrame? LastFrame { get; private set; }
 
     public DecodedStruct? LastDecoded { get; private set; }
-
-    // One-line summary of the current recommendation, wired by the plugin.
-    public Func<string>? AnalysisSummaryProvider { get; set; }
 
     // Receives the tenpai samples of every finished hand (plugin appends them to CSV).
     public Action<IReadOnlyList<Policy.TenpaiSample>>? CalibrationSink { get; set; }
@@ -121,7 +118,6 @@ public sealed unsafe partial class EmjStateReader : IDisposable
         this.builder.BuildNotInGame();
     }
 
-    public void SetRiichiDeclared(bool declared) => this.tracker.SetRiichiDeclared(declared);
 
     private void OnRefresh(AddonEvent type, AddonArgs args)
     {
@@ -227,6 +223,42 @@ public sealed unsafe partial class EmjStateReader : IDisposable
     // prompt closes and the list's item-table labels are always empty, so this is only the
     // tracker's fallback edge — the type-19/23 events are the real signal.
     private static List<string> PromptLabels(AtkUnitBase* addon) => EmjScanner.ScanCallButtonTexts(addon);
+
+    // Slot node holding a tile of the current hand, by struct semantics: the draw always
+    // sits in the dedicated draw slot, closed tile i in the i-th non-draw slot by X.
+    // After a meld the parked slots (1340010+) still scan as visible but carry nothing,
+    // so "hand index == visual index" is wrong there. Exact tile first (red vs plain is
+    // the policy's choice), then same kind; the draw wins ties as the natural discard.
+    public AtkResNode* FindSlotNodeForTile(AtkUnitBase* addon, Tile wanted, List<ScannedTileSlot>? slots = null)
+    {
+        var decoded = this.LastDecoded;
+        if (decoded == null)
+            return null;
+
+        slots ??= EmjScanner.ScanHandSlots(addon);
+        var drawId = (uint)this.Layout.Nodes.HandSlotDraw;
+        var drawPtr = slots.FirstOrDefault(sl => sl.NodeId == drawId).NodePtr; // 0 when absent
+        var closedSlots = slots.Where(sl => sl.NodeId != drawId).ToList();
+        var closed = decoded.ClosedTiles;
+
+        AtkResNode* Closed(Func<Tile, bool> match)
+        {
+            for (var i = closed.Count - 1; i >= 0; i--)
+                if (match(closed[i]) && i < closedSlots.Count)
+                    return (AtkResNode*)closedSlots[i].NodePtr;
+            return null;
+        }
+
+        var drawn = decoded.DrawnTile;
+        if (drawn is { } d && d.Equals(wanted) && drawPtr != 0)
+            return (AtkResNode*)drawPtr;
+        var exact = Closed(t => t.Equals(wanted));
+        if (exact != null)
+            return exact;
+        if (drawn is { } d2 && TileHelpers.SameKind(d2, wanted) && drawPtr != 0)
+            return (AtkResNode*)drawPtr;
+        return Closed(t => TileHelpers.SameKind(t, wanted));
+    }
 
     private AtkUnitBase* GetAddon()
     {

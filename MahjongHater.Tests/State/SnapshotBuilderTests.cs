@@ -98,16 +98,6 @@ public class SnapshotBuilderTests
     }
 
     [Fact]
-    public void Manual_riichi_flag_flows_into_the_snapshot()
-    {
-        var t = new EventTracker();
-        t.SetRiichiDeclared(true);
-        var s = Build(new SnapshotBuilder(), t, StructFixture.Decoded("123m456p789s1122z", "3z"));
-        Assert.True(s.OurRiichi);
-        Assert.True(s.Us.Riichi);
-    }
-
-    [Fact]
     public void Unhealthy_frame_falls_back_to_the_last_good_hand()
     {
         var b = new SnapshotBuilder();

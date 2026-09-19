@@ -7,10 +7,8 @@ namespace MahjongHater.Core.State;
 // "Event model". No Dalamud types; fed by EmjStateReader, replayable in tests.
 public sealed class EventTracker
 {
-    private const int DebugRingCap = 600;
 
     private readonly Action<string>? logInfo;
-    private readonly Queue<string> debugRing = new(DebugRingCap);
 
     private readonly List<Tile>[] seatDiscards = [[], [], [], []];
     // Meld compositions per relative seat from type-13 (all seats) / atkType=74 (us);
@@ -32,10 +30,6 @@ public sealed class EventTracker
     private int callFromSeat = -1;
     private string lastPromptSignature = string.Empty;
     private bool callWindowFromLabels;
-    // Options of the window the operator already answered: the game echoes the selection
-    // as a type-19 with the same labels (verified live 2026-09-19), which must not re-open it.
-    private string? answeredSignature;
-
     // True after a score/win screen (or at load): the next type-21 Layout-1 deal is a
     // real round start; mid-round type-21 refreshes must not wipe state (reference doc,
     // "Cold-start reader lifecycle").
@@ -92,28 +86,9 @@ public sealed class EventTracker
 
     public bool RoundEnded => this.roundEnded;
 
-    // True from an answered Tsumo/Ron until the win screen, so nothing is decided in between.
-    public bool WinDeclared { get; private set; }
-
     // Relative seat named by the last type-32 win screen this round; -1 until then (a
     // draw never sets it). Consumed by the tenpai calibration recorder.
     public int LastWinnerSeat { get; private set; } = -1;
-
-    // The operator answered the open window (list row clicked). Clears it so the next
-    // snapshot moves on (a riichi needs its discard right after), and ignores the echo.
-    public void MarkCallAnswered(bool isWin)
-    {
-        if (!this.callWindowActive)
-            return;
-        this.answeredSignature = string.Join(",", this.callOptions);
-        this.WinDeclared |= isWin;
-        this.answeredCallTile = this.callTile;
-        this.answeredCallFromSeat = this.callFromSeat;
-        this.ClearCallWindow("answered by operator");
-    }
-
-    private Tile? answeredCallTile;
-    private int answeredCallFromSeat = -1;
 
     public bool RiichiDeclared => this.riichiDeclared;
 
@@ -122,9 +97,6 @@ public sealed class EventTracker
     public int LossesThisSession { get; private set; }
 
     public Tile? LastOpponentDiscard => this.lastOpponentDiscard;
-
-    // Manual override until a riichi signal is mapped in the struct (/riichi?declared=).
-    public void SetRiichiDeclared(bool declared) => this.riichiDeclared = declared;
 
     // Best-effort round wind from the addon's visible text (fed by the reader).
     public void HintRoundWind(Wind wind) => this.trackedRoundWind = wind;
@@ -265,19 +237,19 @@ public sealed class EventTracker
                 if (shapes.Count == 0)
                     break;
 
-                // The claimed tile is the one every shape contains; the answered window or the
-                // fresh opponent discard names it when the shapes are ambiguous.
+                // The claimed tile is the one every shape contains; the window that was just
+                // answered or the fresh opponent discard names it when the shapes are ambiguous.
                 var common = shapes.Skip(1).Aggregate(shapes[0].AsEnumerable(),
                     (acc, s) => acc.Where(t => s.Any(x => TileHelpers.SameKind(x, t)))).ToList();
-                var claimed = this.answeredCallTile ?? this.FreshOpponentDiscard(utc) ?? (common.Count == 1 ? common[0] : (Tile?)null);
-                this.answeredSignature = null;
+                var claimed = this.callTile ?? this.FreshOpponentDiscard(utc) ?? (common.Count == 1 ? common[0] : (Tile?)null);
+                var fromSeat = this.callFromSeat;
                 this.callWindowActive = true;
                 this.callWindowFromLabels = false;
                 this.callOptions = ["Chi"];
                 this.callShapes = shapes;
                 this.CallIsClaim = true;
                 this.callTile = claimed;
-                this.callFromSeat = this.answeredCallFromSeat >= 0 ? this.answeredCallFromSeat : 3;
+                this.callFromSeat = fromSeat >= 0 ? fromSeat : 3;
                 this.Note($"chi shapes (type-25): [{string.Join(" | ", shapes.Select(s => string.Join("", s.Select(x => x.ToString()))))}] tile={claimed?.ToString() ?? "-"}");
                 break;
             }
@@ -285,7 +257,6 @@ public sealed class EventTracker
             case 29: // post-round score delta: [1]=seat-0 delta ×100
             {
                 this.roundEnded = true;
-                this.WinDeclared = false;
                 this.ClearCallWindow("score (type-29)");
                 var delta = f.Int(1) * 100;
                 if (delta >= 100)
@@ -298,7 +269,6 @@ public sealed class EventTracker
             case 32: // win screen: [1]=winner seat, [2]="East 3 South Wind"
             {
                 this.roundEnded = true;
-                this.WinDeclared = false;
                 this.LastWinnerSeat = f.Int(1) is >= 0 and <= 3 ? f.Int(1) : -1;
                 this.ClearCallWindow("win screen (type-32)");
                 var round = f.Str(2) ?? string.Empty;
@@ -428,16 +398,9 @@ public sealed class EventTracker
         this.LossesThisSession = 0;
     }
 
-    // ──────────────────────────────────────── DEBUG ─────────────────────────────────────────
-
-    public List<string> DebugEvents(int tail) => this.debugRing.TakeLast(Math.Clamp(tail, 1, DebugRingCap)).ToList();
-
-    public void Note(string message)
-    {
-        if (this.debugRing.Count >= DebugRingCap)
-            this.debugRing.Dequeue();
-        this.debugRing.Enqueue($"{DateTime.UtcNow:HH:mm:ss.fff} {message}");
-    }
+    // Tracker decisions go to the Dalamud log (verbose) so a session can still be
+    // reconstructed from dalamud.log after the debug API was removed.
+    public void Note(string message) => this.logInfo?.Invoke($"[Tracker] {message}");
 
     // ──────────────────────────────────────── INTERNALS ─────────────────────────────────────
 
@@ -456,11 +419,6 @@ public sealed class EventTracker
     {
         // "Pon!" / "Riichi!" is the announcement banner echoing the same option.
         options = options.Select(o => o.TrimEnd('!')).Distinct().ToList();
-        if (this.answeredSignature is { } answered && answered == string.Join(",", options))
-        {
-            this.Note($"call window ({source}) [{answered}] is the echo of the answered one; ignoring");
-            return;
-        }
 
         var meldCount = this.seatMelds[0].Count;
         var expected = HandTracking.MaxClosedTiles(meldCount) - 1;
@@ -496,8 +454,6 @@ public sealed class EventTracker
     {
         if (this.callWindowActive)
             this.Note($"call window cleared: {why}");
-        if (why != "answered by operator")
-            this.answeredSignature = null;
         this.callWindowActive = false;
         this.callWindowFromLabels = false;
         this.callOptions = [];
@@ -521,9 +477,7 @@ public sealed class EventTracker
 
     private void ResetRound(string why)
     {
-        this.WinDeclared = false;
         this.LastWinnerSeat = -1;
-        this.answeredSignature = null;
         foreach (var list in this.seatDiscards)
             list.Clear();
         foreach (var list in this.seatMelds)

@@ -1,6 +1,6 @@
 namespace MahjongHater.Core.State;
 
-// Contract between the reader (Phase 1) and everything downstream (policy, UI, debug API).
+// Contract between the reader (Phase 1) and everything downstream (policy, UI).
 // Immutable; built on the framework thread, consumed anywhere. See docs/REWORK_PLAN.md.
 
 public enum GamePhase

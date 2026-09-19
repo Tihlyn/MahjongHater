@@ -180,7 +180,7 @@ independent hover confirmation in a case where the type-6 draw event
 display name** ("Dots (7)", "Characters (2)", "Red Dragon", …), parsed by
 `TryParseTileName`. This is the game's own tooltip text for whatever the mouse is
 currently over — as close to ground truth as anything gets, but it only fires when
-something (a player, or the debug API's `/hover`) actually moves the mouse over a
+something (a player, or a Cartographer `/hover`) actually moves the mouse over a
 slot. `hoverHandSlots` is a `slot → Tile` map, cleared on every discard/meld/deal
 (so stale slot-index pairings from a shifted hand can never leak in).
 
@@ -507,51 +507,17 @@ diagnosing a stuck/garbage hand, check BOTH this lifecycle section and that gotc
 
 ## Debug / Operate HTTP API
 
-Temporary, localhost-only (`127.0.0.1`), started via `/mhater debug [port]` (default
-port `9787`). All game-memory access is marshaled onto the framework thread by
-`Plugin.RouteDebugRequest`; the HTTP server itself (`Core/DebugServer.cs`) runs on a
-plain `TcpListener` so no Windows URL ACL is required. **Not** meant for automated
-play — it exists so the plugin can be operated and inspected directly during
-debugging, instead of a human reporting anomalies for offline diagnosis.
-
-### Read endpoints
-
-| Endpoint | Purpose |
-|----------|---------|
-| `/status` | Tracked hand/melds/wall/pile counts + one-line analysis summary |
-| `/state` | `/status` + `/prompt` + `/reco` merged into one response |
-| `/hand` | Tracked hand vs every scanned slot (icon/learned/hover/face detail) vs raw AtkValues read |
-| `/piles` | Pile face scan, decoded pile, merged pile |
-| `/frame[?addon=Emj]` | Full AtkValues table with tile-icon hints |
-| `/prompt` | Call-window state, raw button texts, ghost-slot view, `farRightSlot`/`claimableTile`/`farRightCallable` |
-| `/reco` | Full analysis result including ranked discard options |
-| `/events[?tail=200]` | Rolling timeline (cap 600) of raw refresh events, hover events, tracker decisions, and operate actions, interleaved in arrival order |
-| `/tree[?node=133][&addon=Emj]` | Full (or focused) node tree as text |
-| `/nodes[?addon=Emj]` | Every event-bearing node: pointer, NodeId, owner path, type, visibility, position, registered event chain — the operate-target map |
-| `/addons` | Every loaded addon and its visibility (for finding result/confirm screens by name) |
-
-### Operate endpoints
-
-| Endpoint | Purpose |
-|----------|---------|
-| `/discard?slot=N` or `?tile=8s` | Click a hand slot (turnkey; requires a visible, addon-bound `ButtonClick` chain or refuses with a specific reason) |
-| `/hover?slot=N` | Fire `MouseOver` on a slot; returns the addon's own tile-name response (`AtkValues[1]`) — an on-demand ground-truth read |
-| `/call?option=Chi` | Click a button by its visible label (exact match, then prefix); routes through `ListItemClick` automatically if the label lives inside a list |
-| `/listclick?node=<list>&index=N` | Select a list row by index directly (bypasses label matching) |
-| `/click?node=0x…|<nodeId>[&param=]` | Full click simulation (MouseOver → activation event, searched per the 4-tier visible/addon-bound priority) on any node |
-| `/fire?node=…&type=<AtkEventType int>[&param=]` | One precise event, for calibration |
-| `/callback?values=i,i,…` | Raw `AtkUnitBase.FireCallback` with int values |
-| `/riichi?declared=true\|false` | Manual riichi-lock override (no auto-detection yet — see Known issues) |
-
-### Calibration workflow for a new interaction
-
-1. `/nodes` — find the target node and its registered event types.
-2. `/fire` one event type at a time.
-3. Watch `/events` for the game's response (the plugin's own fired events are
-   captured in the same timeline via the `PostReceiveEvent` hook, so the loop closes
-   without needing a second tool).
-
----
+**Removed in 1.1.0** ahead of the first public release (the plugin ships no localhost
+server, no `/mhater debug` / `dump` commands and no operator). The same read and operate
+surface — node trees, live AtkValues, struct dumps, `MouseOver`/`ButtonClick`/`ListItemClick`
+on any node — is available from Cartographer (`C:\Users\capta\Desktop\dldm_reverse`,
+`/carto debug`, port 9790): `/tree?name=Emj&node=N&text=1`, `/values?name=Emj`,
+`/mem?addr=..&size=..`, `/click?name=Emj&node=<path>&param=N`,
+`/listclick?name=Emj&node=1/46/104/3&index=N`. What remains in the plugin for diagnostics:
+tracker decisions are written to the Dalamud log (`[MahjongHater] [Tracker] …`), the
+overlay shows the reader's health notes, and hand-end tenpai ground truth is appended to
+`pluginConfigs/MahjongHater/tenpai_calibration.csv`. The historical route list and the
+`tools/play_loop.py` driver are in git history (last present at `b1feb4c`).
 
 ## Known issues / open items
 
@@ -617,7 +583,7 @@ debugging, instead of a human reporting anomalies for offline diagnosis.
   stop updating entirely while remaining open/visible and fully readable (valid
   `AtkValues`, sensible-looking node tree) — clicks (even on visible, addon-bound,
   correctly-identified nodes) simply do nothing, and no new refresh events arrive.
-  This is external to the plugin (a game/addon-side stall); the debug API's read
+  This is external to the plugin (a game/addon-side stall); Cartographer's read
   endpoints will keep returning the same stale snapshot indefinitely. There is no
   known client-side detection for this yet beyond noticing no `/events` activity
   over an unusually long span while wall/hand data isn't changing.

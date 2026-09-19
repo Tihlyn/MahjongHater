@@ -68,7 +68,6 @@ public class LiveFixtureTests
         Assert.Equal(14, s.Hand.Count);
         Assert.Equal(StructFixture.SidecarTile("Wh"), s.DrawnTile);
         Assert.True(s.Can(LegalAction.Discard));
-        Assert.Equal(13, EmjStateReader.FindVisualIndex(s.Hand, StructFixture.SidecarTile("Wh")));
     }
 
     [Fact]

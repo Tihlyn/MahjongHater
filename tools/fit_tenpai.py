@@ -1,8 +1,8 @@
 """Fit the opponent tenpai estimate to recorded ground truth.
 
 Input: tenpai_calibration.csv written by the plugin at every hand end
-(%AppData%\\XIVLauncher\\pluginConfigs\\MahjongHater\\tenpai_calibration.csv; see
-`/calibration` on the debug API). One row per opponent: features as they stood when the
+(%AppData%\\XIVLauncher\\pluginConfigs\\MahjongHater\\tenpai_calibration.csv).
+One row per opponent: features as they stood when the
 hand ended and whether that opponent was tenpai (draw screens label every seat; a win
 proves the winner only).
 
