@@ -29,6 +29,7 @@ public sealed class EventTracker
     private Tile? callTile;
     private int callFromSeat = -1;
     private string lastPromptSignature = string.Empty;
+    private bool callWindowFromLabels;
 
     // True after a score/win screen (or at load): the next type-21 Layout-1 deal is a
     // real round start; mid-round type-21 refreshes must not wipe state (reference doc,
@@ -318,19 +319,26 @@ public sealed class EventTracker
         this.lastClosed = [.. closed];
         this.lastDrawnTile = s.DrawnTile;
 
-        // Prompt panel labels: edge-triggered — in count=109 mode the panel keeps stale
-        // labels on screen after a window closes (reference doc, "Call window lifecycle").
+        // Prompt panel labels are only a fallback for a missed type-19/23: the panel, its
+        // list rows and their texts all persist unchanged after a window closes (verified
+        // live 2026-09-19, both open and closed trees identical), so they can never clear a
+        // window — closing belongs to the events (type-5 draw, type-8 discard, type-13/74
+        // meld, 29/32). A prompt also has no auto-pass timer here (one sat open 4 minutes),
+        // so no time-based clear either. The edge only opens when a fresh opponent discard
+        // names the tile; otherwise a stale "Pon" at cold start would become a phantom call.
         var labels = promptLabels.Select(l => l.TrimEnd('!')).Where(l => l is "Chi" or "Pon" or "Kan" or "Ron" or "Riichi" or "Tsumo").ToList();
         var signature = string.Join(",", labels);
         if (labels.Count == 0)
         {
-            if (this.callWindowActive)
+            if (this.callWindowActive && this.callWindowFromLabels)
                 this.ClearCallWindow("prompt labels gone");
         }
-        else if (signature != this.lastPromptSignature)
+        else if (signature != this.lastPromptSignature && !this.callWindowActive)
         {
-            var offered = this.FreshOpponentDiscard(utc) ?? this.callTile;
-            this.OpenCallWindow(labels, offered, "label edge");
+            var offered = this.FreshOpponentDiscard(utc);
+            var selfDeclare = labels.All(l => l is "Riichi" or "Tsumo" or "Kan");
+            if (offered is not null || selfDeclare)
+                this.OpenCallWindow(labels, offered ?? this.callTile, "label edge");
         }
 
         this.lastPromptSignature = signature;
@@ -398,6 +406,7 @@ public sealed class EventTracker
         }
 
         this.callWindowActive = true;
+        this.callWindowFromLabels = source == "label edge";
         this.callOptions = options;
         this.CallIsClaim = isClaim;
         this.callTile = isClaim ? candidate : null;
@@ -410,6 +419,7 @@ public sealed class EventTracker
         if (this.callWindowActive)
             this.Note($"call window cleared: {why}");
         this.callWindowActive = false;
+        this.callWindowFromLabels = false;
         this.callOptions = [];
         this.CallIsClaim = false;
         this.callTile = null;

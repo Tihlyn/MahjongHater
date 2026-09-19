@@ -222,10 +222,34 @@ internal static unsafe class EmjOperator
 
             var renderer = comp->ItemRendererList[i].AtkComponentListItemRenderer;
             var node = renderer != null ? (nint)renderer->AtkComponentButton.AtkComponentBase.OwnerNode : 0;
+            // The Emj decision list never fills the item-table labels (verified live
+            // 2026-09-19); the row text lives in the renderer's text child instead.
+            if (label.Trim().Length == 0 && renderer != null)
+                label = FirstText(&renderer->AtkComponentButton.AtkComponentBase);
             rows.Add((i, label.Trim(), node));
         }
 
         return rows;
+    }
+
+    private static string FirstText(AtkComponentBase* comp)
+    {
+        var list = comp->UldManager.NodeList;
+        var count = comp->UldManager.NodeListCount;
+        if (list == null)
+            return string.Empty;
+        for (var i = 0; i < count; i++)
+        {
+            var n = list[i];
+            var txt = n == null ? null : n->GetAsAtkTextNode();
+            if (txt == null)
+                continue;
+            var text = EmjScanner.ReadTextNode(txt);
+            if (text.Length > 0)
+                return text;
+        }
+
+        return string.Empty;
     }
 
     // Index of a renderer within its list, from the item table (fallback: the

@@ -226,10 +226,6 @@ public sealed class MainWindow : Window
 
     private unsafe void DrawBestDiscardHighlight(StateSnapshot state, Tile bestDiscard)
     {
-        var index = EmjStateReader.FindVisualIndex(state.Hand, bestDiscard);
-        if (index < 0)
-            return;
-
         var addonPtr = this.plugin.GameGui.GetAddonByName(this.reader.Layout.AddonName);
         if (addonPtr.IsNull)
             return;
@@ -237,11 +233,7 @@ public sealed class MainWindow : Window
         if (addon->RootNode == null)
             return;
 
-        var slots = EmjScanner.ScanHandSlots(addon);
-        if (index >= slots.Count)
-            return;
-
-        var targetNode = (AtkResNode*)slots[index].NodePtr;
+        var targetNode = this.reader.FindSlotNodeForTile(addon, bestDiscard);
         if (targetNode == null || !targetNode->IsVisible())
             return;
 

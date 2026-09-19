@@ -71,19 +71,6 @@ public class SnapshotBuilderTests
     }
 
     [Fact]
-    public void Offered_tile_parked_in_the_draw_slot_is_not_part_of_the_hand()
-    {
-        var b = new SnapshotBuilder();
-        var t = new EventTracker();
-        Build(b, t, StructFixture.Decoded("22z34567m11p3459s", null, stateCode: 15));
-        // No type-8 seen (cold start): the struct's slot 13 is the only source.
-        var s = Build(b, t, StructFixture.Decoded("22z34567m11p3459s", "2z", stateCode: 19), ["Pon", "Pass"]);
-        Assert.Equal(13, s.Hand.Count);
-        Assert.Null(s.DrawnTile);
-        Assert.Equal(Tile.Parse("2z"), s.CallTile);
-    }
-
-    [Fact]
     public void Post_call_echo_in_the_draw_slot_is_excluded_and_discard_is_legal()
     {
         var b = new SnapshotBuilder();

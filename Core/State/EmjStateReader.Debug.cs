@@ -320,13 +320,27 @@ public sealed unsafe partial class EmjStateReader
 
         var hand = this.Current?.Hand ?? [];
         var slots = EmjScanner.ScanHandSlots(addon);
-        var index = slot ?? -1;
-        if (index < 0 && tileName is not null)
+        AtkResNode* target;
+        string tile;
+        int index;
+        if (slot is { } raw)
+        {
+            if (raw < 0 || raw >= slots.Count)
+            {
+                result["error"] = $"slot {raw} out of range (0-{slots.Count - 1})";
+                return result;
+            }
+
+            index = raw;
+            target = (AtkResNode*)slots[raw].NodePtr;
+            tile = raw < hand.Count ? hand[raw].ToString() : "?";
+        }
+        else
         {
             Tile wanted;
             try
             {
-                wanted = Tile.Parse(tileName);
+                wanted = Tile.Parse(tileName ?? string.Empty);
             }
             catch (Exception ex)
             {
@@ -334,22 +348,18 @@ public sealed unsafe partial class EmjStateReader
                 return result;
             }
 
-            index = FindVisualIndex(hand, wanted);
-            if (index < 0)
+            target = this.FindSlotNodeForTile(addon, wanted, slots);
+            if (target == null)
             {
-                result["error"] = $"{wanted} is not in the hand [{string.Join(" ", hand)}]";
+                result["error"] = $"{wanted} is not in the hand [{string.Join(" ", hand)}] or its slot is not on screen";
                 return result;
             }
+
+            tile = wanted.ToString();
+            index = slots.FindIndex(sl => sl.NodePtr == (nint)target);
         }
 
-        if (index < 0 || index >= slots.Count)
-        {
-            result["error"] = $"slot {index} out of range (0-{slots.Count - 1})";
-            return result;
-        }
-
-        var tile = index < hand.Count ? hand[index].ToString() : "?";
-        if (!EmjOperator.HasAddonBoundActivation(addon, (AtkResNode*)slots[index].NodePtr))
+        if (!EmjOperator.HasAddonBoundActivation(addon, target))
         {
             result["error"] = $"slot {index} ({tile}) has no addon-bound activation — "
                 + "not discardable right now (claim window open / not your turn / ghost slot)";
@@ -357,13 +367,50 @@ public sealed unsafe partial class EmjStateReader
         }
 
         // Registered chain params are authoritative (ButtonClick param is slot+15).
-        var fired = EmjOperator.ClickNode(addon, (AtkResNode*)slots[index].NodePtr, null);
+        var fired = EmjOperator.ClickNode(addon, target, null);
         this.tracker.Note($"op discard slot={index} ({tile}): {string.Join("; ", fired)}");
         result["slot"] = index;
+        result["nodeId"] = target->NodeId;
         result["tile"] = tile;
         result["fired"] = fired;
         this.AppendOperateState(result);
         return result;
+    }
+
+    // Slot node holding a tile of the current hand, by struct semantics: the draw always
+    // sits in the dedicated draw slot, closed tile i in the i-th non-draw slot by X.
+    // After a meld the parked slots (1340010+) still scan as visible but carry nothing,
+    // so "hand index == visual index" is wrong there. Exact tile first (red vs plain is
+    // the policy's choice), then same kind; the draw wins ties as the natural discard.
+    public AtkResNode* FindSlotNodeForTile(AtkUnitBase* addon, Tile wanted, List<ScannedTileSlot>? slots = null)
+    {
+        var decoded = this.LastDecoded;
+        if (decoded == null)
+            return null;
+
+        slots ??= EmjScanner.ScanHandSlots(addon);
+        var drawId = (uint)this.Layout.Nodes.HandSlotDraw;
+        var drawPtr = slots.FirstOrDefault(sl => sl.NodeId == drawId).NodePtr; // 0 when absent
+        var closedSlots = slots.Where(sl => sl.NodeId != drawId).ToList();
+        var closed = decoded.ClosedTiles;
+
+        AtkResNode* Closed(Func<Tile, bool> match)
+        {
+            for (var i = closed.Count - 1; i >= 0; i--)
+                if (match(closed[i]) && i < closedSlots.Count)
+                    return (AtkResNode*)closedSlots[i].NodePtr;
+            return null;
+        }
+
+        var drawn = decoded.DrawnTile;
+        if (drawn is { } d && d.Equals(wanted) && drawPtr != 0)
+            return (AtkResNode*)drawPtr;
+        var exact = Closed(t => t.Equals(wanted));
+        if (exact != null)
+            return exact;
+        if (drawn is { } d2 && TileHelpers.SameKind(d2, wanted) && drawPtr != 0)
+            return (AtkResNode*)drawPtr;
+        return Closed(t => TileHelpers.SameKind(t, wanted));
     }
 
     // Hovers a hand slot (MouseOver only) and returns the addon's tile-name response —

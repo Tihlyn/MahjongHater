@@ -90,7 +90,7 @@ public sealed unsafe partial class EmjStateReader : IDisposable
             this.LastFrame = frame;
             this.LastDecoded = decoded;
 
-            this.tracker.OnTick(decoded, this.PromptLabels(addon));
+            this.tracker.OnTick(decoded, PromptLabels(addon));
 
             // Winds live in text nodes only (docs/EMJ_STRUCT.md, "Not in the struct").
             if (++this.ticks % WindScanInterval == 0)
@@ -169,16 +169,10 @@ public sealed unsafe partial class EmjStateReader : IDisposable
             this.tracker.HintRoundWind(round);
     }
 
-    // Labels of the open decision list (Pon/Chi/Pass, Riichi/Tsumo/…). The list's item
-    // table only carries labels while a prompt is open; the panel's text nodes and an
-    // allocated-but-empty list persist after it closes, so neither is a prompt signal.
-    private List<string> PromptLabels(AtkUnitBase* addon)
-    {
-        var list = EmjScanner.FindNodeByPath(addon, this.Layout.Nodes.CallList);
-        if (list == null || !list->IsVisible())
-            return [];
-        return EmjOperator.ListRows(list).Select(r => r.Label).Where(l => l.Length > 0).ToList();
-    }
+    // Visible texts of the call panel (Pon/Chi/Pass, Riichi/Tsumo/…). They persist after a
+    // prompt closes and the list's item-table labels are always empty, so this is only the
+    // tracker's fallback edge — the type-19/23 events are the real signal.
+    private static List<string> PromptLabels(AtkUnitBase* addon) => EmjScanner.ScanCallButtonTexts(addon);
 
     private AtkUnitBase* GetAddon()
     {
