@@ -1,3 +1,4 @@
+using MahjongHater.Core.Policy;
 using MahjongHater.Core.State;
 
 namespace MahjongHater.Core;
@@ -9,76 +10,27 @@ public enum AnalysisStatus
     TimedOut,
 }
 
-// Immutable input for one analysis run, adapted from a StateSnapshot on the framework
-// thread so the worker never touches reader-owned state. Policy wiring (Phase 3) will
-// hand the snapshot itself to IPolicy; until then this feeds HandAnalyzer directly.
-public sealed record AnalysisSnapshot(
-    Tile[] ClosedTiles,
-    Meld[] CalledMelds,
-    Tile[] SeenTiles,
-    Tile[] DoraIndicators,
-    int WallRemaining,
-    Wind SeatWind,
-    Wind RoundWind,
-    bool IsRiichi,
-    RulesetOptions Ruleset,
-    string Fingerprint)
-{
-    public static AnalysisSnapshot? From(StateSnapshot? state)
-    {
-        if (state is null || state.Phase == GamePhase.NotInGame || state.Hand.Count == 0)
-            return null;
-
-        return new AnalysisSnapshot(
-            [.. state.Hand],
-            [.. state.OurMelds],
-            [.. state.SeenForAnalyzer()],
-            [.. state.DoraIndicators],
-            state.WallRemaining,
-            state.SeatWind,
-            state.RoundWind,
-            state.OurRiichi,
-            state.Ruleset,
-            ComputeFingerprint(state));
-    }
-
-    // Order-independent hand identity: sorted closed tiles + melds + doras + seen counts.
-    // Sorting kills re-analysis thrash when only tile order changes. OurRiichi is
-    // included since it can flip the recommendation without any other field changing.
-    public static string ComputeFingerprint(StateSnapshot state)
-    {
-        var closed = string.Join(",", state.Hand.OrderBy(t => t).Select(t => t.ToString()));
-        var melds = string.Join("|", state.OurMelds.Select(m => string.Join(",", m.Tiles.Select(TileHelpers.ToIndex).OrderBy(i => i))));
-        var doras = string.Join(",", state.DoraIndicators.Select(TileHelpers.ToIndex));
-
-        var seenHash = 17;
-        foreach (var tile in state.SeenForAnalyzer())
-            seenHash = unchecked((seenHash * 31) + TileHelpers.ToIndex(tile));
-
-        return $"{closed}:{melds}:{doras}:{seenHash:X}:{(state.OurRiichi ? 1 : 0)}";
-    }
-}
-
 public sealed record AnalysisPublication(
     string Fingerprint,
     AnalysisStatus Status,
-    AnalysisResult? Result,
+    ActionChoice? Choice,
     string? Error,
     DateTime CompletedUtc);
 
-// Runs HandAnalyzer.Analyze off the render/framework threads with versioned dispatch,
-// a watchdog timeout, and stale-result discard. No failure mode leaves the UI without
-// a publication: exceptions and timeouts publish too, and any new fingerprint re-dispatches.
+// Runs IPolicy.Choose off the render/framework threads with versioned dispatch, a
+// watchdog timeout, and stale-result discard. No failure mode leaves the UI without a
+// publication: exceptions and timeouts publish too, and any new fingerprint re-dispatches.
+// StateSnapshot is immutable, so the worker gets the snapshot itself — no copying.
 public sealed class AnalysisService : IDisposable
 {
-    // Require the hand to be identical this many consecutive ticks before analyzing,
+    // Require the state to be identical this many consecutive ticks before analyzing,
     // so 13↔14 flicker across the draw/discard boundary doesn't trigger wasted work.
     private const int DebounceTicks = 3;
 
     private static readonly TimeSpan WatchdogTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan StalledAfter = TimeSpan.FromSeconds(3);
 
-    private readonly HandAnalyzer analyzer;
+    private readonly IPolicy policy;
     private readonly Action<Exception, string>? logError;
 
     private int version;
@@ -91,9 +43,9 @@ public sealed class AnalysisService : IDisposable
 
     // logError keeps this class free of Dalamud types (unit-testable); the plugin
     // passes IPluginLog.Error through it.
-    public AnalysisService(HandAnalyzer analyzer, Action<Exception, string>? logError = null)
+    public AnalysisService(IPolicy policy, Action<Exception, string>? logError = null)
     {
-        this.analyzer = analyzer;
+        this.policy = policy;
         this.logError = logError;
     }
 
@@ -105,19 +57,51 @@ public sealed class AnalysisService : IDisposable
     public bool IsStalled =>
         this.IsComputing && DateTime.UtcNow - this.dispatchedAtUtc > StalledAfter;
 
+    // States worth a decision: seated, with either tiles to look at or something legal to do.
+    public static bool IsAnalyzable(StateSnapshot? state) =>
+        state is not null
+        && state.Phase is not (GamePhase.NotInGame or GamePhase.Dealing or GamePhase.RoundEnd)
+        && (state.Hand.Count > 0 || state.Legal != LegalAction.None);
+
+    // Everything the policy's answer depends on. Order-independent for the hand (the struct
+    // hand is already sorted; opponents' discards keep their order because chronology
+    // matters for safety). Phase/legal/call fields flip the recommendation without any
+    // tile changing, so they are part of the identity too.
+    public static string ComputeFingerprint(StateSnapshot state)
+    {
+        var closed = string.Join(",", state.Hand.OrderBy(t => t).Select(t => t.ToString()));
+        var melds = string.Join("|", state.OurMelds.Select(m => string.Join(",", m.Tiles.Select(TileHelpers.ToIndex).OrderBy(i => i))));
+        var doras = string.Join(",", state.DoraIndicators.Select(TileHelpers.ToIndex));
+
+        var seenHash = 17;
+        foreach (var seat in state.Seats)
+        {
+            foreach (var tile in seat.Discards)
+                seenHash = unchecked((seenHash * 31) + TileHelpers.ToIndex(tile));
+            foreach (var meld in seat.Melds)
+                foreach (var tile in meld.Tiles)
+                    seenHash = unchecked((seenHash * 31) + TileHelpers.ToIndex(tile) + 64);
+            seenHash = unchecked((seenHash * 31) + (seat.Riichi ? 1 : 0));
+        }
+
+        var call = state.CallTile is { } ct ? $"{ct}@{state.CallFromSeat}" : "-";
+        return $"{closed}:{melds}:{doras}:{seenHash:X}:{(state.OurRiichi ? 1 : 0)}:" +
+               $"{(int)state.Phase}:{(int)state.Legal}:{call}:{state.WallRemaining}:{state.DrawnTile?.ToString() ?? "-"}";
+    }
+
     // Framework thread, every tick. Cheap: fingerprint compare + debounce counter.
     public void Update(StateSnapshot? state)
     {
-        var snapshot = AnalysisSnapshot.From(state);
-        if (snapshot is null)
+        if (!IsAnalyzable(state))
             return;
 
-        if (snapshot.Fingerprint == this.latest?.Fingerprint || snapshot.Fingerprint == this.dispatchedFingerprint)
+        var fingerprint = ComputeFingerprint(state!);
+        if (fingerprint == this.latest?.Fingerprint || fingerprint == this.dispatchedFingerprint)
             return;
 
-        if (snapshot.Fingerprint != this.candidateFingerprint)
+        if (fingerprint != this.candidateFingerprint)
         {
-            this.candidateFingerprint = snapshot.Fingerprint;
+            this.candidateFingerprint = fingerprint;
             this.stableTicks = 1;
             return;
         }
@@ -125,7 +109,7 @@ public sealed class AnalysisService : IDisposable
         if (++this.stableTicks < DebounceTicks)
             return;
 
-        this.Dispatch(snapshot);
+        this.Dispatch(state!, fingerprint);
     }
 
     public void Dispose()
@@ -135,7 +119,7 @@ public sealed class AnalysisService : IDisposable
         this.cts = null;
     }
 
-    private void Dispatch(AnalysisSnapshot snapshot)
+    private void Dispatch(StateSnapshot state, string fingerprint)
     {
         var myVersion = Interlocked.Increment(ref this.version);
         this.cts?.Cancel();
@@ -143,7 +127,7 @@ public sealed class AnalysisService : IDisposable
         this.cts = new CancellationTokenSource(WatchdogTimeout);
         var token = this.cts.Token;
 
-        this.dispatchedFingerprint = snapshot.Fingerprint;
+        this.dispatchedFingerprint = fingerprint;
         this.dispatchedAtUtc = DateTime.UtcNow;
 
         _ = Task.Run(() =>
@@ -151,48 +135,22 @@ public sealed class AnalysisService : IDisposable
             AnalysisPublication publication;
             try
             {
-                var result = this.analyzer.Analyze(BuildHand(snapshot), BuildContext(snapshot), token);
-                publication = new AnalysisPublication(snapshot.Fingerprint, AnalysisStatus.Ready, result, null, DateTime.UtcNow);
+                var choice = this.policy.Choose(state, token);
+                publication = new AnalysisPublication(fingerprint, AnalysisStatus.Ready, choice, null, DateTime.UtcNow);
             }
             catch (OperationCanceledException)
             {
-                publication = new AnalysisPublication(snapshot.Fingerprint, AnalysisStatus.TimedOut, null, "Analysis timed out.", DateTime.UtcNow);
+                publication = new AnalysisPublication(fingerprint, AnalysisStatus.TimedOut, null, "Analysis timed out.", DateTime.UtcNow);
             }
             catch (Exception ex)
             {
-                this.logError?.Invoke(ex, "[Analysis] Hand analysis failed.");
-                publication = new AnalysisPublication(snapshot.Fingerprint, AnalysisStatus.Failed, null, ex.Message, DateTime.UtcNow);
+                this.logError?.Invoke(ex, "[Analysis] Policy evaluation failed.");
+                publication = new AnalysisPublication(fingerprint, AnalysisStatus.Failed, null, ex.Message, DateTime.UtcNow);
             }
 
             // Latest-wins: a newer dispatch owns the slot; stale results are dropped.
             if (myVersion == Volatile.Read(ref this.version))
                 this.latest = publication;
         }, CancellationToken.None);
-    }
-
-    private static Hand BuildHand(AnalysisSnapshot snapshot)
-    {
-        var hand = new Hand
-        {
-            SeatWind = snapshot.SeatWind,
-            RoundWind = snapshot.RoundWind,
-        };
-        hand.ClosedTiles.AddRange(snapshot.ClosedTiles);
-        hand.CalledMelds.AddRange(snapshot.CalledMelds);
-        return hand;
-    }
-
-    private static AnalysisContext BuildContext(AnalysisSnapshot snapshot)
-    {
-        return new AnalysisContext
-        {
-            SeenTiles = [.. snapshot.SeenTiles],
-            DoraIndicators = [.. snapshot.DoraIndicators],
-            WallRemaining = snapshot.WallRemaining,
-            SeatWind = snapshot.SeatWind,
-            RoundWind = snapshot.RoundWind,
-            Ruleset = snapshot.Ruleset,
-            IsRiichi = snapshot.IsRiichi,
-        };
     }
 }

@@ -47,7 +47,10 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
                 : option.Waits.Count > 0 ? $"waits: {string.Join(", ", option.Waits)}"
                 : $"{option.Eval.ShantenAfter}-shanten";
             candidates.Add(new DiscardCandidate(tile, option.Eval.ShantenAfter, option.Eval.Ukeire,
-                option.Eval.Ukeire2, option.ValueEstimate, Math.Clamp(1 - survival, 0, 1), score, note));
+                option.Eval.Ukeire2, option.ValueEstimate, Math.Clamp(1 - survival, 0, 1), score, note)
+            {
+                Waits = option.Waits,
+            });
         }
 
         return candidates.OrderBy(c => c.ShantenAfter).ThenByDescending(c => c.Score).ThenBy(c => c.Tile).ToArray();

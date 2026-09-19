@@ -33,7 +33,15 @@ public sealed record DiscardCandidate(
     double Value,               // rough han-ish value of the kept hand
     double DealInRisk,          // 0..1 aggregated over opponents from IOpponentModel
     double Score,               // final ranking key, higher is better
-    string Note);               // short human tag, e.g. "isolated honor", "genbutsu vs S"
+    string Note)                // short human tag, e.g. "isolated honor", "genbutsu vs S"
+{
+    // Winning tiles after this discard when ShantenAfter == 0; empty otherwise.
+    public IReadOnlyList<Tile> Waits { get; init; } = [];
+}
+
+// What the hand looks like right now, independent of the action: shown between turns
+// too, when nothing is legal but the player still wants to see shanten and waits.
+public sealed record HandSummary(int Shanten, int Ukeire, IReadOnlyList<Tile> Waits);
 
 public sealed record ActionChoice(
     ActionKind Kind,
@@ -43,6 +51,14 @@ public sealed record ActionChoice(
     IReadOnlyList<Reason> Steps,
     IReadOnlyList<DiscardCandidate> Candidates)   // ranked best-first; empty for non-discard actions
 {
+    public HandSummary? Hand { get; init; }
+
+    public bool IsWin => this.Kind is ActionKind.Tsumo or ActionKind.Ron;
+
+    public bool IsCall => this.Kind is ActionKind.Pon or ActionKind.Chi or ActionKind.MinKan or ActionKind.AnKan or ActionKind.ShouMinKan;
+
+    public bool IsDiscard => this.Kind is ActionKind.Discard or ActionKind.Riichi;
+
     public static ActionChoice Pass(string why) =>
         new(ActionKind.Pass, null, null, why, [new Reason("pass", why)], []);
 

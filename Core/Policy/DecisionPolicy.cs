@@ -11,11 +11,15 @@ public sealed class DecisionPolicy : IPolicy
     private readonly ICallPolicy calls;
     private readonly IRiichiPolicy riichi;
     private readonly PolicyWeights weights;
+    // Only used for the between-turns hand summary (13 tiles, nothing legal).
+    private readonly HandAnalyzer analyzer;
 
     public DecisionPolicy(IOpponentModel? opponents = null, IDiscardPolicy? discards = null,
-        IPushFoldPolicy? pushFold = null, ICallPolicy? calls = null, IRiichiPolicy? riichi = null, PolicyWeights? weights = null)
+        IPushFoldPolicy? pushFold = null, ICallPolicy? calls = null, IRiichiPolicy? riichi = null, PolicyWeights? weights = null,
+        HandAnalyzer? analyzer = null)
     {
         this.weights = weights ?? PolicyWeights.Default;
+        this.analyzer = analyzer ?? new HandAnalyzer();
         this.opponents = opponents ?? new OpponentModel(this.weights);
         this.discards = discards ?? new HeuristicDiscardPolicy(weights: this.weights);
         this.pushFold = pushFold ?? new PushFoldPolicy(this.weights);
@@ -83,7 +87,7 @@ public sealed class DecisionPolicy : IPolicy
         }
 
         if (!state.Can(LegalAction.Discard))
-            return Pass("No discard is currently legal.", steps);
+            return Pass("No discard is currently legal.", steps) with { Hand = this.WaitingSummary(state, ct) };
 
         // Every meld counts as 3 for hand arithmetic (a kan is 4 physical tiles but still one set),
         // matching HandAnalyzer — otherwise a post-kan hand is rejected forever.
@@ -135,7 +139,19 @@ public sealed class DecisionPolicy : IPolicy
         }
 
         ct.ThrowIfCancellationRequested();
-        return new ActionChoice(action, best.Tile, null, $"{action} {best.Tile}: {best.Note}.", steps.ToArray(), candidates);
+        return new ActionChoice(action, best.Tile, null, $"{action} {best.Tile}: {best.Note}.", steps.ToArray(), candidates)
+        {
+            Hand = new HandSummary(best.ShantenAfter, best.Ukeire, best.Waits),
+        };
+    }
+
+    // Shanten / ukeire / waits of the 13-tile hand while we wait for a draw or a claim.
+    private HandSummary? WaitingSummary(StateSnapshot state, CancellationToken ct)
+    {
+        if (state.Hand.Count + (3 * state.OurMelds.Count) != 13)
+            return null;
+        var result = this.analyzer.Analyze(PolicyInput.MakeHand(state), PolicyInput.Context(state), ct);
+        return result.IsValid ? new HandSummary(result.ShantenAfterDiscard, result.Ukeire, result.TenpaiWaits) : null;
     }
 
     private static int WinningHan(StateSnapshot state, WinMethod method, CancellationToken ct)

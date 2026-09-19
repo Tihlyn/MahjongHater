@@ -4,6 +4,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using MahjongHater.Core;
+using MahjongHater.Core.Policy;
 using MahjongHater.Core.State;
 using MahjongHater.Windows;
 
@@ -44,12 +45,12 @@ public sealed class Plugin : IDalamudPlugin
         this.Configuration = Configuration.Load(pluginInterface);
         var layout = EmjLayout.LoadDefault(pluginInterface.AssemblyLocation.DirectoryName);
         this.Reader = new EmjStateReader(gameGui, pluginLog, addonLifecycle, this.Configuration, layout);
-        this.HandAnalyzer = new HandAnalyzer();
-        this.AnalysisService = new AnalysisService(this.HandAnalyzer, (ex, msg) => pluginLog.Error(ex, msg));
+        this.Policy = new DecisionPolicy();
+        this.AnalysisService = new AnalysisService(this.Policy, (ex, msg) => pluginLog.Error(ex, msg));
         this.Reader.AnalysisSummaryProvider = this.DescribeCurrentRecommendation;
 
         this.WindowSystem = new WindowSystem("MahjongHater");
-        this.MainWindow = new MainWindow(this, this.Configuration, this.Reader, this.HandAnalyzer);
+        this.MainWindow = new MainWindow(this, this.Configuration, this.Reader);
         this.ConfigWindow = new ConfigWindow(this.Configuration);
 
         this.WindowSystem.AddWindow(this.MainWindow);
@@ -84,7 +85,7 @@ public sealed class Plugin : IDalamudPlugin
 
     public EmjStateReader Reader { get; }
 
-    public HandAnalyzer HandAnalyzer { get; }
+    public IPolicy Policy { get; }
 
     public AnalysisService AnalysisService { get; }
 
@@ -265,7 +266,7 @@ public sealed class Plugin : IDalamudPlugin
                         "/piles — per-seat discards, riichi, scores",
                         "/frame[?addon=Emj] — full AtkValues table",
                         "/prompt — call window state + raw button texts + list rows",
-                        "/reco — full analysis result incl. ranked discards",
+                        "/reco — latest policy decision: action, hand summary, ranked discards, reasoning steps",
                         "/events[?tail=200] — raw event + tracker decision + operate timeline",
                         "/tree[?node=133][&addon=Emj] — node tree (text)",
                         "/nodes[?addon=Emj] — event-bearing nodes (operate targets)",
@@ -281,6 +282,7 @@ public sealed class Plugin : IDalamudPlugin
                         "/fire?node=…&type=9[&param=][&addon=] — one precise AtkEvent",
                         "/callback?values=3,0[&addon=] — FireCallback with int values",
                         "/riichi?declared=true|false — manual riichi-lock override",
+                        "/act — execute the latest policy decision once (discard / call / pass / win), only if it is fresh",
                     },
                 });
             case "/status":
@@ -392,6 +394,9 @@ public sealed class Plugin : IDalamudPlugin
             }
 
             // Manual riichi-lock override until a riichi signal is mapped in the struct.
+            case "/act":
+                return this.OnFramework(this.ExecuteLatestChoice);
+
             case "/riichi":
             {
                 if (!query.TryGetValue("declared", out var dv) || !bool.TryParse(dv, out var declared))
@@ -426,30 +431,32 @@ public sealed class Plugin : IDalamudPlugin
         var result = new Dictionary<string, object?>
         {
             ["status"] = publication.Status.ToString(),
-            ["fresh"] = state is not null && publication.Fingerprint == AnalysisSnapshot.ComputeFingerprint(state),
+            ["fresh"] = state is not null && publication.Fingerprint == AnalysisService.ComputeFingerprint(state),
             ["completedUtc"] = publication.CompletedUtc.ToString("O"),
             ["error"] = publication.Error,
             ["computing"] = this.AnalysisService.IsComputing,
         };
 
-        if (publication.Result is { } analysis)
+        if (publication.Choice is { } choice)
         {
-            result["valid"] = analysis.IsValid;
-            result["best"] = analysis.BestDiscard?.ToString();
-            result["shanten"] = analysis.ShantenAfterDiscard;
-            result["ukeire"] = analysis.Ukeire;
-            result["waits"] = analysis.TenpaiWaits.Select(t => t.ToString()).ToList();
-            result["riichi"] = analysis.RiichiRecommended;
-            result["reasoning"] = analysis.Reasoning;
-            result["ranked"] = analysis.Ranked.Take(6).Select(o => new Dictionary<string, object?>
+            result["action"] = choice.Kind.ToString();
+            result["tile"] = choice.Tile?.ToString();
+            result["call"] = choice.Call is { } m ? string.Join(",", m.Tiles.Select(t => t.ToString())) : null;
+            result["summary"] = choice.Summary;
+            result["shanten"] = choice.Hand?.Shanten;
+            result["ukeire"] = choice.Hand?.Ukeire;
+            result["waits"] = choice.Hand?.Waits.Select(t => t.ToString()).ToList();
+            result["steps"] = choice.Steps.Select(r => $"[{r.Stage}] {r.Display}").ToList();
+            result["ranked"] = choice.Candidates.Take(6).Select(c => new Dictionary<string, object?>
             {
-                ["tile"] = o.DiscardTile.ToString(),
-                ["shanten"] = o.Eval.ShantenAfter,
-                ["ukeire"] = o.Eval.Ukeire,
-                ["ukeire2"] = o.Eval.Ukeire2,
-                ["score"] = Math.Round(o.Score, 1),
-                ["value"] = o.ValueEstimate,
-                ["yakuRisk"] = o.OpenYakuRisk,
+                ["tile"] = c.Tile.ToString(),
+                ["shanten"] = c.ShantenAfter,
+                ["ukeire"] = c.Ukeire,
+                ["ukeire2"] = c.Ukeire2,
+                ["score"] = Math.Round(c.Score, 1),
+                ["value"] = c.Value,
+                ["risk"] = Math.Round(c.DealInRisk, 3),
+                ["note"] = c.Note,
             }).ToList();
         }
 
@@ -465,18 +472,48 @@ public sealed class Plugin : IDalamudPlugin
             return "no publication yet";
 
         var state = this.Reader.Current;
-        var fresh = state is not null && publication.Fingerprint == AnalysisSnapshot.ComputeFingerprint(state);
-        if (publication.Status != AnalysisStatus.Ready || publication.Result is null)
+        var fresh = state is not null && publication.Fingerprint == AnalysisService.ComputeFingerprint(state);
+        if (publication.Status != AnalysisStatus.Ready || publication.Choice is null)
             return $"status={publication.Status}  fresh={fresh}  err={publication.Error}";
 
-        var result = publication.Result;
-        if (!result.IsValid)
-            return $"status=Ready INVALID  fresh={fresh}  reason=\"{result.Reasoning}\"";
+        var choice = publication.Choice;
+        var tile = choice.Tile?.ToString() ?? "-";
+        var tileInHand = choice.Tile is { } t && state is not null && state.Hand.Any(h => TileHelpers.SameKind(h, t));
+        return $"status=Ready  action={choice.Kind}  tile={tile}  tileInHand={tileInHand}  " +
+               $"shanten={choice.Hand?.Shanten.ToString() ?? "-"}  ukeire={choice.Hand?.Ukeire.ToString() ?? "-"}  fresh={fresh}";
+    }
 
-        var best = result.BestDiscard?.ToString() ?? "-";
-        var bestInHand = result.BestDiscard is { } b && state is not null
-            && state.Hand.Any(t => TileHelpers.SameKind(t, b));
-        return $"status=Ready  best={best}  bestInHand={bestInHand}  shanten={result.ShantenAfterDiscard}  " +
-               $"ukeire={result.Ukeire}  riichi={result.RiichiRecommended}  fresh={fresh}";
+    // Manual, one-shot actuator for the latest decision — the debug-API side of "do what
+    // the overlay says". Refuses stale publications so it never acts on a previous hand.
+    private object? ExecuteLatestChoice()
+    {
+        var publication = this.AnalysisService.Latest;
+        var state = this.Reader.Current;
+        if (publication?.Choice is not { } choice || state is null)
+            return new Dictionary<string, object?> { ["error"] = "no decision yet" };
+        if (publication.Fingerprint != AnalysisService.ComputeFingerprint(state))
+            return new Dictionary<string, object?> { ["error"] = "decision is stale for the current state", ["action"] = choice.Kind.ToString() };
+
+        const string addon = "Emj";
+        object? outcome = choice.Kind switch
+        {
+            ActionKind.Discard => this.Reader.DebugDiscard(null, choice.Tile?.ToString()),
+            ActionKind.Riichi => this.Reader.DebugClickLabel(addon, "Riichi"),
+            ActionKind.Tsumo => this.Reader.DebugClickLabel(addon, "Tsumo"),
+            ActionKind.Ron => this.Reader.DebugClickLabel(addon, "Ron"),
+            ActionKind.Pon => this.Reader.DebugClickLabel(addon, "Pon"),
+            ActionKind.Chi => this.Reader.DebugClickLabel(addon, "Chi"),
+            ActionKind.MinKan or ActionKind.AnKan or ActionKind.ShouMinKan => this.Reader.DebugClickLabel(addon, "Kan"),
+            ActionKind.Pass when state.Phase is GamePhase.CallPrompt or GamePhase.SelfDeclare => this.Reader.DebugClickLabel(addon, "Pass"),
+            _ => new Dictionary<string, object?> { ["skipped"] = "nothing to execute", ["action"] = choice.Kind.ToString() },
+        };
+
+        return new Dictionary<string, object?>
+        {
+            ["action"] = choice.Kind.ToString(),
+            ["tile"] = choice.Tile?.ToString(),
+            ["summary"] = choice.Summary,
+            ["outcome"] = outcome,
+        };
     }
 }

@@ -1,4 +1,5 @@
 using MahjongHater.Core;
+using MahjongHater.Core.Policy;
 using MahjongHater.Core.State;
 using Xunit;
 
@@ -13,6 +14,7 @@ public class AnalysisServiceTests
         return StateSnapshot.Empty with
         {
             Phase = GamePhase.OurTurn,
+            Legal = LegalAction.Discard,
             Hand = TestTiles.Parse(closed),
             Seats = seats,
             WallRemaining = 50,
@@ -35,7 +37,7 @@ public class AnalysisServiceTests
     [Fact]
     public void Publishes_after_debounce()
     {
-        using var service = new AnalysisService(new HandAnalyzer());
+        using var service = new AnalysisService(new DecisionPolicy());
         var state = MakeState("123m456m789m4467p1z");
 
         service.Update(state);              // tick 1 — candidate
@@ -46,15 +48,16 @@ public class AnalysisServiceTests
 
         var publication = WaitForPublication(service, TimeSpan.FromSeconds(5));
         Assert.Equal(AnalysisStatus.Ready, publication.Status);
-        Assert.NotNull(publication.Result);
-        Assert.Equal(0, publication.Result!.ShantenAfterDiscard);
-        Assert.Equal(AnalysisSnapshot.ComputeFingerprint(state), publication.Fingerprint);
+        Assert.NotNull(publication.Choice);
+        Assert.Equal(ActionKind.Discard, publication.Choice!.Kind);
+        Assert.Equal(0, publication.Choice.Hand!.Shanten);
+        Assert.Equal(AnalysisService.ComputeFingerprint(state), publication.Fingerprint);
     }
 
     [Fact]
     public void Flickering_hand_never_dispatches()
     {
-        using var service = new AnalysisService(new HandAnalyzer());
+        using var service = new AnalysisService(new DecisionPolicy());
         var a = MakeState("123m456m789m4467p1z");
         var b = MakeState("123m456m789m4467p");
 
@@ -73,7 +76,7 @@ public class AnalysisServiceTests
     {
         var a = MakeState("123m456m789m4467p1z");
         var b = MakeState("1z7644p987m654m321m");
-        Assert.Equal(AnalysisSnapshot.ComputeFingerprint(a), AnalysisSnapshot.ComputeFingerprint(b));
+        Assert.Equal(AnalysisService.ComputeFingerprint(a), AnalysisService.ComputeFingerprint(b));
     }
 
     [Fact]
@@ -81,13 +84,13 @@ public class AnalysisServiceTests
     {
         var a = MakeState("123m456m789m4467p1z");
         var b = MakeState("123m456m789m4467p1z", "5p");
-        Assert.NotEqual(AnalysisSnapshot.ComputeFingerprint(a), AnalysisSnapshot.ComputeFingerprint(b));
+        Assert.NotEqual(AnalysisService.ComputeFingerprint(a), AnalysisService.ComputeFingerprint(b));
     }
 
     [Fact]
     public void Newer_hand_wins_over_stale_dispatch()
     {
-        using var service = new AnalysisService(new HandAnalyzer());
+        using var service = new AnalysisService(new DecisionPolicy());
         var first = MakeState("123m456m789m4467p1z");
         var second = MakeState("123m456m789m44678p");
 
@@ -97,7 +100,7 @@ public class AnalysisServiceTests
             service.Update(second);
 
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-        var expected = AnalysisSnapshot.ComputeFingerprint(second);
+        var expected = AnalysisService.ComputeFingerprint(second);
         while (DateTime.UtcNow < deadline)
         {
             if (service.Latest?.Fingerprint == expected)
@@ -108,9 +111,9 @@ public class AnalysisServiceTests
         Assert.Equal(expected, service.Latest?.Fingerprint); // fails with diagnostic
     }
 
-    private sealed class HangingAnalyzer : HandAnalyzer
+    private sealed class HangingPolicy : IPolicy
     {
-        public override AnalysisResult Analyze(Hand hand, AnalysisContext? context = null, CancellationToken ct = default)
+        public ActionChoice Choose(StateSnapshot state, CancellationToken ct)
         {
             while (true)
             {
@@ -123,7 +126,7 @@ public class AnalysisServiceTests
     [Fact]
     public void Watchdog_publishes_timeout_instead_of_hanging()
     {
-        using var service = new AnalysisService(new HangingAnalyzer());
+        using var service = new AnalysisService(new HangingPolicy());
         var state = MakeState("123m456m789m4467p1z");
 
         for (var i = 0; i < 3; i++)
@@ -131,13 +134,13 @@ public class AnalysisServiceTests
 
         var publication = WaitForPublication(service, TimeSpan.FromSeconds(10));
         Assert.Equal(AnalysisStatus.TimedOut, publication.Status);
-        Assert.Null(publication.Result);
+        Assert.Null(publication.Choice);
     }
 
     [Fact]
-    public void Malformed_hand_publishes_invalid_result_instead_of_hanging()
+    public void Malformed_hand_publishes_none_instead_of_hanging()
     {
-        using var service = new AnalysisService(new HandAnalyzer());
+        using var service = new AnalysisService(new DecisionPolicy());
         var state = MakeState("123m45p"); // 5 tiles — malformed
 
         for (var i = 0; i < 3; i++)
@@ -145,6 +148,31 @@ public class AnalysisServiceTests
 
         var publication = WaitForPublication(service, TimeSpan.FromSeconds(5));
         Assert.Equal(AnalysisStatus.Ready, publication.Status);
-        Assert.False(publication.Result!.IsValid);
+        Assert.Equal(ActionKind.None, publication.Choice!.Kind);
+        Assert.Contains("out of sync", publication.Choice.Summary);
+    }
+
+    [Fact]
+    public void Waiting_hand_publishes_summary_without_discard()
+    {
+        using var service = new AnalysisService(new DecisionPolicy());
+        var state = MakeState("123m456m789m4467p") with { Phase = GamePhase.OthersTurn, Legal = LegalAction.None };
+
+        for (var i = 0; i < 3; i++)
+            service.Update(state);
+
+        var publication = WaitForPublication(service, TimeSpan.FromSeconds(5));
+        Assert.Equal(ActionKind.Pass, publication.Choice!.Kind);
+        Assert.NotNull(publication.Choice.Hand);
+        Assert.Equal(0, publication.Choice.Hand!.Shanten);
+        Assert.NotEmpty(publication.Choice.Hand.Waits);
+    }
+
+    [Fact]
+    public void Fingerprint_tracks_legal_actions_and_call_tile()
+    {
+        var a = MakeState("123m456m789m4467p");
+        var b = a with { Legal = LegalAction.Pon | LegalAction.Pass, CallTile = TestTiles.Parse("4p")[0], CallFromSeat = 3 };
+        Assert.NotEqual(AnalysisService.ComputeFingerprint(a), AnalysisService.ComputeFingerprint(b));
     }
 }
