@@ -6,7 +6,7 @@ namespace MahjongHater.Tests.Policy;
 
 internal static class PolicyFixtures
 {
-    public static StateSnapshot State(string tiles = "123m456m4578p447s1z", LegalAction legal = LegalAction.Discard)
+    public static StateSnapshot Snap(string tiles = "123m456m4578p447s1z", LegalAction legal = LegalAction.Discard)
     {
         var hand = TestTiles.Parse(tiles);
         return StateSnapshot.Empty with

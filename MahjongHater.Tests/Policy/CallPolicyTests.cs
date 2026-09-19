@@ -10,7 +10,7 @@ public class CallPolicyTests
 {
     private static CallDecision Evaluate(StateSnapshot state) => new CallPolicy().Evaluate(state, Model(state), default);
 
-    private static StateSnapshot Offered(string hand, string tile, LegalAction legal, int seat = 3) => State(hand, legal) with
+    private static StateSnapshot Offered(string hand, string tile, LegalAction legal, int seat = 3) => Snap(hand, legal) with
     {
         DrawnTile = null,
         CallTile = Tile.Parse(tile),
@@ -127,7 +127,7 @@ public class CallPolicyTests
     [Fact]
     public void Ankan_accepts_unchanged_ukeire()
     {
-        var decision = Evaluate(State("1111m234p567s2267p", LegalAction.AnKan));
+        var decision = Evaluate(Snap("1111m234p567s2267p", LegalAction.AnKan));
         Assert.True(decision.Accept, decision.Reason.Display);
         Assert.Equal(ActionKind.AnKan, decision.Kind);
         Assert.False(decision.Meld!.IsOpen);
@@ -137,14 +137,14 @@ public class CallPolicyTests
     [Fact]
     public void Ankan_declines_when_quad_tiles_are_needed_for_sequences()
     {
-        var decision = Evaluate(State("22221345m678p789s", LegalAction.AnKan));
+        var decision = Evaluate(Snap("22221345m678p789s", LegalAction.AnKan));
         Assert.False(decision.Accept);
     }
 
     [Fact]
     public void Riichi_ankan_uses_explicit_draw_and_preserves_waits()
     {
-        var state = State("1111m234p567s2267p", LegalAction.AnKan) with
+        var state = Snap("1111m234p567s2267p", LegalAction.AnKan) with
         {
             OurRiichi = true,
             DrawnTile = Tile.Parse("1m"),
@@ -157,7 +157,7 @@ public class CallPolicyTests
     [Fact]
     public void Shouminkan_replaces_existing_open_pon()
     {
-        var state = State("1m234p567s2267p", LegalAction.ShouMinKan) with
+        var state = Snap("1m234p567s2267p", LegalAction.ShouMinKan) with
         {
             OurMelds = [Meld.MakePon(Tile.Parse("1m"), true)],
         };
