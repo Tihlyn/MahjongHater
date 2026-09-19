@@ -196,9 +196,10 @@ public sealed unsafe partial class EmjStateReader : IDisposable
             return;
         }
 
+        var sink = this.CalibrationSink;
         if (this.pendingCalibration is null)
         {
-            if (this.lastPlaySnapshot is null || this.CalibrationSink is null)
+            if (this.lastPlaySnapshot is null || sink is null)
                 return;
             this.pendingCalibration = this.lastPlaySnapshot;
             this.lastPlaySnapshot = null;
@@ -219,7 +220,7 @@ public sealed unsafe partial class EmjStateReader : IDisposable
         this.pendingCalibration = null;
         this.tracker.Note($"tenpai calibration: {samples.Count} sample(s) (winner={winner}, banners=[{string.Join("|", banners.Select(b => b ?? "-"))}])");
         if (samples.Count > 0)
-            this.CalibrationSink(samples);
+            sink?.Invoke(samples);
     }
 
     // Visible texts of the call panel (Pon/Chi/Pass, Riichi/Tsumo/…). They persist after a
