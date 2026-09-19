@@ -1,4 +1,3 @@
-using System.Reflection;
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
@@ -8,7 +7,6 @@ using MahjongHater.Core.Policy;
 using MahjongHater.Core.State;
 using MahjongHater.Windows;
 
-[assembly: AssemblyVersion("1.0.0.0")]
 
 namespace MahjongHater;
 
