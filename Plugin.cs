@@ -28,7 +28,8 @@ public sealed class Plugin : IDalamudPlugin
         ICommandManager commandManager,
         IPluginLog pluginLog,
         IFramework framework,
-        IAddonLifecycle addonLifecycle)
+        IAddonLifecycle addonLifecycle,
+        ITextureProvider textureProvider)
     {
         this.pluginInterface = pluginInterface;
         this.gameGui = gameGui;
@@ -39,6 +40,7 @@ public sealed class Plugin : IDalamudPlugin
 
         this.Configuration = Configuration.Load(pluginInterface);
         var layout = EmjLayout.LoadDefault(pluginInterface.AssemblyLocation.DirectoryName);
+        TileArt.Initialize(textureProvider, layout.TileIconBase);
         this.Reader = new EmjStateReader(gameGui, pluginLog, addonLifecycle, this.Configuration, layout);
         this.Policy = new DecisionPolicy();
         this.AnalysisService = new AnalysisService(this.Policy, (ex, msg) => pluginLog.Error(ex, msg));

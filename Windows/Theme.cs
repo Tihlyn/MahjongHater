@@ -58,8 +58,10 @@ internal static class Theme
     public const float ShadowSpread = 3f;
     public const int ShadowLayers = 3;
     public const float ShadowFalloff = 0.025f;
-    public const float GlowOpacity = 0.12f;
-    public const float GlowCoreOpacity = 0.8f;
+    public const float GlowOpacity = 0.55f;      // outer halo; the tile sits on a busy table
+    public const float GlowCoreOpacity = 1f;
+    public const float GlowThickness = 2.5f;
+    public const float GlowSpread = 2f;
     public const float HeadlineScale = 1.65f;
     public const float TitleScale = 1.1f;
     public const float LabelScale = 0.8f;
@@ -115,7 +117,7 @@ internal static class Theme
     {
         for (var layer = ShadowLayers; layer > 0; layer--)
         {
-            var spread = new Vector2(Px(layer * Hairline));
+            var spread = new Vector2(Px(layer * GlowSpread));
             var color = Accent;
             color.W = GlowOpacity / layer;
             draw.AddRect(min - spread, max + spread, Color(color), Px(TileRadius + layer), ImDrawFlags.None, Px(ShadowSpread));
@@ -123,7 +125,7 @@ internal static class Theme
 
         var core = Accent;
         core.W = GlowCoreOpacity;
-        draw.AddRect(min, max, Color(core), Px(TileRadius), ImDrawFlags.None, Px(Hairline));
+        draw.AddRect(min, max, Color(core), Px(TileRadius), ImDrawFlags.None, Px(GlowThickness));
     }
 
     // Stored between PreDraw and PostDraw so styles also apply to ImGui.Begin.

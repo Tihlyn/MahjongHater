@@ -121,6 +121,18 @@ internal static class Widgets
     public static void TileChip(ImDrawListPtr draw, Vector2 pos, Tile tile, float scale)
     {
         var size = Theme.Px(new Vector2(Theme.TileWidth, Theme.TileHeight)) * scale;
+
+        // The game's own tile face when it is loaded, fitted inside the chip; text otherwise.
+        if (TileArt.TryGet(tile, out var texture, out var aspect))
+        {
+            var fitted = aspect >= size.X / size.Y
+                ? new Vector2(size.X, size.X / aspect)
+                : new Vector2(size.Y * aspect, size.Y);
+            var offset = (size - fitted) / 2f;
+            draw.AddImageRounded(texture, pos + offset, pos + offset + fitted, Vector2.Zero, Vector2.One, Theme.Color(Theme.Text), Theme.Px(Theme.TileRadius) * scale);
+            return;
+        }
+
         var face = tile.Suit switch
         {
             TileSuit.Man => Theme.ManFace,
