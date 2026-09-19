@@ -48,6 +48,7 @@ public sealed class Plugin : IDalamudPlugin
         this.Policy = new DecisionPolicy();
         this.AnalysisService = new AnalysisService(this.Policy, (ex, msg) => pluginLog.Error(ex, msg));
         this.Reader.AnalysisSummaryProvider = this.DescribeCurrentRecommendation;
+        this.Reader.CalibrationSink = this.AppendCalibration;
 
         this.WindowSystem = new WindowSystem("MahjongHater");
         this.MainWindow = new MainWindow(this, this.Configuration, this.Reader);
@@ -303,6 +304,7 @@ public sealed class Plugin : IDalamudPlugin
                         "/riichi?declared=true|false — manual riichi-lock override",
                         "/act — execute the latest policy decision once (discard / call / pass / win), only if it is fresh",
                         "/enable?on=true|false — plugin on/off (framework tick)   /overlay?on=true|false — show/hide the window",
+                        "/calibration — tenpai ground-truth CSV path, row count, last rows (fit with tools/fit_tenpai.py)",
                     },
                 });
             case "/status":
@@ -417,6 +419,9 @@ public sealed class Plugin : IDalamudPlugin
             case "/act":
                 return this.OnFramework(this.ExecuteLatestChoice);
 
+            case "/calibration":
+                return Task.FromResult<object?>(this.DescribeCalibration());
+
             case "/enable":
             case "/overlay":
             {
@@ -460,6 +465,42 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private Task<object?> OnFramework(Func<object?> read) => this.framework.RunOnFrameworkThread(read);
+
+    private string CalibrationPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "tenpai_calibration.csv");
+
+    // One CSV row per opponent per finished hand; the file grows across sessions.
+    private void AppendCalibration(IReadOnlyList<TenpaiSample> samples)
+    {
+        try
+        {
+            var path = this.CalibrationPath;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var lines = new List<string>(samples.Count + 1);
+            if (!File.Exists(path))
+                lines.Add(TenpaiCalibration.CsvHeader);
+            lines.AddRange(samples.Select(TenpaiCalibration.ToCsv));
+            File.AppendAllLines(path, lines);
+        }
+        catch (Exception ex)
+        {
+            this.pluginLog.Warning(ex, "[Calibration] Failed to append tenpai samples.");
+        }
+    }
+
+    private object? DescribeCalibration()
+    {
+        var path = this.CalibrationPath;
+        if (!File.Exists(path))
+            return new Dictionary<string, object?> { ["path"] = path, ["rows"] = 0 };
+        var lines = File.ReadAllLines(path);
+        return new Dictionary<string, object?>
+        {
+            ["path"] = path,
+            ["rows"] = Math.Max(0, lines.Length - 1),
+            ["header"] = lines.Length > 0 ? lines[0] : null,
+            ["tail"] = lines.Skip(Math.Max(1, lines.Length - 10)).ToList(),
+        };
+    }
 
     private object? BuildRecoDebug()
     {

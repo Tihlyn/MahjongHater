@@ -135,11 +135,14 @@ public sealed record PolicyWeights
     public double GenbutsuDanger { get; init; } = 0.0;
     public int MinHanDoman { get; init; } = 1;               // Doman requires a yaku; keep as data
     public double FoldMinValue { get; init; } = 2;
-    public double TenpaiBase { get; init; } = 0.05;
-    public double TenpaiPerDiscard { get; init; } = 0.025;
-    public double TenpaiPerOpenMeld { get; init; } = 0.12;
-    public double TenpaiEarlyOutsideWeight { get; init; } = 0.08;
-    public double TenpaiLateMiddleWeight { get; init; } = 0.12;
+    // Logistic tenpai estimate (see TenpaiEstimator for the anchor curves; re-fit with
+    // tools/fit_tenpai.py against tenpai_calibration.csv).
+    public double TenpaiLogitIntercept { get; init; } = -4.1;
+    public double TenpaiLogitPerDiscard { get; init; } = 0.25;
+    public double TenpaiLogitPerMeld { get; init; } = 0.95;
+    public double TenpaiLogitEarlyOutside { get; init; } = 0.3;
+    public double TenpaiLogitLateMiddle { get; init; } = 0.5;
+    public double TenpaiMaxWithoutRiichi { get; init; } = 0.9;
     public double KabeDiscount { get; init; } = 0.4;
     public double HonorDanger { get; init; } = 0.16;
     public double TerminalDanger { get; init; } = 0.12;

@@ -95,6 +95,10 @@ public sealed class EventTracker
     // True from an answered Tsumo/Ron until the win screen, so nothing is decided in between.
     public bool WinDeclared { get; private set; }
 
+    // Relative seat named by the last type-32 win screen this round; -1 until then (a
+    // draw never sets it). Consumed by the tenpai calibration recorder.
+    public int LastWinnerSeat { get; private set; } = -1;
+
     // The operator answered the open window (list row clicked). Clears it so the next
     // snapshot moves on (a riichi needs its discard right after), and ignores the echo.
     public void MarkCallAnswered(bool isWin)
@@ -291,10 +295,11 @@ public sealed class EventTracker
                 break;
             }
 
-            case 32: // win screen: [2]="East 3 South Wind"
+            case 32: // win screen: [1]=winner seat, [2]="East 3 South Wind"
             {
                 this.roundEnded = true;
                 this.WinDeclared = false;
+                this.LastWinnerSeat = f.Int(1) is >= 0 and <= 3 ? f.Int(1) : -1;
                 this.ClearCallWindow("win screen (type-32)");
                 var round = f.Str(2) ?? string.Empty;
                 if (round.StartsWith("East", StringComparison.OrdinalIgnoreCase)) this.trackedRoundWind = Wind.East;
@@ -517,6 +522,7 @@ public sealed class EventTracker
     private void ResetRound(string why)
     {
         this.WinDeclared = false;
+        this.LastWinnerSeat = -1;
         this.answeredSignature = null;
         foreach (var list in this.seatDiscards)
             list.Clear();

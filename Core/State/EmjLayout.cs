@@ -175,7 +175,8 @@ public sealed class EmjLayout
                 RoundWindText: nodes?.RoundWindText,
                 WallCounterDigits: nodes?.WallCounterDigits ?? [],
                 ChiShapeButtons: nodes?.ChiShapeButtons ?? ["1/46/52/5", "1/46/52/6", "1/46/52/7", "1/46/52/8"],
-                ChiShapeCancel: nodes?.ChiShapeCancel ?? "1/46/52/11"),
+                ChiShapeCancel: nodes?.ChiShapeCancel ?? "1/46/52/11",
+                ResultBanners: FourPaths(nodes?.ResultBanners)),
         };
     }
 
@@ -403,6 +404,7 @@ public sealed class EmjLayout
         [JsonPropertyName("wallCounterDigits")] public string[]? WallCounterDigits { get; set; }
         [JsonPropertyName("chiShapeButtons")] public string[]? ChiShapeButtons { get; set; }
         [JsonPropertyName("chiShapeCancel")] public string? ChiShapeCancel { get; set; }
+        [JsonPropertyName("resultBanners")] public string?[]? ResultBanners { get; set; }
     }
 }
 
@@ -416,4 +418,5 @@ public readonly record struct StateCodeTable(
 public readonly record struct NodeTable(
     int HandSlotFirst, int HandSlotDraw, int HandSlotButton, string CallList, int RecapNext,
     string?[] SeatWindTexts, string?[] ScoreTexts, string? HonbaText, string? RoundWindText, string[] WallCounterDigits,
-    string[] ChiShapeButtons, string? ChiShapeCancel);
+    string[] ChiShapeButtons, string? ChiShapeCancel,
+    string?[] ResultBanners);

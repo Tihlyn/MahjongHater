@@ -24,14 +24,7 @@ public sealed class OpponentModel : IOpponentModel
         var values = new double[4];
         foreach (var seat in state.Seats.Where(s => s.Seat is >= 1 and <= 3))
         {
-            var earlyOutside = seat.Discards.Take(6).Count(t => t.IsTerminalOrHonor) / 6d;
-            // Fixed denominators keep the estimate monotone as more discards arrive.
-            var lateMiddle = Math.Min(1, seat.Discards.Skip(6).Count(t => !t.IsHonor && t.Number is >= 3 and <= 7) / 12d);
-            probabilities[seat.Seat] = seat.Riichi ? 1 : Math.Clamp(
-                this.weights.TenpaiBase + this.weights.TenpaiPerDiscard * seat.Discards.Count
-                + this.weights.TenpaiPerOpenMeld * seat.Melds.Count(m => m.IsOpen)
-                + this.weights.TenpaiEarlyOutsideWeight * earlyOutside
-                + this.weights.TenpaiLateMiddleWeight * lateMiddle, 0, 0.99);
+            probabilities[seat.Seat] = TenpaiEstimator.Estimate(seat, this.weights);
 
             var dora = seat.Melds.SelectMany(m => m.Tiles).Sum(t =>
                 state.DoraIndicators.Count(i => TileHelpers.SameKind(DoraFromIndicator(i), t))

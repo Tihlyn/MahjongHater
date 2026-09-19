@@ -24,6 +24,12 @@ public sealed unsafe partial class EmjStateReader : IDisposable
     private int ticks;
     private bool readFailureLogged;
 
+    // Tenpai ground truth: the last in-play snapshot is frozen when the phase turns to
+    // RoundEnd, then the seat banners are polled until the announcement has landed.
+    private StateSnapshot? lastPlaySnapshot;
+    private StateSnapshot? pendingCalibration;
+    private int calibrationTicks;
+
     public EmjStateReader(IGameGui gameGui, IPluginLog pluginLog, IAddonLifecycle addonLifecycle, Configuration configuration, EmjLayout layout)
     {
         this.gameGui = gameGui;
@@ -53,6 +59,9 @@ public sealed unsafe partial class EmjStateReader : IDisposable
 
     // One-line summary of the current recommendation, wired by the plugin.
     public Func<string>? AnalysisSummaryProvider { get; set; }
+
+    // Receives the tenpai samples of every finished hand (plugin appends them to CSV).
+    public Action<IReadOnlyList<Policy.TenpaiSample>>? CalibrationSink { get; set; }
 
     public void Dispose()
     {
@@ -97,6 +106,7 @@ public sealed unsafe partial class EmjStateReader : IDisposable
                 this.ScanWinds(addon);
 
             this.Current = this.builder.Build(decoded, this.tracker, this.Layout, new RulesetOptions(this.configuration.Kuitan));
+            this.RecordTenpaiGroundTruth(addon, this.Current);
         }
         catch (Exception ex)
         {
@@ -171,6 +181,45 @@ public sealed unsafe partial class EmjStateReader : IDisposable
         var leading = roundText?.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
         if (EmjScanner.ParseWindText(leading) is { } round)
             this.tracker.HintRoundWind(round);
+    }
+
+    // Draw screens label every seat "Tenpai!"/"Noten..." in the seat banners; a win names
+    // the winner in type-32. Banners keep their last text (residue), so on a draw we wait
+    // until all three opponent banners read Tenpai/Noten — up to ~5 s — before trusting them.
+    private void RecordTenpaiGroundTruth(AtkUnitBase* addon, StateSnapshot snapshot)
+    {
+        if (snapshot.Phase != GamePhase.RoundEnd)
+        {
+            if (snapshot.Phase is not (GamePhase.NotInGame or GamePhase.Dealing) && snapshot.Hand.Count > 0)
+                this.lastPlaySnapshot = snapshot;
+            this.pendingCalibration = null;
+            return;
+        }
+
+        if (this.pendingCalibration is null)
+        {
+            if (this.lastPlaySnapshot is null || this.CalibrationSink is null)
+                return;
+            this.pendingCalibration = this.lastPlaySnapshot;
+            this.lastPlaySnapshot = null;
+            this.calibrationTicks = 0;
+        }
+
+        var winner = this.tracker.LastWinnerSeat;
+        var banners = new string?[4];
+        var paths = this.Layout.Nodes.ResultBanners;
+        for (var seat = 0; seat < 4 && seat < paths.Length; seat++)
+            banners[seat] = EmjScanner.ReadTextAtPath(addon, paths[seat]);
+
+        var complete = winner >= 0 || Policy.TenpaiCalibration.DrawBannersComplete(banners);
+        if (!complete && ++this.calibrationTicks < 300)
+            return;
+
+        var samples = Policy.TenpaiCalibration.FromRoundEnd(this.pendingCalibration, banners, winner, Policy.PolicyWeights.Default, DateTime.UtcNow);
+        this.pendingCalibration = null;
+        this.tracker.Note($"tenpai calibration: {samples.Count} sample(s) (winner={winner}, banners=[{string.Join("|", banners.Select(b => b ?? "-"))}])");
+        if (samples.Count > 0)
+            this.CalibrationSink(samples);
     }
 
     // Visible texts of the call panel (Pon/Chi/Pass, Riichi/Tsumo/…). They persist after a
