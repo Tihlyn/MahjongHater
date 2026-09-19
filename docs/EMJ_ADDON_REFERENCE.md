@@ -372,6 +372,33 @@ reason — they can legitimately disagree.
 
 ---
 
+### Verified live 2026-09-19 (first policy-driven match, count=109 mode)
+
+- **Open signal = AtkValues type 19/23** (`[6..8]` = row labels, e.g. `"Pass","Pon","Pass"`;
+  `[5]` = claimed tile icon on 19). The type-8 discard that precedes it names the tile.
+  **Close signal = the next type-5 (draw) / type-8 (discard) / type-13 or atkType-74 (meld) /
+  29 / 32.** Nothing in the node tree changes when a prompt closes.
+- The panel `104`, its list `104/3`, the two allocated rows and their texts (`"Pon"`, `"Pass"`)
+  are **identical open vs closed** (both trees dumped and diffed). `AtkComponentList.ItemRendererList[i].Label`
+  is **always empty**; the row text lives in the renderer's text child (node `4`).
+  `EmjOperator.ListRows` falls back to it. Panel texts are therefore only a fallback *open*
+  edge (needs a fresh opponent discard to name the tile) and must never *close* a window.
+- **No auto-pass timer**: a Pon offer sat open for four minutes until answered. The
+  `"Time remaining:"` sub-panel (`104/2`) is hidden in this mode.
+- Declining/accepting works only through `ListItemClick` on `104/3` (row index; renderer text
+  gives the index → `ClickByLabel` routes there). Accept fires a type-19 echo of the selection,
+  then type-13 with the meld and atkType-74.
+- **Post-meld slot mapping**: with 10 closed tiles the visible `1055` slots are `134`,
+  `1340001..1340009`, then the parked `1340010..12` (still `IsVisible()`, no addon-bound
+  button) **sorted by X before the draw slot `135`**. Map the draw to `135` and closed tile *i*
+  to the *i*-th non-`135` slot — never "hand index == visual index".
+- **Round wind**: hidden text `1/46/54/57` ("South 4 South Wind", leading word = round) is
+  win-screen residue and beats the East default on a mid-session load; `layouts/emj.json`
+  `nodes.roundWindText`. Riichi-stick / honba counters: `1/46/54/88` and `/91`.
+- **End of match**: after the South 4 win screen the results panel has no `Next` (`97` hidden);
+  only "End match" remains — state code 27 with an empty hand and final scores.
+
+
 ## Discard pile reading
 
 Two independent sources are merged (`MergeDiscardPiles`):
