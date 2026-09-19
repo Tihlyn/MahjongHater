@@ -3,7 +3,7 @@
     "Author": "Tihlyn",
     "Name": "MahjongHater",
     "InternalName": "MahjongHater",
-    "AssemblyVersion": "1.2.0.0",
+    "AssemblyVersion": "1.2.2.0",
     "Description": "Doman Mahjong (Emj) solver — best-discard advisor, win-probability display, full han+fu scoring engine for FFXIV Gold Saucer.",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/Tihlyn/MahjongHater",
@@ -24,11 +24,11 @@
     "IconUrl": "",
     "Punchline": "Doman Mahjong advisor with discard hints and full han+fu scoring.",
     "AcceptsFeedback": true,
-    "DownloadLinkInstall": "https://github.com/Tihlyn/MahjongHater/releases/download/v1.2.0/latest.zip",
-    "DownloadLinkUpdate": "https://github.com/Tihlyn/MahjongHater/releases/download/v1.2.0/latest.zip",
-    "DownloadLinkTesting": "https://github.com/Tihlyn/MahjongHater/releases/download/v1.2.0/latest.zip",
+    "DownloadLinkInstall": "https://github.com/Tihlyn/MahjongHater/releases/download/v1.2.2/latest.zip",
+    "DownloadLinkUpdate": "https://github.com/Tihlyn/MahjongHater/releases/download/v1.2.2/latest.zip",
+    "DownloadLinkTesting": "https://github.com/Tihlyn/MahjongHater/releases/download/v1.2.2/latest.zip",
     "IsHide": false,
     "IsTestingExclusive": false,
-    "LastUpdate": 1789815355
+    "LastUpdate": 1789817957
   }
 ]
