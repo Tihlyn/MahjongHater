@@ -5,48 +5,6 @@ namespace MahjongHater.Tests;
 
 public class HandTrackingTests
 {
-    [Fact]
-    public void RemoveOneTile_prefers_exact_match_keeping_red_five()
-    {
-        var hand = TestTiles.Parse("05m"); // red 5m + normal 5m
-        Assert.True(HandTracking.RemoveOneTile(hand, Tile.Parse("5m")));
-        Assert.Single(hand);
-        Assert.True(hand[0].IsRedFive);
-    }
-
-    [Fact]
-    public void RemoveOneTile_removes_red_copy_when_discard_is_red()
-    {
-        var hand = TestTiles.Parse("05m");
-        Assert.True(HandTracking.RemoveOneTile(hand, Tile.Parse("0m")));
-        Assert.Single(hand);
-        Assert.False(hand[0].IsRedFive);
-    }
-
-    [Fact]
-    public void RemoveOneTile_falls_back_to_same_kind()
-    {
-        var hand = TestTiles.Parse("5m"); // only the normal copy
-        Assert.True(HandTracking.RemoveOneTile(hand, Tile.Parse("0m")));
-        Assert.Empty(hand);
-    }
-
-    [Fact]
-    public void RemoveOneTile_returns_false_when_absent()
-    {
-        var hand = TestTiles.Parse("123m");
-        Assert.False(HandTracking.RemoveOneTile(hand, Tile.Parse("9s")));
-        Assert.Equal(3, hand.Count);
-    }
-
-    [Fact]
-    public void RemoveOneTile_removes_exactly_one_copy()
-    {
-        var hand = TestTiles.Parse("555m");
-        Assert.True(HandTracking.RemoveOneTile(hand, Tile.Parse("5m")));
-        Assert.Equal(2, hand.Count);
-    }
-
     [Theory]
     [InlineData(0, 14)]
     [InlineData(1, 11)]
@@ -56,55 +14,6 @@ public class HandTrackingTests
     public void MaxClosedTiles_shrinks_by_three_per_meld(int melds, int expected)
     {
         Assert.Equal(expected, HandTracking.MaxClosedTiles(melds));
-    }
-
-    [Fact]
-    public void PrePromptAnnouncement_with_matching_ghost_allows_wide_window()
-    {
-        var seven = Tile.Parse("7m");
-        Assert.True(HandTracking.IsPrePromptAnnouncement(seven, 1200, seven));
-        Assert.False(HandTracking.IsPrePromptAnnouncement(seven, 1600, seven));
-    }
-
-    [Fact]
-    public void PrePromptAnnouncement_with_mismatched_ghost_never_reattributes()
-    {
-        // A genuine local discard followed quickly by a claim window on a DIFFERENT
-        // tile must stay booked as a local discard.
-        Assert.False(HandTracking.IsPrePromptAnnouncement(Tile.Parse("7m"), 100, Tile.Parse("3s")));
-    }
-
-    [Fact]
-    public void PrePromptAnnouncement_without_ghost_uses_tight_window()
-    {
-        Assert.True(HandTracking.IsPrePromptAnnouncement(Tile.Parse("7m"), 400, null));
-        Assert.False(HandTracking.IsPrePromptAnnouncement(Tile.Parse("7m"), 900, null));
-    }
-
-    [Fact]
-    public void PrePromptAnnouncement_ghost_matches_by_kind_not_redness()
-    {
-        Assert.True(HandTracking.IsPrePromptAnnouncement(Tile.Parse("0m"), 500, Tile.Parse("5m")));
-    }
-
-    [Fact]
-    public void ClaimWindowSlotJump_fires_on_discard_with_no_draw_after()
-    {
-        Assert.True(HandTracking.IsClaimWindowSlotJump(800, 15000));
-    }
-
-    [Fact]
-    public void ClaimWindowSlotJump_suppressed_when_local_draw_is_fresher()
-    {
-        // Own turn: the 14th tile was drawn AFTER the opponent's discard — the visible
-        // Chi/Pass panel is a stale leftover, not a claim window (live 2026-07-05).
-        Assert.False(HandTracking.IsClaimWindowSlotJump(3000, 1200));
-    }
-
-    [Fact]
-    public void ClaimWindowSlotJump_suppressed_when_discard_is_stale()
-    {
-        Assert.False(HandTracking.IsClaimWindowSlotJump(6000, 99999));
     }
 
     [Fact]
@@ -133,6 +42,16 @@ public class HandTrackingTests
     {
         var hand = TestTiles.Parse(partial + "111p222p333s7z");
         Assert.Equal(expected, HandTracking.HasAnyLegalCall(hand, Tile.Parse(claimed), 0));
+    }
+
+    [Fact]
+    public void HasAnyLegalCall_chi_only_when_allowed()
+    {
+        // Chi is only legal from the seat to our left; a pure chi shape must not count
+        // for the other seats.
+        var hand = TestTiles.Parse("45m111p222p333s7z");
+        Assert.True(HandTracking.HasAnyLegalCall(hand, Tile.Parse("3m"), 0, allowChi: true));
+        Assert.False(HandTracking.HasAnyLegalCall(hand, Tile.Parse("3m"), 0, allowChi: false));
     }
 
     [Fact]

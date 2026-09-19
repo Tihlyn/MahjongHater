@@ -3,6 +3,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using MahjongHater.Core;
+using MahjongHater.Core.State;
 
 namespace MahjongHater.Windows;
 
@@ -16,19 +17,19 @@ public sealed class MainWindow : Window
 
     private readonly Plugin plugin;
     private readonly Configuration configuration;
-    private readonly GameStateReader gameStateReader;
+    private readonly EmjStateReader reader;
     private readonly HandAnalyzer handAnalyzer;
 
     // One pon/chi evaluation per call window, not per frame.
     private (string Key, string Advice)? ponAdviceCache;
     private (string Key, string Advice)? chiAdviceCache;
 
-    public MainWindow(Plugin plugin, Configuration configuration, GameStateReader gameStateReader, HandAnalyzer handAnalyzer)
+    public MainWindow(Plugin plugin, Configuration configuration, EmjStateReader reader, HandAnalyzer handAnalyzer)
         : base("Mahjong Hater", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         this.plugin = plugin;
         this.configuration = configuration;
-        this.gameStateReader = gameStateReader;
+        this.reader = reader;
         this.handAnalyzer = handAnalyzer;
         this.IsOpen = configuration.ShowOverlay;
         this.SizeConstraints = new WindowSizeConstraints
@@ -41,7 +42,7 @@ public sealed class MainWindow : Window
     public override void Draw()
     {
         this.IsOpen = this.configuration.ShowOverlay;
-        var state = this.gameStateReader.CurrentState;
+        var state = this.reader.Current;
 
         ImGui.SameLine(Math.Max(0f, ImGui.GetContentRegionAvail().X - 28f));
         if (ImGui.SmallButton("⚙"))
@@ -63,24 +64,29 @@ public sealed class MainWindow : Window
         }
 
         DrawHeader("Session");
-        var wins = state?.WinsThisSession ?? 0;
-        var losses = state?.LossesThisSession ?? 0;
+        var wins = this.reader.Tracker.WinsThisSession;
+        var losses = this.reader.Tracker.LossesThisSession;
         var totalGames = wins + losses;
         var winRate = totalGames == 0 ? 0d : (double)wins / totalGames;
-        ImGui.TextColored(Gold, $"MGP Earned: {(state?.MgpEarned ?? 0):N0}");
+        ImGui.TextColored(Gold, $"Score: {(state?.Us.Score ?? 0):N0}");
         ImGui.TextColored(Green, $"Wins: {wins}");
         ImGui.TextColored(Red, $"Losses: {losses}");
         ImGui.TextUnformatted($"Win Rate: {winRate:P1}");
 
         DrawHeader("Current Hand");
-        if (state is { InGame: true })
+        if (state is { Phase: not GamePhase.NotInGame })
         {
-            if (state.ClosedTiles.Count > 0)
-                DrawCurrentHand(state);
-            else if (state.IsCallWindowActive)
+            if (!state.LayoutHealthy)
+                ImGui.TextColored(Red, "Layout check failed — hand read may be stale (see /struct).");
+            foreach (var note in state.Notes)
+                ImGui.TextDisabled(note);
+
+            if (state.Hand.Count > 0)
+                this.DrawCurrentHand(state);
+            else if (state.Phase is GamePhase.CallPrompt or GamePhase.SelfDeclare)
             {
                 ImGui.TextUnformatted($"Seat Wind: {state.SeatWind}   Round Wind: {state.RoundWind}");
-                DrawCallWindow(state);
+                this.DrawCallWindow(state);
             }
             else
                 ImGui.TextUnformatted("Seated — waiting for hand tile data...");
@@ -105,14 +111,13 @@ public sealed class MainWindow : Window
         this.configuration.Save();
     }
 
-    private void DrawCurrentHand(GameState state)
+    private void DrawCurrentHand(StateSnapshot state)
     {
-        ImGui.TextUnformatted($"Seat Wind: {state.SeatWind}   Round Wind: {state.RoundWind}");
+        ImGui.TextUnformatted($"Seat Wind: {state.SeatWind}   Round Wind: {state.RoundWind}   Wall: {state.WallRemaining}");
 
-        // ── Call advice renders on top, but hand analysis stays visible below it —
-        // a lingering call-window flag must never leave the panel looking hung. ──
-        if (state.IsCallWindowActive)
-            DrawCallWindow(state);
+        // Call advice renders on top, hand analysis stays visible below it.
+        if (state.Phase is GamePhase.CallPrompt or GamePhase.SelfDeclare)
+            this.DrawCallWindow(state);
 
         // Analysis runs on a background thread (AnalysisService); Draw only renders
         // the latest publication and never blocks.
@@ -193,34 +198,31 @@ public sealed class MainWindow : Window
         }
     }
 
-    // Draws a gold outline rect over the recommended tile button in the game's UI.
-    //
-    // Preferred targeting: each slot's OWN rendered face (via the learned TileFaceMap) —
-    // immune to sort-order mismatches between the tracked hand and the visual layout.
-    // Fallback (faces not yet fully learned): sorted-order slot guessing as before.
-    private unsafe void DrawBestDiscardHighlight(GameState state, Tile bestDiscard)
+    // Gold outline over the recommended tile's slot node. The struct hand is in visual
+    // order (sorted slots, then the draw), so its index is the slot node index.
+    private unsafe void DrawBestDiscardHighlight(StateSnapshot state, Tile bestDiscard)
     {
-        if (state.ClosedTiles.Count < 1) return;
+        var index = EmjStateReader.FindVisualIndex(state.Hand, bestDiscard);
+        if (index < 0)
+            return;
 
-        var addonPtr = this.plugin.GameGui.GetAddonByName("Emj");
-        if (addonPtr.IsNull) return;
+        var addonPtr = this.plugin.GameGui.GetAddonByName(this.reader.Layout.AddonName);
+        if (addonPtr.IsNull)
+            return;
         var addon = (AtkUnitBase*)addonPtr.Address;
-        if (addon->RootNode == null) return;
+        if (addon->RootNode == null)
+            return;
 
-        // Visible slots in visual order (AbsX rule shared with the scanning engine).
         var slots = EmjScanner.ScanHandSlots(addon);
-        if (slots.Count == 0) return;
+        if (index >= slots.Count)
+            return;
 
-        var target = FindTargetByFace(slots, bestDiscard)
-                     ?? FindTargetBySortedOrder(state, bestDiscard, slots);
-        if (target is null) return;
+        var targetNode = (AtkResNode*)slots[index].NodePtr;
+        if (targetNode == null || !targetNode->IsVisible())
+            return;
 
-        var targetNode = (AtkResNode*)target.Value;
-        if (targetNode == null || !targetNode->IsVisible()) return;
-
-        // Compute absolute screen position.
         // Walk up the parent chain STOPPING before the RootNode (ParentNode == null):
-        // RootNode->X/Y equals addon->X/Y, so including it would double-count the screen offset.
+        // RootNode->X/Y equals addon->X/Y, so including it would double-count the offset.
         float relX = 0, relY = 0;
         var cur = targetNode;
         for (var depth = 0; cur != null && cur->ParentNode != null && depth < 20; depth++, cur = cur->ParentNode)
@@ -228,78 +230,34 @@ public sealed class MainWindow : Window
             relX += cur->X;
             relY += cur->Y;
         }
+
         var s = addon->Scale;
-        var topLeft  = new Vector2(addon->X + relX * s, addon->Y + relY * s);
+        var topLeft = new Vector2(addon->X + (relX * s), addon->Y + (relY * s));
         var botRight = topLeft + new Vector2(42 * s, 55 * s);
 
         ImGui.GetForegroundDrawList().AddRect(topLeft, botRight, ImGui.ColorConvertFloat4ToU32(Gold), 2f, ImDrawFlags.None, 3f);
     }
 
-    // Face-based targeting: usable only when EVERY slot's face resolves (a partial read
-    // could highlight the wrong copy). Among matches, the last (rightmost, i.e. the
-    // draw tile when it matches) is preferred.
-    private unsafe nint? FindTargetByFace(List<ScannedTileSlot> slots, Tile bestDiscard)
-    {
-        var resolved = this.gameStateReader.TileFaceMap.Resolved;
-        nint? target = null;
-        foreach (var slot in slots)
-        {
-            if (slot.FaceKey is null || !resolved.TryGetValue(slot.FaceKey, out var tile))
-                return null;
-
-            if (TileHelpers.SameKind(tile, bestDiscard))
-                target = slot.NodePtr;
-        }
-
-        return target;
-    }
-
-    // Legacy targeting: assumes slots 0-12 hold the tracked hand sorted by Tile.CompareTo
-    // and slot 13 is the draw tile. Only used while tile faces are still being learned.
-    private static nint? FindTargetBySortedOrder(GameState state, Tile bestDiscard, List<ScannedTileSlot> slots)
-    {
-        int targetSlot;
-        if (state.ClosedTiles.Count == 14 && TileHelpers.SameKind(state.ClosedTiles[13], bestDiscard))
-        {
-            targetSlot = 13;
-        }
-        else
-        {
-            var sorted = state.ClosedTiles
-                .Take(Math.Min(13, state.ClosedTiles.Count))
-                .OrderBy(t => t)
-                .ToList();
-            var idx = sorted.FindIndex(t => TileHelpers.SameKind(t, bestDiscard));
-            if (idx < 0) return null;
-            targetSlot = idx;
-        }
-
-        return targetSlot < slots.Count ? slots[targetSlot].NodePtr : null;
-    }
-
-    private void DrawCallWindow(GameState state)
+    private void DrawCallWindow(StateSnapshot state)
     {
         ImGui.Separator();
         ImGui.TextColored(Gold, "=== CALL WINDOW ===");
 
-        // Tsumo — self-draw win, always declare.
-        if (state.CallWindowOptions.Any(o => o.StartsWith("Tsumo", StringComparison.OrdinalIgnoreCase)))
+        if (state.Can(LegalAction.Tsumo))
         {
             ImGui.TextColored(Gold, ">>> TSUMO — Declare the win! <<<");
             ImGui.Separator();
             return;
         }
 
-        // Ron is always correct — declare the win immediately.
-        if (state.CallWindowOptions.Any(o => o.Equals("Ron", StringComparison.OrdinalIgnoreCase)))
+        if (state.Can(LegalAction.Ron))
         {
             ImGui.TextColored(Gold, ">>> RON — Declare the win! <<<");
             ImGui.Separator();
             return;
         }
 
-        // Riichi prompt (self turn, no offered tile): advise from the current analysis.
-        if (state.CallWindowOptions.Any(o => o.Equals("Riichi", StringComparison.OrdinalIgnoreCase)))
+        if (state.Can(LegalAction.Riichi))
         {
             var latest = this.plugin.AnalysisService.Latest?.Result;
             if (latest is { IsValid: true, RiichiRecommended: true })
@@ -312,75 +270,64 @@ public sealed class MainWindow : Window
             return;
         }
 
-        if (state.CallOpportunityTile.HasValue)
+        if (state.CallTile is { } callTile)
         {
-            var callTileName = TileHelpers.GetDisplayName(state.CallOpportunityTile.Value);
-            ImGui.TextUnformatted($"Tile offered: {callTileName}");
-
-            foreach (var opt in state.CallWindowOptions)
-            {
-                if (opt.Equals("Pon", StringComparison.OrdinalIgnoreCase))
-                {
-                    var advice = this.AnalysePon(state, state.CallOpportunityTile.Value);
-                    ImGui.TextUnformatted($"Pon: {advice}");
-                }
-                else if (opt.Equals("Chi", StringComparison.OrdinalIgnoreCase))
-                {
-                    var advice = this.AnalyseChi(state, state.CallOpportunityTile.Value);
-                    ImGui.TextUnformatted($"Chi: {advice}");
-                }
-                else if (opt.Equals("Kan", StringComparison.OrdinalIgnoreCase))
-                {
-                    ImGui.TextUnformatted("Kan: Reveals new dora but locks your hand shape.");
-                }
-            }
+            ImGui.TextUnformatted($"Tile offered: {TileHelpers.GetDisplayName(callTile)}");
+            if (state.Can(LegalAction.Pon))
+                ImGui.TextUnformatted($"Pon: {this.AnalysePon(state, callTile)}");
+            if (state.Can(LegalAction.Chi))
+                ImGui.TextUnformatted($"Chi: {this.AnalyseChi(state, callTile)}");
+            if (state.Can(LegalAction.MinKan))
+                ImGui.TextUnformatted("Kan: Reveals new dora but locks your hand shape.");
+        }
+        else if (state.Can(LegalAction.AnKan))
+        {
+            ImGui.TextUnformatted("Kan (closed): keeps the hand closed; reveals a new dora.");
+        }
+        else if (state.CallOptions.Count > 0)
+        {
+            ImGui.TextUnformatted($"Options: {string.Join(", ", state.CallOptions)} — offered tile unknown, check manually.");
         }
         else
         {
-            // Callable tile unknown: opponent discard identity comes from learned pile
-            // faces; until enough faces resolve, only the option list is known.
-            if (state.CallWindowOptions.Count > 0)
-                ImGui.TextUnformatted($"Options: {string.Join(", ", state.CallWindowOptions)} — offered tile unknown (tile faces still learning), check manually.");
-            else
-                ImGui.TextUnformatted("Call window active — make your choice.");
+            ImGui.TextUnformatted("Call window active — make your choice.");
         }
 
         ImGui.Separator();
     }
 
-    // Returns a one-line pon recommendation string, computed once per call window
-    // (memoized on the hand fingerprint + offered tile) so Draw never repeats the work.
-    private string AnalysePon(GameState state, Tile callTile)
+    // One-line pon recommendation, memoized per call window (hand fingerprint + tile).
+    private string AnalysePon(StateSnapshot state, Tile callTile)
     {
         var cacheKey = $"{AnalysisSnapshot.ComputeFingerprint(state)}|{callTile}";
         if (this.ponAdviceCache is { } cached && cached.Key == cacheKey)
             return cached.Advice;
 
-        var advice = ComputePonAdvice(state, callTile);
+        var advice = this.ComputePonAdvice(state, callTile);
         this.ponAdviceCache = (cacheKey, advice);
         return advice;
     }
 
-    private string ComputePonAdvice(GameState state, Tile callTile)
+    private string ComputePonAdvice(StateSnapshot state, Tile callTile)
     {
-        var matchCount = state.ClosedTiles.Count(t => TileHelpers.SameKind(t, callTile));
+        var matchCount = state.Hand.Count(t => TileHelpers.SameKind(t, callTile));
         if (matchCount < 2)
             return "Pass — no pon possible";
 
-        // Build hand after pon + best discard
         var handAfterPon = new Hand { SeatWind = state.SeatWind, RoundWind = state.RoundWind };
         var removed = 0;
-        foreach (var t in state.ClosedTiles)
+        foreach (var t in state.Hand)
         {
             if (removed < 2 && TileHelpers.SameKind(t, callTile)) { removed++; continue; }
             handAfterPon.ClosedTiles.Add(t);
         }
-        handAfterPon.CalledMelds.AddRange(state.CalledMelds);
+
+        handAfterPon.CalledMelds.AddRange(state.OurMelds);
         handAfterPon.CalledMelds.Add(new Meld(MeldType.Pon, [callTile, callTile, callTile], true));
 
         var ctx = BuildCallContext(state);
         var afterPonAnalysis = this.handAnalyzer.Analyze(handAfterPon, ctx);
-        var currentAnalysis  = this.handAnalyzer.Analyze(CreateAnalysisHand(state), ctx);
+        var currentAnalysis = this.handAnalyzer.Analyze(CreateAnalysisHand(state), ctx);
         if (!afterPonAnalysis.IsValid || !currentAnalysis.IsValid)
             return "Pass — hand data unstable";
 
@@ -396,8 +343,7 @@ public sealed class MainWindow : Window
         return "Pass — pon does not improve hand";
     }
 
-    // Returns a one-line chi recommendation, memoized per call window.
-    private string AnalyseChi(GameState state, Tile callTile)
+    private string AnalyseChi(StateSnapshot state, Tile callTile)
     {
         var cacheKey = $"chi|{AnalysisSnapshot.ComputeFingerprint(state)}|{callTile}";
         if (this.chiAdviceCache is { } cached && cached.Key == cacheKey)
@@ -410,7 +356,7 @@ public sealed class MainWindow : Window
 
     // Tries every chi shape ((n-2,n-1), (n-1,n+1), (n+1,n+2)) available in hand and
     // compares the best resulting position against staying closed.
-    private string ComputeChiAdvice(GameState state, Tile callTile)
+    private string ComputeChiAdvice(StateSnapshot state, Tile callTile)
     {
         if (callTile.IsHonor)
             return "Pass — honors cannot be called for chi";
@@ -431,20 +377,20 @@ public sealed class MainWindow : Window
 
             var t1 = new Tile(callTile.Suit, n1);
             var t2 = new Tile(callTile.Suit, n2);
-            if (TileHelpers.CountKind(state.ClosedTiles, t1) == 0 || TileHelpers.CountKind(state.ClosedTiles, t2) == 0)
+            if (TileHelpers.CountKind(state.Hand, t1) == 0 || TileHelpers.CountKind(state.Hand, t2) == 0)
                 continue;
 
             var hand = new Hand { SeatWind = state.SeatWind, RoundWind = state.RoundWind };
             var used1 = false;
             var used2 = false;
-            foreach (var t in state.ClosedTiles)
+            foreach (var t in state.Hand)
             {
                 if (!used1 && TileHelpers.SameKind(t, t1)) { used1 = true; continue; }
                 if (!used2 && TileHelpers.SameKind(t, t2)) { used2 = true; continue; }
                 hand.ClosedTiles.Add(t);
             }
 
-            hand.CalledMelds.AddRange(state.CalledMelds);
+            hand.CalledMelds.AddRange(state.OurMelds);
             hand.CalledMelds.Add(new Meld(MeldType.Chi, [t1, TileHelpers.Normalize(callTile), t2], true));
 
             var analysis = this.handAnalyzer.Analyze(hand, ctx);
@@ -476,27 +422,28 @@ public sealed class MainWindow : Window
         return "Pass — chi does not improve hand";
     }
 
-    private static AnalysisContext BuildCallContext(GameState state)
+    private static AnalysisContext BuildCallContext(StateSnapshot state)
     {
         return new AnalysisContext
         {
-            SeenTiles = state.DiscardPile,
-            DoraIndicators = state.DoraIndicators,
-            WallRemaining = state.TilesRemainingInWall,
+            SeenTiles = [.. state.SeenForAnalyzer()],
+            DoraIndicators = [.. state.DoraIndicators],
+            WallRemaining = state.WallRemaining,
             SeatWind = state.SeatWind,
             RoundWind = state.RoundWind,
+            Ruleset = state.Ruleset,
         };
     }
 
-    private static Hand CreateAnalysisHand(GameState state)
+    private static Hand CreateAnalysisHand(StateSnapshot state)
     {
         var hand = new Hand
         {
             SeatWind = state.SeatWind,
             RoundWind = state.RoundWind,
         };
-        hand.ClosedTiles.AddRange(state.ClosedTiles);
-        hand.CalledMelds.AddRange(state.CalledMelds);
+        hand.ClosedTiles.AddRange(state.Hand);
+        hand.CalledMelds.AddRange(state.OurMelds);
         return hand;
     }
 

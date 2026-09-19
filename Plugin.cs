@@ -1,10 +1,10 @@
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using MahjongHater.Core;
+using MahjongHater.Core.State;
 using MahjongHater.Windows;
 
 [assembly: AssemblyVersion("1.0.0.0")]
@@ -20,11 +20,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IClientState clientState;
     private readonly ICommandManager commandManager;
     private readonly IChatGui chatGui;
-    private readonly IDataManager dataManager;
     private readonly IPluginLog pluginLog;
-    private readonly ITextureProvider textureProvider;
     private readonly IFramework framework;
-    private readonly IAddonLifecycle addonLifecycle;
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
@@ -32,9 +29,7 @@ public sealed class Plugin : IDalamudPlugin
         IClientState clientState,
         ICommandManager commandManager,
         IChatGui chatGui,
-        IDataManager dataManager,
         IPluginLog pluginLog,
-        ITextureProvider textureProvider,
         IFramework framework,
         IAddonLifecycle addonLifecycle)
     {
@@ -43,22 +38,18 @@ public sealed class Plugin : IDalamudPlugin
         this.clientState = clientState;
         this.commandManager = commandManager;
         this.chatGui = chatGui;
-        this.dataManager = dataManager;
         this.pluginLog = pluginLog;
-        this.textureProvider = textureProvider;
         this.framework = framework;
-        this.addonLifecycle = addonLifecycle;
 
         this.Configuration = Configuration.Load(pluginInterface);
-        this.GameStateReader = new GameStateReader(
-            gameGui, pluginLog, this.Configuration, addonLifecycle,
-            pluginInterface.GetPluginConfigDirectory());
+        var layout = EmjLayout.LoadDefault(pluginInterface.AssemblyLocation.DirectoryName);
+        this.Reader = new EmjStateReader(gameGui, pluginLog, addonLifecycle, this.Configuration, layout);
         this.HandAnalyzer = new HandAnalyzer();
         this.AnalysisService = new AnalysisService(this.HandAnalyzer, (ex, msg) => pluginLog.Error(ex, msg));
-        this.GameStateReader.AnalysisSummaryProvider = this.DescribeCurrentRecommendation;
+        this.Reader.AnalysisSummaryProvider = this.DescribeCurrentRecommendation;
 
         this.WindowSystem = new WindowSystem("MahjongHater");
-        this.MainWindow = new MainWindow(this, this.Configuration, this.GameStateReader, this.HandAnalyzer);
+        this.MainWindow = new MainWindow(this, this.Configuration, this.Reader, this.HandAnalyzer);
         this.ConfigWindow = new ConfigWindow(this.Configuration);
 
         this.WindowSystem.AddWindow(this.MainWindow);
@@ -66,7 +57,7 @@ public sealed class Plugin : IDalamudPlugin
 
         this.commandManager.AddHandler(CommandName, new CommandInfo(this.OnCommand)
         {
-            HelpMessage = "Toggle the Mahjong Hater overlay. Args: 'dump' = Emj snapshot, 'record' = event recording, 'analyze' = deep node-scan session, 'debug [port]' = localhost debug API.",
+            HelpMessage = "Toggle the Mahjong Hater overlay. Args: 'dump' = struct + AtkValues snapshot to file, 'debug [port]' = localhost debug API.",
             ShowInHelp = true,
         });
 
@@ -91,7 +82,7 @@ public sealed class Plugin : IDalamudPlugin
 
     public WindowSystem WindowSystem { get; }
 
-    public GameStateReader GameStateReader { get; }
+    public EmjStateReader Reader { get; }
 
     public HandAnalyzer HandAnalyzer { get; }
 
@@ -103,7 +94,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         this.debugServer?.Dispose();
         this.AnalysisService.Dispose();
-        this.GameStateReader.Dispose();
+        this.Reader.Dispose();
         this.framework.Update -= this.OnFrameworkUpdate;
         this.clientState.Login -= this.OnLogin;
         this.clientState.Logout -= this.OnLogout;
@@ -133,58 +124,15 @@ public sealed class Plugin : IDalamudPlugin
 
         if (arg.Equals("dump", StringComparison.OrdinalIgnoreCase))
         {
-            var path = System.IO.Path.Combine(
-                this.pluginInterface.GetPluginConfigDirectory(),
-                "emj_dump.txt");
-            this.GameStateReader.DumpToLog(path);
+            var path = Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), $"emj_dump_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+            this.DumpToFile(path);
+            this.chatGui.Print($"[MahjongHater] Dump → {path}");
             return;
         }
 
         if (arg.StartsWith("debug", StringComparison.OrdinalIgnoreCase))
         {
             this.ToggleDebugServer(arg);
-            return;
-        }
-
-        if (arg.Equals("analyze", StringComparison.OrdinalIgnoreCase))
-        {
-            if (this.GameStateReader.IsAnalyzing)
-            {
-                this.GameStateReader.StopAnalysis();
-                this.chatGui.Print("[MahjongHater] Analysis session stopped and saved.");
-            }
-            else if (this.GameStateReader.IsRecording)
-            {
-                this.chatGui.Print("[MahjongHater] A recording session is already running — stop it first with '/mhater record'.");
-            }
-            else
-            {
-                var path = System.IO.Path.Combine(
-                    this.pluginInterface.GetPluginConfigDirectory(),
-                    $"emj_analysis_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
-                this.GameStateReader.StartAnalysis(path);
-                this.chatGui.Print($"[MahjongHater] Analysis session started (deep node scanning) → {path}");
-            }
-
-            return;
-        }
-
-        if (arg.Equals("record", StringComparison.OrdinalIgnoreCase))
-        {
-            if (this.GameStateReader.IsRecording)
-            {
-                this.GameStateReader.StopRecording();
-                this.chatGui.Print("[MahjongHater] Recording stopped and saved.");
-            }
-            else
-            {
-                var path = System.IO.Path.Combine(
-                    this.pluginInterface.GetPluginConfigDirectory(),
-                    $"emj_recording_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
-                this.GameStateReader.StartRecording(path);
-                this.chatGui.Print($"[MahjongHater] Recording started → {path}");
-            }
-
             return;
         }
 
@@ -213,13 +161,13 @@ public sealed class Plugin : IDalamudPlugin
     private void OnLogin()
     {
         this.pluginLog.Information("Mahjong Hater login detected; refreshing Mahjong state.");
-        this.GameStateReader.Tick();
+        this.Reader.Tick();
     }
 
     private void OnLogout(int type, int code)
     {
         this.pluginLog.Information($"Mahjong Hater logout detected (type={type}, code={code}).");
-        this.GameStateReader.Reset();
+        this.Reader.Reset();
     }
 
     private void OnFrameworkUpdate(IFramework framework)
@@ -229,11 +177,43 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        this.GameStateReader.Tick();
-        this.AnalysisService.Update(this.GameStateReader.CurrentState);
+        this.Reader.Tick();
+        this.AnalysisService.Update(this.Reader.Current);
     }
 
-    // ───────────────────────────── DEBUG API (temporary, /mhater debug) ─────────────────────────────
+    // /mhater dump: struct decode + AtkValues + node tree, for in-game checks without the API.
+    private void DumpToFile(string path)
+    {
+        var lines = new List<string>(4096) { $"# MahjongHater dump {DateTime.Now:O}" };
+        lines.Add("=== /struct ===");
+        lines.AddRange(Flatten(this.Reader.BuildDebugStruct(includeHex: true)));
+        lines.Add("=== /status ===");
+        lines.AddRange(Flatten(this.Reader.BuildDebugStatus()));
+        lines.Add("=== /frame ===");
+        lines.AddRange(Flatten(this.Reader.BuildDebugFrame(this.Reader.Layout.AddonName)));
+        lines.Add("=== /tree ===");
+        lines.AddRange(this.Reader.BuildDebugTree(null, this.Reader.Layout.AddonName));
+        File.WriteAllLines(path, lines);
+
+        static IEnumerable<string> Flatten(Dictionary<string, object?> dict)
+        {
+            foreach (var (k, v) in dict)
+            {
+                if (v is IEnumerable<string> list)
+                {
+                    yield return $"  {k}:";
+                    foreach (var item in list)
+                        yield return $"    {item}";
+                }
+                else
+                {
+                    yield return $"  {k} = {System.Text.Json.JsonSerializer.Serialize(v)}";
+                }
+            }
+        }
+    }
+
+    // ───────────────────────────── DEBUG API (/mhater debug) ─────────────────────────────
 
     private void ToggleDebugServer(string arg)
     {
@@ -255,8 +235,8 @@ public sealed class Plugin : IDalamudPlugin
             this.debugServer = new DebugServer(port, this.RouteDebugRequest, (ex, msg) => this.pluginLog.Warning(ex, msg));
             this.debugServer.Start();
             this.chatGui.Print($"[MahjongHater] Debug API on http://127.0.0.1:{port}/  " +
-                               "(read: /status /state /hand /piles /frame /prompt /reco /events /tree /nodes /addons — " +
-                               "operate: /discard /hover /call /click /fire /callback)");
+                               "(read: /status /state /struct /hand /piles /frame /prompt /reco /events /tree /nodes /addons — " +
+                               "operate: /discard /hover /call /click /listclick /fire /callback /riichi)");
         }
         catch (Exception ex)
         {
@@ -275,20 +255,21 @@ public sealed class Plugin : IDalamudPlugin
             case "/":
                 return Task.FromResult<object?>(new Dictionary<string, object?>
                 {
-                    ["plugin"] = "MahjongHater debug API (temporary, two-way)",
+                    ["plugin"] = "MahjongHater debug API (two-way)",
                     ["read"] = new[]
                     {
-                        "/status — tracked state + analysis one-liner",
+                        "/status — current StateSnapshot summary + analysis one-liner",
                         "/state — status + prompt + reco merged (one round-trip)",
-                        "/hand — tracked vs scanned slots vs AtkValues reads",
-                        "/piles — pile faces, decoded/merged discard piles",
+                        "/struct[?hex=1] — decoded AddonEmj struct frame (layout verification)",
+                        "/hand — struct hand vs visible slot nodes (click targets)",
+                        "/piles — per-seat discards, riichi, scores",
                         "/frame[?addon=Emj] — full AtkValues table",
-                        "/prompt — call window state + raw button texts",
+                        "/prompt — call window state + raw button texts + list rows",
                         "/reco — full analysis result incl. ranked discards",
-                        "/events[?tail=200] — raw event + decision + operate timeline",
+                        "/events[?tail=200] — raw event + tracker decision + operate timeline",
                         "/tree[?node=133][&addon=Emj] — node tree (text)",
                         "/nodes[?addon=Emj] — event-bearing nodes (operate targets)",
-                        "/addons — all loaded addons (find result/confirm screens)",
+                        "/addons — all loaded addons",
                     },
                     ["operate"] = new[]
                     {
@@ -299,44 +280,50 @@ public sealed class Plugin : IDalamudPlugin
                         "/listclick?node=<list>&index=0[&addon=] — select a list row (addon-bound ListItemClick)",
                         "/fire?node=…&type=9[&param=][&addon=] — one precise AtkEvent",
                         "/callback?values=3,0[&addon=] — FireCallback with int values",
-                        "/riichi?declared=true|false — manual riichi-lock override (no auto-detection yet)",
+                        "/riichi?declared=true|false — manual riichi-lock override",
                     },
                 });
             case "/status":
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.BuildDebugStatus());
+                return this.OnFramework(() => this.Reader.BuildDebugStatus());
             case "/state":
-                return this.framework.RunOnFrameworkThread<object?>(() => new Dictionary<string, object?>
+                return this.OnFramework(() => new Dictionary<string, object?>
                 {
-                    ["status"] = this.GameStateReader.BuildDebugStatus(),
-                    ["prompt"] = this.GameStateReader.BuildDebugPrompt(),
+                    ["status"] = this.Reader.BuildDebugStatus(),
+                    ["prompt"] = this.Reader.BuildDebugPrompt(),
                     ["reco"] = this.BuildRecoDebug(),
                 });
+            case "/struct":
+            {
+                var hex = query.TryGetValue("hex", out var h) && h is "1" or "true";
+                return this.OnFramework(() => this.Reader.BuildDebugStruct(hex));
+            }
+
             case "/hand":
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.BuildDebugHand());
+                return this.OnFramework(() => this.Reader.BuildDebugHand());
             case "/piles":
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.BuildDebugPiles());
+                return this.OnFramework(() => this.Reader.BuildDebugPiles());
             case "/frame":
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.BuildDebugFrame(Addon(query)));
+                return this.OnFramework(() => this.Reader.BuildDebugFrame(Addon(query)));
             case "/prompt":
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.BuildDebugPrompt());
+                return this.OnFramework(() => this.Reader.BuildDebugPrompt());
             case "/events":
             {
                 var tail = query.TryGetValue("tail", out var t) && int.TryParse(t, out var n) ? n : 200;
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.BuildDebugEvents(tail));
+                return this.OnFramework(() => this.Reader.BuildDebugEvents(tail));
             }
 
             case "/tree":
             {
                 uint? nodeId = query.TryGetValue("node", out var n) && uint.TryParse(n, out var id) ? id : null;
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.BuildDebugTree(nodeId, Addon(query)));
+                return this.OnFramework(() => this.Reader.BuildDebugTree(nodeId, Addon(query)));
             }
 
             case "/nodes":
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.DebugListNodes(Addon(query)));
+                return this.OnFramework(() => this.Reader.DebugListNodes(Addon(query)));
             case "/addons":
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.DebugListAddons());
+                return this.OnFramework(this.Reader.DebugListAddons);
             case "/reco":
-                return this.framework.RunOnFrameworkThread<object?>(this.BuildRecoDebug);
+                return this.OnFramework(this.BuildRecoDebug);
 
             // ── operate (two-way): actions are framework-thread marshaled like reads ──
             case "/discard":
@@ -344,80 +331,75 @@ public sealed class Plugin : IDalamudPlugin
                 int? slot = query.TryGetValue("slot", out var s) && int.TryParse(s, out var si) ? si : null;
                 var tile = query.TryGetValue("tile", out var tv) ? tv : null;
                 if (slot is null && tile is null)
-                    return Task.FromResult<object?>(new Dictionary<string, object?> { ["error"] = "need slot= or tile=" });
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.DebugDiscard(slot, tile));
+                    return Error("need slot= or tile=");
+                return this.OnFramework(() => this.Reader.DebugDiscard(slot, tile));
             }
 
             case "/hover":
             {
                 if (!query.TryGetValue("slot", out var s) || !int.TryParse(s, out var slot))
-                    return Task.FromResult<object?>(new Dictionary<string, object?> { ["error"] = "need slot=" });
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.DebugHoverSlot(slot));
+                    return Error("need slot=");
+                return this.OnFramework(() => this.Reader.DebugHoverSlot(slot));
             }
 
             case "/call":
             {
                 if (!query.TryGetValue("option", out var label) || string.IsNullOrWhiteSpace(label))
-                    return Task.FromResult<object?>(new Dictionary<string, object?> { ["error"] = "need option=<visible label>" });
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.DebugClickLabel(Addon(query), label));
+                    return Error("need option=<visible label>");
+                return this.OnFramework(() => this.Reader.DebugClickLabel(Addon(query), label));
             }
 
             case "/click":
             {
                 if (!query.TryGetValue("node", out var spec) || string.IsNullOrWhiteSpace(spec))
-                    return Task.FromResult<object?>(new Dictionary<string, object?> { ["error"] = "need node=0x…|<nodeId>" });
+                    return Error("need node=0x…|<nodeId>");
                 int? param = query.TryGetValue("param", out var p) && int.TryParse(p, out var pi) ? pi : null;
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.DebugClickNode(Addon(query), spec, param));
+                return this.OnFramework(() => this.Reader.DebugClickNode(Addon(query), spec, param));
             }
 
             case "/listclick":
             {
                 if (!query.TryGetValue("node", out var spec) || string.IsNullOrWhiteSpace(spec)
                     || !query.TryGetValue("index", out var ix) || !int.TryParse(ix, out var index))
-                    return Task.FromResult<object?>(new Dictionary<string, object?> { ["error"] = "need node=<list ptr|nodeId> and index=<row>" });
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.DebugListClick(Addon(query), spec, index));
+                    return Error("need node=<list ptr|nodeId> and index=<row>");
+                return this.OnFramework(() => this.Reader.DebugListClick(Addon(query), spec, index));
             }
 
             case "/fire":
             {
                 if (!query.TryGetValue("node", out var spec) || string.IsNullOrWhiteSpace(spec)
                     || !query.TryGetValue("type", out var ts) || !int.TryParse(ts, out var eventType))
-                    return Task.FromResult<object?>(new Dictionary<string, object?> { ["error"] = "need node=0x…|<nodeId> and type=<AtkEventType int>" });
+                    return Error("need node=0x…|<nodeId> and type=<AtkEventType int>");
                 int? param = query.TryGetValue("param", out var p) && int.TryParse(p, out var pi) ? pi : null;
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.DebugFireEvent(Addon(query), spec, eventType, param));
+                return this.OnFramework(() => this.Reader.DebugFireEvent(Addon(query), spec, eventType, param));
             }
 
             case "/callback":
             {
                 if (!query.TryGetValue("values", out var vs) || string.IsNullOrWhiteSpace(vs))
-                    return Task.FromResult<object?>(new Dictionary<string, object?> { ["error"] = "need values=<int,int,…>" });
+                    return Error("need values=<int,int,…>");
                 var parts = vs.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 var values = new int[parts.Length];
                 for (var i = 0; i < parts.Length; i++)
                 {
                     if (!int.TryParse(parts[i], out values[i]))
-                        return Task.FromResult<object?>(new Dictionary<string, object?> { ["error"] = $"'{parts[i]}' is not an int" });
+                        return Error($"'{parts[i]}' is not an int");
                 }
 
                 if (values.Length == 0)
-                    return Task.FromResult<object?>(new Dictionary<string, object?> { ["error"] = "values is empty" });
-                return this.framework.RunOnFrameworkThread<object?>(() => this.GameStateReader.DebugFireCallback(Addon(query), values));
+                    return Error("values is empty");
+                return this.OnFramework(() => this.Reader.DebugFireCallback(Addon(query), values));
             }
 
-            // Manual riichi-lock override: no reliable automatic detection signal was
-            // found live 2026-07-06 (node color/alpha/rotation identical between a
-            // locked-out tile and the drawn one; no distinct banner/token visible
-            // either). Set this when you know you've declared riichi so the main
-            // recommendation forces the drawn tile instead of an unreachable "best
-            // discard" — resets naturally on the next genuine new deal.
+            // Manual riichi-lock override until a riichi signal is mapped in the struct.
             case "/riichi":
             {
                 if (!query.TryGetValue("declared", out var dv) || !bool.TryParse(dv, out var declared))
-                    return Task.FromResult<object?>(new Dictionary<string, object?> { ["error"] = "need declared=true|false" });
-                return this.framework.RunOnFrameworkThread<object?>(() =>
+                    return Error("need declared=true|false");
+                return this.OnFramework(() =>
                 {
-                    this.GameStateReader.SetRiichiDeclared(declared);
-                    return (object?)new Dictionary<string, object?> { ["isRiichiDeclared"] = declared };
+                    this.Reader.SetRiichiDeclared(declared);
+                    return new Dictionary<string, object?> { ["isRiichiDeclared"] = declared };
                 });
             }
 
@@ -427,7 +409,12 @@ public sealed class Plugin : IDalamudPlugin
 
         static string Addon(Dictionary<string, string> query)
             => query.TryGetValue("addon", out var a) && !string.IsNullOrWhiteSpace(a) ? a : "Emj";
+
+        static Task<object?> Error(string message)
+            => Task.FromResult<object?>(new Dictionary<string, object?> { ["error"] = message });
     }
+
+    private Task<object?> OnFramework(Func<object?> read) => this.framework.RunOnFrameworkThread(read);
 
     private object? BuildRecoDebug()
     {
@@ -435,7 +422,7 @@ public sealed class Plugin : IDalamudPlugin
         if (publication is null)
             return new Dictionary<string, object?> { ["status"] = "no publication yet" };
 
-        var state = this.GameStateReader.CurrentState;
+        var state = this.Reader.Current;
         var result = new Dictionary<string, object?>
         {
             ["status"] = publication.Status.ToString(),
@@ -469,16 +456,15 @@ public sealed class Plugin : IDalamudPlugin
         return result;
     }
 
-    // One-line recommendation summary for /mhater analyze logs: what the plugin is
-    // currently advising, whether the advised tile is actually in the tracked hand,
-    // and whether the result matches the live hand fingerprint.
+    // One-line recommendation summary for /status: what the plugin is advising, whether
+    // the advised tile is in the hand, and whether the result matches the live fingerprint.
     private string DescribeCurrentRecommendation()
     {
         var publication = this.AnalysisService.Latest;
         if (publication is null)
             return "no publication yet";
 
-        var state = this.GameStateReader.CurrentState;
+        var state = this.Reader.Current;
         var fresh = state is not null && publication.Fingerprint == AnalysisSnapshot.ComputeFingerprint(state);
         if (publication.Status != AnalysisStatus.Ready || publication.Result is null)
             return $"status={publication.Status}  fresh={fresh}  err={publication.Error}";
@@ -489,7 +475,7 @@ public sealed class Plugin : IDalamudPlugin
 
         var best = result.BestDiscard?.ToString() ?? "-";
         var bestInHand = result.BestDiscard is { } b && state is not null
-            && state.ClosedTiles.Any(t => TileHelpers.SameKind(t, b));
+            && state.Hand.Any(t => TileHelpers.SameKind(t, b));
         return $"status=Ready  best={best}  bestInHand={bestInHand}  shanten={result.ShantenAfterDiscard}  " +
                $"ukeire={result.Ukeire}  riichi={result.RiichiRecommended}  fresh={fresh}";
     }

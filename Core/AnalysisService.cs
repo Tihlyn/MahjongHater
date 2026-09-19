@@ -1,3 +1,5 @@
+using MahjongHater.Core.State;
+
 namespace MahjongHater.Core;
 
 public enum AnalysisStatus
@@ -7,8 +9,9 @@ public enum AnalysisStatus
     TimedOut,
 }
 
-// Immutable, deep-copied input for one analysis run. Built on the framework thread so
-// the worker never touches game memory or reader-owned collections.
+// Immutable input for one analysis run, adapted from a StateSnapshot on the framework
+// thread so the worker never touches reader-owned state. Policy wiring (Phase 3) will
+// hand the snapshot itself to IPolicy; until then this feeds HandAnalyzer directly.
 public sealed record AnalysisSnapshot(
     Tile[] ClosedTiles,
     Meld[] CalledMelds,
@@ -18,40 +21,41 @@ public sealed record AnalysisSnapshot(
     Wind SeatWind,
     Wind RoundWind,
     bool IsRiichi,
+    RulesetOptions Ruleset,
     string Fingerprint)
 {
-    public static AnalysisSnapshot? From(GameState? state)
+    public static AnalysisSnapshot? From(StateSnapshot? state)
     {
-        if (state is not { InGame: true } || state.ClosedTiles.Count == 0)
+        if (state is null || state.Phase == GamePhase.NotInGame || state.Hand.Count == 0)
             return null;
 
         return new AnalysisSnapshot(
-            [.. state.ClosedTiles],
-            [.. state.CalledMelds],
-            [.. state.DiscardPile],
+            [.. state.Hand],
+            [.. state.OurMelds],
+            [.. state.SeenForAnalyzer()],
             [.. state.DoraIndicators],
-            state.TilesRemainingInWall,
+            state.WallRemaining,
             state.SeatWind,
             state.RoundWind,
-            state.IsRiichi,
+            state.OurRiichi,
+            state.Ruleset,
             ComputeFingerprint(state));
     }
 
     // Order-independent hand identity: sorted closed tiles + melds + doras + seen counts.
-    // Sorting kills the re-analysis thrash the old unsorted fingerprint suffered when the
-    // live read changed tile order without changing the hand. IsRiichi is included since
-    // it can flip the recommendation without any other field changing.
-    public static string ComputeFingerprint(GameState state)
+    // Sorting kills re-analysis thrash when only tile order changes. OurRiichi is
+    // included since it can flip the recommendation without any other field changing.
+    public static string ComputeFingerprint(StateSnapshot state)
     {
-        var closed = string.Join(",", state.ClosedTiles.OrderBy(t => t).Select(t => t.ToString()));
-        var melds = string.Join("|", state.CalledMelds.Select(m => string.Join(",", m.Tiles.Select(TileHelpers.ToIndex).OrderBy(i => i))));
+        var closed = string.Join(",", state.Hand.OrderBy(t => t).Select(t => t.ToString()));
+        var melds = string.Join("|", state.OurMelds.Select(m => string.Join(",", m.Tiles.Select(TileHelpers.ToIndex).OrderBy(i => i))));
         var doras = string.Join(",", state.DoraIndicators.Select(TileHelpers.ToIndex));
 
         var seenHash = 17;
-        foreach (var tile in state.DiscardPile)
+        foreach (var tile in state.SeenForAnalyzer())
             seenHash = unchecked((seenHash * 31) + TileHelpers.ToIndex(tile));
 
-        return $"{closed}:{melds}:{doras}:{seenHash:X}:{(state.IsRiichi ? 1 : 0)}";
+        return $"{closed}:{melds}:{doras}:{seenHash:X}:{(state.OurRiichi ? 1 : 0)}";
     }
 }
 
@@ -102,7 +106,7 @@ public sealed class AnalysisService : IDisposable
         this.IsComputing && DateTime.UtcNow - this.dispatchedAtUtc > StalledAfter;
 
     // Framework thread, every tick. Cheap: fingerprint compare + debounce counter.
-    public void Update(GameState? state)
+    public void Update(StateSnapshot? state)
     {
         var snapshot = AnalysisSnapshot.From(state);
         if (snapshot is null)
@@ -187,6 +191,7 @@ public sealed class AnalysisService : IDisposable
             WallRemaining = snapshot.WallRemaining,
             SeatWind = snapshot.SeatWind,
             RoundWind = snapshot.RoundWind,
+            Ruleset = snapshot.Ruleset,
             IsRiichi = snapshot.IsRiichi,
         };
     }

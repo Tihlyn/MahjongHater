@@ -53,8 +53,10 @@
     <None Update="MahjongHater.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Update="resources/ruleset.json">
+    <!-- Layout ships next to the dll (editable) and is embedded as the fallback. -->
+    <None Update="resources/layouts/*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <EmbeddedResource Include="resources/layouts/emj.json" LogicalName="MahjongHater.resources.layouts.emj.json" />
   </ItemGroup>
 </Project>

@@ -1,18 +1,21 @@
 using MahjongHater.Core;
+using MahjongHater.Core.State;
 using Xunit;
 
 namespace MahjongHater.Tests;
 
 public class AnalysisServiceTests
 {
-    private static GameState MakeState(string closed, string discards = "")
+    private static StateSnapshot MakeState(string closed, string discards = "")
     {
-        return new GameState
+        var seats = StateSnapshot.Empty.Seats.ToList();
+        seats[1] = seats[1] with { Discards = discards.Length == 0 ? [] : TestTiles.Parse(discards) };
+        return StateSnapshot.Empty with
         {
-            InGame = true,
-            ClosedTiles = TestTiles.Parse(closed),
-            DiscardPile = discards.Length == 0 ? [] : TestTiles.Parse(discards),
-            TilesRemainingInWall = 50,
+            Phase = GamePhase.OurTurn,
+            Hand = TestTiles.Parse(closed),
+            Seats = seats,
+            WallRemaining = 50,
         };
     }
 
