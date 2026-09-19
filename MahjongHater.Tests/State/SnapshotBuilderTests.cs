@@ -90,7 +90,7 @@ public class SnapshotBuilderTests
         var t = new EventTracker();
         Build(b, t, StructFixture.Decoded("22z34567m11p3459s", null, stateCode: 15));
         t.OnRefresh(AtkFrame.OfInts(8, 1, 76069), T0);
-        var s = Build(b, t, StructFixture.Decoded("34567m11p3459s", "2z"));
+        var s = Build(b, t, StructFixture.PostPon);
         Assert.Single(s.OurMelds);
         Assert.Equal(11, s.Hand.Count);
         Assert.Null(s.DrawnTile);
@@ -152,8 +152,8 @@ public class SnapshotBuilderTests
         t.OnRefresh(AtkFrame.OfInts(8, 2, 76050), T0);
         var s = Build(b, t, StructFixture.Decoded("123m456p789s1122z", "3z"));
         Assert.Equal(TestTiles.Parse("1m1p"), s.SeenForAnalyzer().ToList());
-        Assert.Equal(1, s.Seats[0].Discards.Count);
-        Assert.Equal(1, s.Seats[2].Discards.Count);
+        Assert.Single(s.Seats[0].Discards);
+        Assert.Single(s.Seats[2].Discards);
     }
 
     [Fact]

@@ -40,6 +40,13 @@ public sealed record SeatState(
     int RiichiDiscardIndex,   // index into Discards, -1 when not in riichi
     int Score)
 {
+    // False when the event-tracked discard list disagrees with the struct's discard
+    // count for this seat (events missed, e.g. plugin loaded mid-round).
+    public bool DiscardsVerified { get; init; } = true;
+
+    // Struct discard count when known (-1 otherwise); authoritative even when Discards is short.
+    public int DiscardCount { get; init; } = -1;
+
     public static SeatState Empty(int seat) => new(seat, [], [], false, -1, 0);
 }
 
@@ -67,6 +74,10 @@ public sealed record StateSnapshot(
     RulesetOptions Ruleset,
     bool LayoutHealthy)                  // false when the struct read failed self-validation
 {
+    // Human-readable health notes from the reader (unverified discards, unknown chi
+    // compositions, layout shift…). Empty when everything reconciled.
+    public IReadOnlyList<string> Notes { get; init; } = [];
+
     public SeatState Us => this.Seats[0];
 
     public bool IsOpen => this.OurMelds.Any(m => m.IsOpen);

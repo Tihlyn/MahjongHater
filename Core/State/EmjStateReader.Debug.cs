@@ -56,12 +56,21 @@ public sealed unsafe partial class EmjStateReader
         result["handRaw"] = f.HandSlots;
         result["hand"] = d.ClosedTiles.Select(t => t.ToString()).ToList();
         result["drawn"] = d.DrawnTile?.ToString();
-        result["scores"] = f.Scores;
-        result["discardCounts"] = f.DiscardCounts;
         result["dora"] = d.DoraIndicator?.ToString();
+        result["doraCount"] = d.DoraIndicatorCount;
         result["uraDora"] = d.UraDoraIndicator?.ToString();
-        result["seatDiscards"] = d.SeatDiscards.Select(l => l?.Select(t => t.ToString()).ToList()).ToList();
-        result["riichiFlags"] = f.RiichiFlags;
+        result["seats"] = d.Seats.Select((p, i) => new Dictionary<string, object?>
+        {
+            ["seat"] = i,
+            ["closed"] = p.ClosedTileCount,
+            ["melds"] = p.MeldCount,
+            ["discards"] = p.DiscardCount,
+            ["riichiIndex"] = p.RiichiDiscardIndex,
+            ["score"] = p.Score,
+            ["pointDiff"] = p.PointDifference,
+            ["meldRecords"] = p.Melds.Select(m => m.IsChi ? $"chi from={m.FromDirection}" : $"{m.Tile} from={m.FromDirection}").ToList(),
+            ["structDiscards"] = d.SeatDiscards[i]?.Select(t => t.ToString()).ToList(),
+        }).ToList();
         result["roundWindRaw"] = f.RoundWind;
         result["seatWindRaw"] = f.SeatWind;
         result["dealerSeatRaw"] = f.DealerSeat;
@@ -115,7 +124,9 @@ public sealed unsafe partial class EmjStateReader
                 ["riichi"] = x.Riichi,
                 ["score"] = x.Score,
             }).ToList(),
-            ["structCounts"] = this.LastFrame?.DiscardCounts,
+            ["structCounts"] = this.LastDecoded?.DiscardCounts,
+            ["verified"] = s?.Seats.Select(x => x.DiscardsVerified).ToList(),
+            ["notes"] = s?.Notes,
             ["seenForAnalyzer"] = s?.SeenForAnalyzer().Select(t => t.ToString()).ToList(),
         };
     }
@@ -165,7 +176,7 @@ public sealed unsafe partial class EmjStateReader
             return result;
 
         result["buttonTextsRaw"] = EmjScanner.ScanCallButtonTexts(addon);
-        var listNode = EmjOperator.FindNodeBySpec(addon, this.Layout.Nodes.CallList.Split('/')[^1]);
+        var listNode = EmjScanner.FindNodeByPath(addon, this.Layout.Nodes.CallList);
         result["listRows"] = listNode == null ? null : EmjOperator.ListRows(listNode).Select(r => $"{r.Index}: {r.Label}").ToList();
         return result;
     }

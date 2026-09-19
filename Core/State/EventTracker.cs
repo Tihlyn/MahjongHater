@@ -13,8 +13,11 @@ public sealed class EventTracker
     private readonly Queue<string> debugRing = new(DebugRingCap);
 
     private readonly List<Tile>[] seatDiscards = [[], [], [], []];
-    private readonly List<Meld> melds = [];
-    private string? lastMeldSignature;
+    // Meld compositions per relative seat from type-13 (all seats) / atkType=74 (us);
+    // the struct holds counts and pon tiles but not chi tiles or red fives.
+    private readonly List<Meld>[] seatMelds = [[], [], [], []];
+    private readonly string?[] lastMeldSignature = new string?[4];
+    private readonly Wind?[] seatWinds = new Wind?[4];
 
     private int eventWallRemaining = 70;
     private Tile? lastOpponentDiscard;
@@ -49,9 +52,14 @@ public sealed class EventTracker
         this.logInfo = logInfo;
     }
 
-    public IReadOnlyList<Meld> Melds => this.melds;
+    public IReadOnlyList<Meld> Melds => this.seatMelds[0];
+
+    public IReadOnlyList<Meld> SeatMeldsOf(int seat) => this.seatMelds[seat];
 
     public IReadOnlyList<Tile> SeatDiscardsOf(int seat) => this.seatDiscards[seat];
+
+    // Relative seat showing "East" in the wind texts, -1 when unknown.
+    public int DealerSeat => Array.IndexOf(this.seatWinds, Wind.East);
 
     public bool CallWindowActive => this.callWindowActive;
 
@@ -69,7 +77,7 @@ public sealed class EventTracker
 
     public Wind RoundWind => this.trackedRoundWind;
 
-    public Wind? SeatWind => this.eventSeatWind;
+    public Wind? SeatWind => this.seatWinds[0] ?? this.eventSeatWind;
 
     public IReadOnlyList<Tile> EventDoras => this.eventDoras;
 
@@ -88,6 +96,14 @@ public sealed class EventTracker
 
     // Best-effort round wind from the addon's visible text (fed by the reader).
     public void HintRoundWind(Wind wind) => this.trackedRoundWind = wind;
+
+    // Seat winds from the four score-panel texts (nodes.seatWindTexts), null = unreadable.
+    public void HintSeatWinds(IReadOnlyList<Wind?> winds)
+    {
+        for (var i = 0; i < 4 && i < winds.Count; i++)
+            if (winds[i] is { } w)
+                this.seatWinds[i] = w;
+    }
 
     // ──────────────────────────────────────── EVENTS ────────────────────────────────────────
 
@@ -131,7 +147,35 @@ public sealed class EventTracker
                 break;
             }
 
+            case 13: // meld composition: [1]=caller, [3]=4 pon/5 chi, [5]=from-direction,
+                     // [6]=tile index or 255 (chi), [7]=tile count, [8..10]=icons (chi: claimed first)
+            {
+                var seat = f.Int(1);
+                if (seat is < 0 or > 3)
+                    break;
+                var tiles = new List<Tile>(4);
+                var count = Math.Clamp(f.Int(7), 0, 4);
+                for (var i = 0; i < count; i++)
+                {
+                    if (!f.IsInt(8 + i) || !TileHelpers.TryTileFromIconId(f.Int(8 + i), out var t))
+                        break;
+                    tiles.Add(t);
+                }
+
+                if (tiles.Count < 3)
+                    break;
+                var from = f.Int(5);
+                var meldType = tiles.Count == 4 ? (from == 0 ? MeldType.Ankan : MeldType.Daiminkan)
+                    : f.Int(3) == 5 || !TileHelpers.SameKind(tiles[0], tiles[1]) ? MeldType.Chi
+                    : MeldType.Pon;
+                var ordered = meldType == MeldType.Chi ? tiles.OrderBy(TileHelpers.Normalize).ToArray() : tiles.ToArray();
+                if (this.TryAddMeld(seat, new Meld(meldType, ordered, meldType != MeldType.Ankan), $"type-13 from={from}"))
+                    this.ClearCallWindow($"meld (type-13) seat={seat}");
+                break;
+            }
+
             case 19: // call window (or another seat's Pon!/Chi! banner — same event)
+            case 23: // call options (mirrors 19's [6..8])
             {
                 var opts = new List<string>(3);
                 for (var i = 6; i <= 8; i++)
@@ -213,7 +257,7 @@ public sealed class EventTracker
         var type = tiles.Count == 4 ? MeldType.Daiminkan
             : TileHelpers.SameKind(tiles[0], tiles[1]) ? MeldType.Pon
             : MeldType.Chi;
-        if (this.TryAddMeld(new Meld(type, [.. tiles], true), "atkType=74"))
+        if (this.TryAddMeld(0, new Meld(type, [.. tiles], true), "atkType=74"))
             this.ClearCallWindow("meld accepted (atkType=74)");
     }
 
@@ -225,14 +269,21 @@ public sealed class EventTracker
         var utc = now ?? DateTime.UtcNow;
         var closed = s.ClosedTiles;
         var closedAll = s.HandInVisualOrder();
+        var melds = this.seatMelds[0];
 
-        // 13-14 tiles in the closed slots is only possible with zero melds: a tracked
-        // meld contradicting that is stale (round rolled over unnoticed).
-        if (this.melds.Count > 0 && closedAll.Count >= 13)
+        // The struct's meld counts are the authority: drop tracked melds a seat no longer
+        // has (round rolled over unnoticed; a chi we never saw the type-13 for can only be
+        // missing, never extra). Without counts, 13-14 closed tiles proves zero melds.
+        for (var seat = 0; seat < 4; seat++)
         {
-            this.Note($"melds [{string.Join(", ", this.melds)}] contradict {closedAll.Count} closed tiles — clearing");
-            this.melds.Clear();
-            this.lastMeldSignature = null;
+            var list = this.seatMelds[seat];
+            var structCount = s.Seats[seat].MeldCount;
+            if (structCount is { } n ? list.Count > n : seat == 0 && list.Count > 0 && closedAll.Count >= 13)
+            {
+                this.Note($"seat {seat} melds [{string.Join(", ", list)}] exceed the struct ({structCount?.ToString() ?? "13+ closed"}) — trimming");
+                list.RemoveRange(structCount ?? 0, list.Count - (structCount ?? 0));
+                this.lastMeldSignature[seat] = list.Count > 0 ? MeldInference.Signature(list[^1]) : null;
+            }
         }
 
         // Round boundary from the struct: every discard count back to zero, or the hand
@@ -249,15 +300,17 @@ public sealed class EventTracker
 
         this.lastTotalDiscards = countsMapped ? total : this.lastTotalDiscards;
 
-        // Meld reconstruction from the closed-hand delta (see MeldInference). The claimed
-        // tile is the event's offered tile, else whatever the struct parked in slot 13.
+        // Our meld reconstruction from the closed-hand delta (see MeldInference) — the
+        // fallback when no type-13/74 payload named the tiles. The claimed tile is the
+        // event's offered tile, else whatever the struct parked in slot 13.
         var drop = this.prevClosedAll.Count - closed.Count;
-        if (drop >= 2 && this.prevClosedAll.Count > 0 && this.melds.Count < 4)
+        var missingMeld = s.Us.MeldCount is { } mc ? melds.Count < mc : melds.Count < 4;
+        if (drop >= 2 && this.prevClosedAll.Count > 0 && missingMeld)
         {
             var called = this.callTile ?? this.FreshOpponentDiscard(utc) ?? s.DrawnTile;
             var meld = MeldInference.Infer(this.prevClosedAll, closed, drop == 4 ? null : called)
                        ?? MeldInference.Infer(this.prevClosedAll, closed, null);
-            if (meld is not null && this.TryAddMeld(meld, "hand delta"))
+            if (meld is not null && this.TryAddMeld(0, meld, "hand delta"))
                 this.ClearCallWindow("meld inferred from hand delta");
         }
 
@@ -291,6 +344,7 @@ public sealed class EventTracker
         this.prevClosedAll = [];
         this.trackedRoundWind = Wind.East;
         this.eventSeatWind = null;
+        Array.Clear(this.seatWinds);
         this.eventDoras = [];
         this.WinsThisSession = 0;
         this.LossesThisSession = 0;
@@ -322,7 +376,8 @@ public sealed class EventTracker
     // when the hand is not a plausible claim-time size (mid-transition).
     private void OpenCallWindow(List<string> options, Tile? offered, string source)
     {
-        var expected = HandTracking.MaxClosedTiles(this.melds.Count) - 1;
+        var meldCount = this.seatMelds[0].Count;
+        var expected = HandTracking.MaxClosedTiles(meldCount) - 1;
         var claimShape = this.lastClosed.Count == expected;
         var candidate = offered ?? (claimShape ? this.lastDrawnTile : null);
 
@@ -335,7 +390,7 @@ public sealed class EventTracker
             isClaim = candidate is { } k && claimShape && TileHelpers.CountKind(this.lastClosed, k) >= 3;
 
         if (isClaim && candidate is { } tile && claimShape
-            && !HandTracking.HasAnyLegalCall(this.lastClosed, tile, this.melds.Count, allowChi: this.lastOpponentDiscardSeat is 3 or -1))
+            && !HandTracking.HasAnyLegalCall(this.lastClosed, tile, meldCount, allowChi: this.lastOpponentDiscardSeat is 3 or -1))
         {
             this.Note($"call window ({source}) for {tile}: no legal local call — not ours; ignoring");
             this.ClearCallWindow("not our window");
@@ -361,14 +416,15 @@ public sealed class EventTracker
         this.callFromSeat = -1;
     }
 
-    private bool TryAddMeld(Meld meld, string source)
+    private bool TryAddMeld(int seat, Meld meld, string source)
     {
         var signature = MeldInference.Signature(meld);
-        if (signature == this.lastMeldSignature || this.melds.Count >= 4)
+        var list = this.seatMelds[seat];
+        if (signature == this.lastMeldSignature[seat] || list.Count >= 4)
             return false;
-        this.lastMeldSignature = signature;
-        this.melds.Add(meld);
-        this.Log($"[Meld] {source}: {meld.Type} [{string.Join(" ", meld.Tiles)}]");
+        this.lastMeldSignature[seat] = signature;
+        list.Add(meld);
+        this.Log($"[Meld] seat {seat} {source}: {meld.Type} [{string.Join(" ", meld.Tiles)}]");
         return true;
     }
 
@@ -376,8 +432,9 @@ public sealed class EventTracker
     {
         foreach (var list in this.seatDiscards)
             list.Clear();
-        this.melds.Clear();
-        this.lastMeldSignature = null;
+        foreach (var list in this.seatMelds)
+            list.Clear();
+        Array.Clear(this.lastMeldSignature);
         this.eventWallRemaining = 70;
         this.lastOpponentDiscard = null;
         this.lastOpponentDiscardSeat = -1;

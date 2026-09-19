@@ -1,7 +1,9 @@
 namespace MahjongHater.Core.State;
 
-// DecodedStruct + EventTracker → StateSnapshot. Pure; keeps only the previous snapshot
-// so Sequence bumps exactly when the content changes.
+// DecodedStruct + EventTracker → StateSnapshot. The struct's counters are the authority
+// (closed/meld/discard counts, riichi, scores); events fill in what the struct does not
+// store (discard tiles, chi tiles, red fives in melds). Pure; keeps only the previous
+// snapshot so Sequence bumps exactly when the content changes.
 public sealed class SnapshotBuilder
 {
     private StateSnapshot previous = StateSnapshot.Empty;
@@ -12,24 +14,25 @@ public sealed class SnapshotBuilder
 
     public StateSnapshot Build(DecodedStruct s, EventTracker t, EmjLayout layout, RulesetOptions ruleset)
     {
-        var melds = t.Melds.ToList();
+        var notes = new List<string>(4);
+        var seats = new SeatState[4];
+        for (var seat = 0; seat < 4; seat++)
+            seats[seat] = BuildSeat(seat, s, t, notes);
+
+        var melds = seats[0].Melds;
         var m = melds.Count;
         var closedSlots = s.ClosedTiles.ToList();
         var drawn = s.DrawnTile;
 
         // Slot 13 is ours only when it completes a 14-3m hand: after a call the claimed
-        // tile is parked there (already part of the meld), and during a claim prompt it
-        // may hold the offered tile.
-        var noDraw = HandTracking.MaxClosedTiles(m) - 1;
-        Tile? offeredFromSlot = null;
-        var includeDraw = drawn is not null;
-        if (drawn is not null && closedSlots.Count == noDraw + 1)
-            includeDraw = false;                       // post-call echo of the claimed tile
-        else if (drawn is not null && closedSlots.Count == noDraw && t.CallWindowActive && t.CallIsClaim)
-        {
-            includeDraw = false;                       // claim prompt: offered tile
-            offeredFromSlot = drawn;
-        }
+        // tile is parked there (already part of the meld) — the struct's closed count
+        // (which excludes the draw) makes that exact. A claim prompt never counts it.
+        var includeDraw = drawn is not null
+                          && closedSlots.Count + 1 == HandTracking.MaxClosedTiles(m)
+                          && !(t.CallWindowActive && t.CallIsClaim);
+        if (s.Us.ClosedTileCount is { } cc && cc != closedSlots.Count && s.StateCode != layout.StateCodes.Deal
+            && s.StateCode != layout.StateCodes.Win && s.StateCode != layout.StateCodes.PostWin)
+            notes.Add($"closed count {closedSlots.Count} ≠ struct {cc}");
 
         var hand = new List<Tile>(closedSlots);
         if (includeDraw && drawn is { } d)
@@ -39,38 +42,27 @@ public sealed class SnapshotBuilder
         if (healthy)
             this.lastHealthyHand = hand;
         else if (this.lastHealthyHand.Count > 0)
+        {
             hand = this.lastHealthyHand;               // keep advising on the last good read
+            notes.Add("hand slots failed to decode — showing the last good read");
+        }
 
-        var callTile = t.CallWindowActive && t.CallIsClaim ? t.CallTile ?? offeredFromSlot : null;
+        if (s.BaseShifted)
+            notes.Add($"icon base shifted to {s.EffectiveIconBase}");
+
+        var callTile = t.CallWindowActive && t.CallIsClaim ? t.CallTile : null;
         var options = t.CallWindowActive ? t.CallOptions.ToList() : [];
         var selfDeclare = t.CallWindowActive && !t.CallIsClaim;
 
-        var seats = new SeatState[4];
-        var riichiFlags = s.RiichiFlags;
-        for (var seat = 0; seat < 4; seat++)
-        {
-            var discards = s.SeatDiscards[seat] ?? t.SeatDiscardsOf(seat).ToList();
-            var riichi = seat == 0
-                ? t.RiichiDeclared || SeatRiichi(riichiFlags, 0)
-                : SeatRiichi(riichiFlags, seat);
-            seats[seat] = new SeatState(
-                seat,
-                discards,
-                seat == 0 ? melds : [],
-                riichi,
-                riichi ? Math.Max(0, discards.Count - 1) : -1,
-                s.Scores[seat] ?? 0);
-        }
-
         var doras = new List<Tile>();
-        if (s.DoraIndicator is { } dora)
+        if (s.DoraIndicator is { } dora && (s.DoraIndicatorCount ?? 1) > 0)
         {
             doras.Add(dora);
             // Event-cached indicators extend the struct's first one (kan doras).
             if (t.EventDoras.Count > 1 && TileHelpers.SameKind(t.EventDoras[0], dora))
                 doras.AddRange(t.EventDoras.Skip(1));
         }
-        else
+        else if (s.DoraIndicator is null)
         {
             doras.AddRange(t.EventDoras);
         }
@@ -79,9 +71,9 @@ public sealed class SnapshotBuilder
         if (s.UraDoraIndicator is { } u)
             ura.Add(u);
 
-        var stateCodes = layout.StateCodes;
+        var codes = layout.StateCodes;
         var totalClosed = hand.Count + (3 * m);
-        var phase = ComputePhase(s.StateCode, stateCodes, t.CallWindowActive, selfDeclare, totalClosed, hand.Count);
+        var phase = ComputePhase(s.StateCode, codes, t.CallWindowActive, selfDeclare, totalClosed, hand.Count);
 
         var legal = LegalAction.None;
         if (t.CallWindowActive)
@@ -105,9 +97,11 @@ public sealed class SnapshotBuilder
         if (phase == GamePhase.OurTurn || (selfDeclare && totalClosed == 14))
             legal |= LegalAction.Discard;
 
+        var countsMapped = s.Seats.Any(x => x.DiscardCount is not null);
         var wall = s.WallRemaining
-                   ?? (t.EventWallRemaining < 70 ? t.EventWallRemaining : (s.DiscardCounts.Any(c => c is not null) ? Math.Max(0, 70 - s.TotalDiscards) : t.EventWallRemaining));
+                   ?? (t.EventWallRemaining < 70 ? t.EventWallRemaining : (countsMapped ? Math.Max(0, 70 - s.TotalDiscards) : t.EventWallRemaining));
 
+        var dealer = s.DealerSeatRaw is { } ds && ds is >= 0 and <= 3 ? ds : t.DealerSeat;
         var snapshot = new StateSnapshot(
             Sequence: this.previous.Sequence,
             Phase: phase,
@@ -120,7 +114,7 @@ public sealed class SnapshotBuilder
             UraDoraIndicators: ura,
             RoundWind: WindFromRaw(s.RoundWindRaw) ?? t.RoundWind,
             SeatWind: WindFromRaw(s.SeatWindRaw) ?? t.SeatWind ?? Wind.East,
-            DealerSeat: s.DealerSeatRaw is { } ds && ds is >= 0 and <= 3 ? ds : 0,
+            DealerSeat: dealer < 0 ? 0 : dealer,
             WallRemaining: wall,
             Honba: s.Honba ?? 0,
             RiichiSticks: s.RiichiSticks ?? 0,
@@ -130,7 +124,10 @@ public sealed class SnapshotBuilder
             CallFromSeat: callTile is null ? -1 : t.CallFromSeat,
             CallOptions: options,
             Ruleset: ruleset,
-            LayoutHealthy: healthy);
+            LayoutHealthy: healthy)
+        {
+            Notes = notes,
+        };
 
         var key = ContentKey(snapshot);
         if (key == this.previousKey)
@@ -153,22 +150,80 @@ public sealed class SnapshotBuilder
         return this.previous;
     }
 
+    // Melds: the struct says how many and which tile a pon/kan is; the type-13 event
+    // list says the exact tiles (chi composition, red fives). Reconcile in order.
+    private static SeatState BuildSeat(int seat, DecodedStruct s, EventTracker t, List<string> notes)
+    {
+        var panel = s.Seats[seat];
+        var eventMelds = t.SeatMeldsOf(seat);
+        var melds = new List<Meld>(4);
+        if (panel.MeldCount is { } count)
+        {
+            var chis = eventMelds.Where(x => x.IsSequence).ToList();
+            var chiUsed = 0;
+            for (var i = 0; i < count; i++)
+            {
+                var sm = i < panel.Melds.Count ? panel.Melds[i] : null;
+                if (sm is null)
+                {
+                    if (i < eventMelds.Count)
+                        melds.Add(eventMelds[i]);
+                    else
+                        notes.Add($"seat {seat} meld {i}: not in struct or events");
+                    continue;
+                }
+
+                if (sm.IsChi)
+                {
+                    if (chiUsed < chis.Count)
+                        melds.Add(chis[chiUsed++]);
+                    else
+                        notes.Add($"seat {seat} meld {i}: chi composition unknown (no type-13 seen)");
+                    continue;
+                }
+
+                // Pon/kan: prefer the event's tiles (keeps red fives) when the kind matches.
+                var fromEvents = eventMelds.FirstOrDefault(x => !x.IsSequence && sm.Tile is { } st && TileHelpers.SameKind(x.Tiles[0], st)
+                                                                 && !melds.Contains(x));
+                if (fromEvents is not null)
+                    melds.Add(fromEvents);
+                else if (sm.Tile is { } tile)
+                    melds.Add(Meld.MakePon(tile, true));
+            }
+        }
+        else
+        {
+            melds.AddRange(eventMelds);
+        }
+
+        var discards = s.SeatDiscards[seat] ?? t.SeatDiscardsOf(seat).ToList();
+        var verified = panel.DiscardCount is not { } dc || discards.Count == dc;
+        if (!verified)
+            notes.Add($"seat {seat} discards {discards.Count}/{panel.DiscardCount} tracked");
+
+        var riichi = panel.RiichiDiscardIndex is not null || (seat == 0 && t.RiichiDeclared);
+        var riichiIndex = panel.RiichiDiscardIndex ?? (riichi ? Math.Max(0, discards.Count - 1) : -1);
+        return new SeatState(seat, discards, melds, riichi, riichiIndex, panel.Score ?? 0)
+        {
+            DiscardsVerified = verified,
+            DiscardCount = panel.DiscardCount ?? -1,
+        };
+    }
+
     private static GamePhase ComputePhase(int code, StateCodeTable codes, bool callWindow, bool selfDeclare, int totalClosed, int handCount)
     {
-        if (code == codes.Score || code == codes.Win)
+        if (code == codes.Score || code == codes.Win || code == codes.PostWin)
             return GamePhase.RoundEnd;
         if (callWindow)
             return selfDeclare ? GamePhase.SelfDeclare : GamePhase.CallPrompt;
+        if (code == codes.Deal)
+            return GamePhase.Dealing;
         if (handCount > 0 && totalClosed == 14)
             return GamePhase.OurTurn;
         if (handCount == 0)
-            return code == codes.Deal ? GamePhase.Dealing : GamePhase.Unknown;
+            return GamePhase.Unknown;
         return GamePhase.OthersTurn;
     }
-
-    // Provisional until docs/EMJ_STRUCT.md pins the encoding: one byte per seat, non-zero = riichi.
-    private static bool SeatRiichi(int? flags, int seat)
-        => flags is { } f && ((f >> (8 * seat)) & 0xFF) != 0;
 
     // Provisional: accepts a wind icon id or a 0..3 index.
     private static Wind? WindFromRaw(int? raw) => raw switch
@@ -187,16 +242,21 @@ public sealed class SnapshotBuilder
         foreach (var t in s.Hand)
             sb.Append(t).Append(',');
         sb.Append('|').Append(s.DrawnTile).Append('|');
-        foreach (var meld in s.OurMelds)
-            sb.Append(meld.Type).Append(':').Append(string.Join(",", meld.Tiles)).Append(';');
-        sb.Append('|');
         foreach (var seat in s.Seats)
-            sb.Append(seat.Discards.Count).Append(':').Append(seat.Riichi ? 1 : 0).Append(':').Append(seat.Score).Append(';');
+        {
+            sb.Append(seat.Discards.Count).Append(':').Append(seat.DiscardCount).Append(':').Append(seat.Riichi ? 1 : 0)
+              .Append(':').Append(seat.Score).Append(':');
+            foreach (var meld in seat.Melds)
+                sb.Append(meld.Type).Append('=').Append(string.Join(",", meld.Tiles)).Append(';');
+            sb.Append('/');
+        }
+
         sb.Append('|').Append(string.Join(",", s.DoraIndicators)).Append('|').Append(string.Join(",", s.UraDoraIndicators));
         sb.Append('|').Append(s.RoundWind).Append(s.SeatWind).Append(s.DealerSeat).Append('|').Append(s.WallRemaining)
           .Append('|').Append(s.Honba).Append(s.RiichiSticks).Append('|').Append(s.OurRiichi ? 1 : 0)
           .Append('|').Append((int)s.Legal).Append('|').Append(s.CallTile).Append(s.CallFromSeat)
-          .Append('|').Append(string.Join(",", s.CallOptions)).Append('|').Append(s.LayoutHealthy ? 1 : 0);
+          .Append('|').Append(string.Join(",", s.CallOptions)).Append('|').Append(s.LayoutHealthy ? 1 : 0)
+          .Append('|').Append(string.Join(";", s.Notes));
         return sb.ToString();
     }
 }

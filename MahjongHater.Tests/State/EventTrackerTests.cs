@@ -125,7 +125,7 @@ public class EventTrackerTests
         t.OnRefresh(Discard(1, "2z"), T0);
         t.OnRefresh(CallWindow("Pass", "Pon", "Pass"), T0);
         // Post-call: 11 closed, claimed tile parked in slot 13.
-        t.OnTick(StructFixture.Decoded("34567m11p3459s", "2z"), [], T0);
+        t.OnTick(StructFixture.PostPon, [], T0);
         var meld = Assert.Single(t.Melds);
         Assert.Equal(MeldType.Pon, meld.Type);
         Assert.False(t.CallWindowActive);
@@ -141,7 +141,7 @@ public class EventTrackerTests
         t.OnReceiveEvent(74, payload);
         t.OnReceiveEvent(74, payload);
         Assert.Single(t.Melds);
-        t.OnTick(StructFixture.Decoded("34567m11p3459s", "2z"), [], T0);
+        t.OnTick(StructFixture.PostPon, [], T0);
         Assert.Single(t.Melds);
     }
 
@@ -151,7 +151,7 @@ public class EventTrackerTests
         var t = new EventTracker();
         t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), [], T0);
         t.OnRefresh(Discard(1, "2z"), T0);
-        t.OnTick(StructFixture.Decoded("34567m11p3459s", "2z"), [], T0);
+        t.OnTick(StructFixture.PostPon, [], T0);
         Assert.Single(t.Melds);
         t.OnTick(StructFixture.Decoded("123m456p789s1122z", null), [], T0); // next deal, 13 closed
         Assert.Empty(t.Melds);

@@ -10,7 +10,7 @@ namespace MahjongHater.Core.State;
 // publishes Current (null while the Emj addon is closed).
 public sealed unsafe partial class EmjStateReader : IDisposable
 {
-    private const int RoundWindScanInterval = 60;
+    private const int WindScanInterval = 30;
 
     private readonly IGameGui gameGui;
     private readonly IPluginLog pluginLog;
@@ -93,9 +93,9 @@ public sealed unsafe partial class EmjStateReader : IDisposable
             var labels = EmjScanner.ScanCallButtonTexts(addon);
             this.tracker.OnTick(decoded, labels);
 
-            if (++this.ticks % RoundWindScanInterval == 0 && this.Layout.RoundWind is null
-                && EmjScanner.ScanRoundWindText(addon) is { } wind)
-                this.tracker.HintRoundWind(wind);
+            // Winds live in text nodes only (docs/EMJ_STRUCT.md, "Not in the struct").
+            if (++this.ticks % WindScanInterval == 0)
+                this.ScanWinds(addon);
 
             this.Current = this.builder.Build(decoded, this.tracker, this.Layout, new RulesetOptions(this.configuration.Kuitan));
         }
@@ -147,6 +147,27 @@ public sealed unsafe partial class EmjStateReader : IDisposable
         {
             this.pluginLog.Warning(ex, "[State] OnReceiveEvent failed.");
         }
+    }
+
+    // Seat winds from the four score-panel texts (dealer = "East"); round wind from the
+    // optional hidden text node (else the tracker keeps the type-32 win-screen string).
+    private void ScanWinds(AtkUnitBase* addon)
+    {
+        var nodes = this.Layout.Nodes;
+        var winds = new Wind?[4];
+        var any = false;
+        for (var seat = 0; seat < 4; seat++)
+        {
+            winds[seat] = EmjScanner.ParseWindText(EmjScanner.ReadTextAtPath(addon, nodes.SeatWindTexts[seat]));
+            any |= winds[seat] is not null;
+        }
+
+        if (any)
+            this.tracker.HintSeatWinds(winds);
+
+        if (this.Layout.RoundWind is null
+            && EmjScanner.ParseWindText(EmjScanner.ReadTextAtPath(addon, nodes.RoundWindText)) is { } round)
+            this.tracker.HintRoundWind(round);
     }
 
     private AtkUnitBase* GetAddon()

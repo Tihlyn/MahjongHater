@@ -118,31 +118,67 @@ internal static unsafe class EmjScanner
         }
     }
 
-    // Best-effort round wind from visible text nodes (English wind words or kanji).
-    public static Wind? ScanRoundWindText(AtkUnitBase* addon)
+    // Resolves a Cartographer-style path ("1/46/104/3": NodeIds from the root down).
+    // Segments resolve in the addon's flat NodeList until a component node is crossed,
+    // then inside that component's own NodeList.
+    public static AtkResNode* FindNodeByPath(AtkUnitBase* addon, string? path)
     {
-        var nodeList = addon->UldManager.NodeList;
-        var nodeCount = addon->UldManager.NodeListCount;
-        if (nodeList == null)
+        if (addon == null || string.IsNullOrWhiteSpace(path))
             return null;
 
-        for (var ni = 0; ni < nodeCount; ni++)
+        var list = addon->UldManager.NodeList;
+        var count = (int)addon->UldManager.NodeListCount;
+        AtkResNode* current = null;
+        foreach (var segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
         {
-            var node = nodeList[ni];
-            if (node == null || !node->IsVisible())
-                continue;
-            var textNode = node->GetAsAtkTextNode();
-            if (textNode == null)
-                continue;
-            var tx = ReadTextNode(textNode);
-            if (tx.Length == 0)
-                continue;
-            if (tx.Contains("East", StringComparison.OrdinalIgnoreCase) || tx.Contains('東')) return Wind.East;
-            if (tx.Contains("South", StringComparison.OrdinalIgnoreCase) || tx.Contains('南')) return Wind.South;
-            if (tx.Contains("West", StringComparison.OrdinalIgnoreCase) || tx.Contains('西')) return Wind.West;
-            if (tx.Contains("North", StringComparison.OrdinalIgnoreCase) || tx.Contains('北')) return Wind.North;
+            if (!uint.TryParse(segment, out var id) || list == null)
+                return null;
+
+            current = null;
+            for (var i = 0; i < count; i++)
+            {
+                var n = list[i];
+                if (n != null && n->NodeId == id)
+                {
+                    current = n;
+                    break;
+                }
+            }
+
+            if (current == null)
+                return null;
+
+            if ((ushort)current->Type >= 1000)
+            {
+                var comp = ((AtkComponentNode*)current)->Component;
+                if (comp == null)
+                    return null;
+                list = comp->UldManager.NodeList;
+                count = comp->UldManager.NodeListCount;
+            }
         }
 
+        return current;
+    }
+
+    // Trimmed text of the text node at a path, null when absent or not a text node.
+    public static string? ReadTextAtPath(AtkUnitBase* addon, string? path)
+    {
+        var node = FindNodeByPath(addon, path);
+        if (node == null)
+            return null;
+        var text = node->GetAsAtkTextNode();
+        return text == null ? null : ReadTextNode(text);
+    }
+
+    public static Wind? ParseWindText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+        if (text.Contains("East", StringComparison.OrdinalIgnoreCase) || text.Contains('東')) return Wind.East;
+        if (text.Contains("South", StringComparison.OrdinalIgnoreCase) || text.Contains('南')) return Wind.South;
+        if (text.Contains("West", StringComparison.OrdinalIgnoreCase) || text.Contains('西')) return Wind.West;
+        if (text.Contains("North", StringComparison.OrdinalIgnoreCase) || text.Contains('北')) return Wind.North;
         return null;
     }
 

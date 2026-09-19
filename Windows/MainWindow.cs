@@ -78,6 +78,8 @@ public sealed class MainWindow : Window
         {
             if (!state.LayoutHealthy)
                 ImGui.TextColored(Red, "Layout check failed — hand read may be stale (see /struct).");
+            foreach (var note in state.Notes)
+                ImGui.TextDisabled(note);
 
             if (state.Hand.Count > 0)
                 this.DrawCurrentHand(state);
