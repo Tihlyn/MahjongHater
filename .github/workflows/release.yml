@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+# Serialize publication and main updates; never cancel a release halfway through.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Validate tag
+        shell: pwsh
+        run: |
+          python tools/make_repo_json.py --tag $env:GITHUB_REF_NAME --output "$env:RUNNER_TEMP/repo.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Tag and version validation failed.' }
+      - uses: ./.github/actions/setup-dalamud
+        with:
+          track: ${{ vars.DALAMUD_TRACK || 'release' }}
+      - name: Build
+        run: dotnet build MahjongHater.csproj -c Release -nologo
+      - name: Test
+        run: dotnet test MahjongHater.Tests -c Release -nologo
+      - name: Prepare release files
+        shell: pwsh
+        run: |
+          $package = 'bin/Release/net10.0-windows/MahjongHater'
+          Copy-Item "$package/latest.zip" "$package/MahjongHater-$env:GITHUB_REF_NAME.zip"
+          # Use the stamped manifest from the same build that is being published.
+          python tools/make_repo_json.py --manifest "$package/MahjongHater.json" --tag $env:GITHUB_REF_NAME --output "$env:RUNNER_TEMP/repo.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged manifest validation failed.' }
+      - name: Generate notes since the previous tag
+        shell: pwsh
+        run: |
+          $previous = git describe --tags --match 'v*' --exclude=$env:GITHUB_REF_NAME --abbrev=0 $env:GITHUB_SHA 2>$null
+          # No earlier reachable version tag means the notes cover the full history.
+          $range = if ($LASTEXITCODE -eq 0) { "$previous..$env:GITHUB_SHA" } else { $env:GITHUB_SHA }
+          $notes = git log --reverse --format='- %s (%h)' $range
+          if ($LASTEXITCODE -ne 0) { throw 'Could not generate release notes.' }
+          $notes | Set-Content "$env:RUNNER_TEMP/release-notes.md" -Encoding utf8
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: ${{ runner.temp }}/release-notes.md
+          fail_on_unmatched_files: true
+          files: |
+            bin/Release/net10.0-windows/MahjongHater/latest.zip
+            bin/Release/net10.0-windows/MahjongHater/MahjongHater-v*.zip
+      - name: Check out main for repository update
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: repository-main
+      - name: Update custom repository
+        shell: pwsh
+        working-directory: repository-main
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $incoming = (Get-Content "$env:RUNNER_TEMP/repo.json" -Raw | ConvertFrom-Json)[0]
+          if (Test-Path repo.json) {
+            $current = (Get-Content repo.json -Raw | ConvertFrom-Json)[0]
+            if ([version]$current.AssemblyVersion -gt [version]$incoming.AssemblyVersion) {
+              Write-Host 'A newer release is already listed; keeping its repository entry.'
+              exit 0
+            }
+          }
+          Copy-Item "$env:RUNNER_TEMP/repo.json" repo.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add repo.json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not stage repo.json.' }
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          if ($LASTEXITCODE -ne 1) { throw 'Could not inspect repo.json changes.' }
+          git commit -m "chore(release): update repository for $env:GITHUB_REF_NAME [skip ci]"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not commit repo.json.' }
+          # Replay only this commit if main advanced during publication; never force push.
+          git pull --rebase origin main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not rebase repo.json; resolve and rerun the workflow.' }
+          git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not push repo.json; check branch rules and rerun the workflow.' }
