@@ -149,6 +149,11 @@ public sealed class LearningTests
         Assert.Equal(0, opponents.Danger(Tile.Parse("4s"), 1));          // genbutsu
         Assert.InRange(opponents.Danger(Tile.Parse("5p"), 1), 0, 1);
         Assert.Equal("learned", opponents.Explain(Tile.Parse("5p"), 1).Why);
+        var tablesOnly = new LearnedOpponentModel(model, useLearnedDanger: false);
+        tablesOnly.Update(state);
+        Assert.Equal(opponents.TenpaiProbability(1), tablesOnly.TenpaiProbability(1));
+        Assert.NotEqual("learned", tablesOnly.Explain(Tile.Parse("5p"), 1).Why);
+        Assert.Equal(new OpponentModel().Danger(Tile.Parse("5p"), 1), 0, 6);   // sanity: fresh model has no state
         // A rule profile the model was not trained for: the table model answers instead.
         opponents.Update(state with { Ruleset = new RulesetOptions(true, 4) });
         Assert.NotEqual("learned", opponents.Explain(Tile.Parse("5p"), 1).Why);
@@ -171,7 +176,7 @@ public sealed class LearningTests
         var report = LearningEvaluation.Run(corpus, model, PolicyWeights.Default, new EvaluationOptions { Split = "all", Threads = 2 });
         Assert.Equal(corpus.Count, report.Games);
         Assert.True(report.Decisions > 0);
-        foreach (var name in new[] { LearningEvaluation.Heuristic, LearningEvaluation.HeuristicEv, LearningEvaluation.Legacy, LearningEvaluation.Learned, LearningEvaluation.Hybrid })
+        foreach (var name in new[] { LearningEvaluation.Heuristic, LearningEvaluation.HeuristicEv, LearningEvaluation.Legacy, LearningEvaluation.Learned, LearningEvaluation.Hybrid, LearningEvaluation.HybridTenpai })
         {
             var all = report.Agreement[name]["all"];
             Assert.Equal(report.Decisions, all.Decisions);

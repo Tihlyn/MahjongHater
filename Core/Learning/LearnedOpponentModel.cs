@@ -3,7 +3,10 @@ using MahjongHater.Core.State;
 
 namespace MahjongHater.Core.Learning;
 
-public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? weights = null) : IOpponentModel
+// `useLearnedDanger = false` keeps the measured danger tables and takes only the tenpai head
+// from the network: on Phoenix replays the tables discriminate ron tiles slightly better
+// while the learned tenpai head is better calibrated (docs/research/EVALUATION_RUNS.md).
+public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? weights = null, bool useLearnedDanger = true) : IOpponentModel
 {
     private readonly OpponentModel fallback = new(weights);
     private readonly TileDangerModel ranks = new(weights: weights);
@@ -29,7 +32,7 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
                 var index = (seat - 1) * 34 + kind;
                 var c = 8 + seat * 6;
                 var safe = features[c * 34 + kind] > 0 || features[(c + 5) * 34 + kind] > 0;
-                danger[seat, kind] = safe ? 0 : network.Wait(output[77 + index]);
+                danger[seat, kind] = safe ? 0 : useLearnedDanger ? network.Wait(output[77 + index]) : this.fallback.Danger(TileHelpers.FromIndex(kind), seat);
                 points[seat, kind] = network.Points(output[179 + index]);
                 probability += danger[seat, kind];
                 values[seat] += danger[seat, kind] * points[seat, kind];
@@ -48,6 +51,7 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
     public DangerEstimate Explain(Tile tile, int seat)
     {
         if (Volatile.Read(ref this.view) is not { } current) return this.fallback.Explain(tile, seat);
+        if (!useLearnedDanger) return this.fallback.Explain(tile, seat);
         var probability = current.Danger[Seat(seat), TileHelpers.ToIndex(tile)];
         return new DangerEstimate(probability, this.ranks.RankOf(probability), probability == 0 ? "known safe" : "learned conditional ron probability", "learned");
     }
