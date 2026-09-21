@@ -59,9 +59,12 @@ public sealed class Plugin : IDalamudPlugin
                 if (model.Rules.Kuitan != this.Configuration.Kuitan || model.Rules.HandsInMatch != (int)this.Configuration.GameLength
                     || model.Rules.DoubleWindPairFu != this.Configuration.DoubleWindPairFu)
                     throw new InvalidDataException("Learned model rule profile differs from plugin configuration.");
-                var opponents = new MahjongHater.Core.Learning.LearnedOpponentModel(model, weights);
-                policy = new MahjongHater.Core.Learning.LearnedPolicy(new DecisionPolicy(opponents: opponents, weights: weights), model, weights);
-                pluginLog.Information($"Learned policy loaded ({model.Status}); exact cache remains first when enabled.");
+                // "learned-guarded" (docs/research/EVALUATION_RUNS.md): the network's discard
+                // ordering and tenpai head inside the measured danger budget; danger itself stays
+                // on the Houou tables, riichi/calls/wins on the heuristic rules.
+                var opponents = new MahjongHater.Core.Learning.LearnedOpponentModel(model, weights, useLearnedDanger: false);
+                policy = new DecisionPolicy(opponents: opponents, discards: new MahjongHater.Core.Learning.LearnedDiscardPolicy(model, weights), weights: weights);
+                pluginLog.Information($"Learned policy loaded ({model.Status}) as learned-guarded; exact cache remains first when enabled.");
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
             {

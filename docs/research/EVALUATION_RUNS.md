@@ -11,7 +11,8 @@ live under `artifacts/` (gitignored); SHA-256 of the archives:
 | n24 (2023-07 → 2024-11) | 1 696 | 1 431 | 676 571 | c3bb2032…ab72a5f |
 | n28 (→ 2025-10) | 3 181 | 1 681 | 785 327 | 9a24748d…7fc24a5 |
 | n29 (→ 2026-01) | 4 560 | 3 832 | 1 881 154 | 97d7836b…db22bc |
-| n30 (→ 2026-05) | 11 574 | (importing) | | 6dc6bacd…0aa05c |
+| n30 (→ 2026-05) | 11 574 | 9 563 | 4 534 857 | 6dc6bacd…0aa05c |
+| combined (`corpus-all`, deduplicated) | 21 011 | 16 479 | 7 864 306 | |
 
 Rejected files are East-only games or games whose acting players are all below 7 dan.
 
@@ -65,3 +66,47 @@ often against a riichi and cutting its counterfactual deal-in rate below the Pho
 own. Remaining gaps to humans: quiet-board efficiency at 2+-shanten (44 % vs 45 %) and
 open-hand situations (51 % vs 53 %), where the open-seat tenpai estimate is now slightly
 under-confident (29 % vs 34 %).
+
+## Run 3 — first real model: `dataset-n24` (all 1 431 games), c48/h128, 12 epochs
+
+`learn-data` 671 k rows (519 k train), `train.py --channels 48 --hidden 128`, 5 min on CPU
+(≈ 10 s/epoch once the memmap is warm). Validation loss 1.39 → 1.155 (plateau from epoch 10).
+Test: policy top-1 **65.2 %**, NLL 0.979 (uniform-legal 2.363), tenpai Brier 0.050,
+PyTorch/C# parity 5.7e-6.
+
+## Run 4 — n24 test split with the run-3 model, all policies
+
+| | heuristic | legacy | learned | hybrid | hybrid-tenpai | **learned-guarded** |
+|---|---:|---:|---:|---:|---:|---:|
+| agreement, all | 51.0 % | 51.0 % | 63.6 % | 54.8 % | 50.7 % | **61.6 %** |
+| agreement, human-riichi (n=1 331) | 85.6 % | 80.3 % | 58.1 % | 86.9 % | 85.7 % | 71.9 % |
+| agreement, vs-riichi | 57.5 % | 52.0 % | 61.6 % | 58.2 % | 57.3 % | 60.6 % |
+| agreement, quiet | 49.3 % | 50.4 % | 64.7 % | 54.0 % | 49.2 % | 63.3 % |
+| agreement, tenpai | 67.4 % | 67.8 % | 73.2 % | 69.3 % | 67.0 % | 65.4 % |
+| agreement, 2+-shanten | 44.1 % | 45.4 % | 61.3 % | 48.5 % | 44.1 % | 60.9 % |
+| chosen-tile deal-in, vs-riichi (human 2.18 %) | 1.94 % | 2.66 % | 2.08 % | 2.42 % | 1.93 % | **1.53 %** |
+| chosen-tile deal-in, vs-open (human 2.22 %) | 2.19 % | 3.11 % | 2.61 % | 2.56 % | 2.12 % | 1.89 % |
+| chosen-tile deal-in, late (human 2.61 %) | 2.35 % | 3.49 % | 2.54 % | 2.69 % | 2.32 % | 2.00 % |
+| tenpai calibration closed / open (ECE) | 0.013 / 0.066 | | 0.0045 / 0.043 (learned head) | | | |
+| danger calibration vs-riichi in-hand (Brier) | 0.0648 (tables) | | 0.0658 (learned head) | | | |
+
+Policies: `learned` = `LearnedPolicy` (pure imitation, learned opponent model); `hybrid` =
+`DecisionPolicy` with the full learned opponent model; `hybrid-tenpai` = learned tenpai head,
+table danger; `learned-guarded` = `LearnedDiscardPolicy` (imitation ordering, discard + riichi
+mass summed per tile) under the danger budget with `hybrid-tenpai` opponents.
+
+Conclusions:
+- Pure imitation reproduces human efficiency (64 % on quiet boards, 73 % at tenpai) and human
+  risk (2.08 % deal-in), and under-declares riichi (riichi is ~1.6 % of rows).
+- The learned tenpai head beats the refit logistic (closed ECE 0.0045 vs 0.013); the learned
+  danger head does **not** beat the Houou tables (in-hand Brier 0.0658 vs 0.0648) and the
+  full hybrid deals in more (2.42 %) — keep the tables for danger.
+- `learned-guarded` gets most of the imitation gain (61.6 %) with the lowest deal-in rate of
+  every variant (1.53 % vs riichi, 30 % below the humans themselves). It is now what the
+  plugin runs when "Experimental learned policy" is on. Its riichi agreement (72 %) is bounded
+  by `RiichiPolicy`, not the network.
+
+## Run 5 — `dataset-all-8k`: 8 000 games from the combined corpus, c96/h256
+
+3.03 M training rows (36 GB); ≈ 22 min/epoch on 12 threads. Epoch 1 validation loss 1.118
+(already below run 3's best 1.155). Full run and its test-split evaluation: pending.
