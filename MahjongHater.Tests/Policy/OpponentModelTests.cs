@@ -144,10 +144,11 @@ public class OpponentModelTests
     }
 
     [Fact]
-    public void Early_outside_and_late_middle_discards_increase_tenpai()
+    public void Late_middle_discards_increase_tenpai()
     {
-        Assert.True(Model(Seat(Snap(""), discards: "19m19p19s456m")).TenpaiProbability(1)
-            > Model(Seat(Snap(""), discards: "234m567p123z")).TenpaiProbability(1));
+        // Same discard count; the second seat threw middle tiles from turn 7 on.
+        Assert.True(Model(Seat(Snap(""), discards: "19m19p19s456m4p")).TenpaiProbability(1)
+            > Model(Seat(Snap(""), discards: "19m19p19s123z9s")).TenpaiProbability(1));
     }
 
     [Fact]

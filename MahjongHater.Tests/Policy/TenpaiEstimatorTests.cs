@@ -12,15 +12,18 @@ public class TenpaiEstimatorTests
     private static double P(int discards, int melds = 0, double early = 0, double late = 0, bool riichi = false)
         => TenpaiEstimator.Estimate(new TenpaiFeatures(discards, melds, riichi, early, late), W);
 
+    // Reliability of the 2026-09-21 Phoenix fit (learn-fit-tenpai, archive n24 train split):
+    // observed tenpai of NON-riichi seats by discard count 0-6: 1.3 %, 7-10: 11.8 %,
+    // 11-14: 24.3 %, 15-18: 35.6 %. Closed hands rarely stay dama, hence the low early values.
     [Theory]
-    [InlineData(6, 0, 0.03, 0.09)]     // closed hand, early: rare
-    [InlineData(10, 0, 0.12, 0.24)]
-    [InlineData(14, 0, 0.28, 0.45)]
-    [InlineData(18, 0, 0.50, 0.70)]
-    [InlineData(10, 1, 0.28, 0.45)]    // one call at turn 10
-    [InlineData(12, 2, 0.60, 0.78)]    // two calls at turn 12
-    [InlineData(8, 3, 0.60, 0.80)]     // three calls at turn 8
-    public void Default_weights_follow_the_literature_curves(int discards, int melds, double lo, double hi)
+    [InlineData(4, 0, 0.005, 0.03)]
+    [InlineData(9, 0, 0.05, 0.15)]
+    [InlineData(13, 0, 0.10, 0.25)]
+    [InlineData(17, 0, 0.20, 0.45)]
+    [InlineData(10, 1, 0.20, 0.40)]    // one call at turn 10
+    [InlineData(12, 2, 0.55, 0.80)]    // two calls at turn 12
+    [InlineData(8, 3, 0.55, 0.85)]     // three calls at turn 8
+    public void Default_weights_follow_the_replay_fit(int discards, int melds, double lo, double hi)
     {
         Assert.InRange(P(discards, melds), lo, hi);
     }
@@ -45,8 +48,10 @@ public class TenpaiEstimatorTests
             Assert.True(P(t + 1) >= P(t), $"turn {t}");
         Assert.True(P(10, 1) > P(10, 0));
         Assert.True(P(10, 2) > P(10, 1));
-        Assert.True(P(10, 0, early: 1) > P(10, 0));
+        // The replay fit found no signal in early outside discards (weight ≈ 0) and a
+        // small one in late middle discards.
         Assert.True(P(10, 0, late: 1) > P(10, 0));
+        Assert.InRange(P(10, 0, early: 1) / P(10, 0), 0.8, 1.2);
     }
 
     [Fact]

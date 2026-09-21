@@ -188,13 +188,17 @@ public sealed record PolicyWeights
     public double GenbutsuDanger { get; init; } = 0.0;
     public int MinHanDoman { get; init; } = 1;               // Doman requires a yaku; keep as data
     public double FoldMinValue { get; init; } = 2;
-    // Logistic tenpai estimate (see TenpaiEstimator for the anchor curves; re-fit with
-    // tools/fit_tenpai.py against tenpai_calibration.csv).
-    public double TenpaiLogitIntercept { get; init; } = -4.1;
-    public double TenpaiLogitPerDiscard { get; init; } = 0.25;
-    public double TenpaiLogitPerMeld { get; init; } = 0.95;
-    public double TenpaiLogitEarlyOutside { get; init; } = 0.3;
-    public double TenpaiLogitLateMiddle { get; init; } = 0.5;
+    // Logistic tenpai estimate for seats NOT in riichi. Fitted 2026-09-21 with
+    // `Precompute learn-fit-tenpai` on 1.47 M opponent rows from Tenhou Phoenix replays
+    // (archive n24, train split): log-loss 0.229 → 0.181. The literature curves the
+    // previous defaults (-4.1, 0.25, 0.95, 0.3, 0.5) reproduced include riichi hands, which
+    // is why they overshot closed non-riichi seats 4×. Re-fit for the FF14 population with
+    // tools/fit_tenpai.py once tenpai_calibration.csv has a few thousand rows.
+    public double TenpaiLogitIntercept { get; init; } = -4.861;
+    public double TenpaiLogitPerDiscard { get; init; } = 0.229;
+    public double TenpaiLogitPerMeld { get; init; } = 1.197;
+    public double TenpaiLogitEarlyOutside { get; init; } = -0.085;
+    public double TenpaiLogitLateMiddle { get; init; } = 0.137;
     public double TenpaiMaxWithoutRiichi { get; init; } = 0.9;
     public double KabeDiscount { get; init; } = 0.4;
     public double HonorDanger { get; init; } = 0.16;
