@@ -131,6 +131,7 @@ public sealed class SnapshotBuilder
             LayoutHealthy: healthy)
         {
             Notes = notes,
+            HandNumber = t.HandNumber,
             CallShapes = t.CallWindowActive
                 ? t.CallShapes.Select(s => new Meld(MeldType.Chi, s, true)).ToList()
                 : [],
@@ -210,10 +211,12 @@ public sealed class SnapshotBuilder
 
         var riichi = panel.RiichiDiscardIndex is not null || (seat == 0 && t.RiichiDeclared);
         var riichiIndex = panel.RiichiDiscardIndex ?? (riichi ? Math.Max(0, discards.Count - 1) : -1);
+        var order = t.SeatDiscardOrderOf(seat);
         return new SeatState(seat, discards, melds, riichi, riichiIndex, panel.Score ?? 0)
         {
             DiscardsVerified = verified,
             DiscardCount = panel.DiscardCount ?? -1,
+            DiscardOrder = order.Count == discards.Count ? order.ToList() : [],
         };
     }
 

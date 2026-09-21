@@ -7,6 +7,10 @@ risk and the reasoning behind it. The best discard is also outlined on the game'
 
 Current version: **1.2.2** (see [CHANGELOG.md](CHANGELOG.md)).
 
+The `experimental` branch also includes a standalone four-player simulator and
+resumable MCTS database generator. See the [Windows compute-box guide](docs/SIMULATOR.md)
+for packaging, generation, retrieval and current limitations.
+
 ## What it does
 
 - **Reads the game, not the screen.** The local hand, per-seat discard/meld/riichi counters, melds
@@ -55,7 +59,8 @@ repositories, save, then install **MahjongHater** from the plugin installer.
 The **AUTO PLAY** card (main window, under the session metrics):
 
 - **Play the recommended actions** — executes each fresh decision once (discard by slot, list rows
-  by label, chi-shape buttons), retries once the state has not moved for 6 s, advances recaps every
+  by label, chi-shape buttons) after a random 2–4 second pause with an on-screen countdown.
+  It retries once the state has not moved for 6 s, advances recaps every
   4 s and clicks *End match* / a confirmation at the end. Decisions on a call window that only the
   panel texts reported (no game event) are not answered.
 - **Requeue when a match ends** — registers for the chosen solo duty as soon as the table closes
@@ -106,6 +111,9 @@ evidence), [docs/POLICY_NOTES.md](docs/POLICY_NOTES.md) (policy formulas and lim
 (the 2026-09 rework and its status).
 
 ## Development
+
+Experimental offline policy work: [precomputed belief-state engine](docs/PRECOMPUTED_POLICY.md)
+documents the standalone trainer, snapshot capture, opt-in lookup and current simulator limits.
 
 - Requirements: .NET 10 SDK, a Dalamud dev install (`%APPDATA%\XIVLauncher\addon\Hooks\dev`, or
   set `DALAMUD_HOME`). `dotnet build MahjongHater.csproj -c Release` writes

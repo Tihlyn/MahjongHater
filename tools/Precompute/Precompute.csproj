@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <!-- Standalone offline build: no game client or Dalamud dependency. -->
+  <ItemGroup>
+    <Compile Include="../../Core/*.cs" Exclude="../../Core/EmjScanner.cs" LinkBase="Core" />
+    <Compile Include="../../Core/Policy/*.cs" LinkBase="Core/Policy" />
+    <Compile Include="../../Core/Precomputed/*.cs" LinkBase="Core/Precomputed" />
+    <Compile Include="../../Core/Simulation/*.cs" LinkBase="Core/Simulation" />
+    <Compile Include="../../Core/Replay/*.cs" LinkBase="Core/Replay" />
+    <Compile Include="../../Core/Learning/*.cs" LinkBase="Core/Learning" />
+    <Compile Include="../../Core/State/StateSnapshot.cs" Link="Core/State/StateSnapshot.cs" />
+    <EmbeddedResource Include="../../resources/policy/deal_in_rates.json" LogicalName="MahjongHater.resources.policy.deal_in_rates.json" />
+  </ItemGroup>
+</Project>

@@ -4,8 +4,9 @@ namespace MahjongHater.Core.State;
 // touches game memory and tests can replay recorded frames.
 public sealed class AtkFrame
 {
-    // Slots beyond this are never consumed by the tracker (highest used: [21] doras, [37] deal hand).
-    public const int MaxCopied = 40;
+    // Highest slot the tracker reads is [37] (deal hand); the rest of the prefix exists so a
+    // round-end hand reveal (up to 4 × 14 icons) can be captured and its layout confirmed.
+    public const int MaxCopied = 96;
 
     private readonly int[] ints;
     private readonly string?[] strings;

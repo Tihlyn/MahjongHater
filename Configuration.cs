@@ -21,6 +21,21 @@ public sealed class Configuration : IPluginConfiguration
 
     public bool ShowOverlay { get; set; } = true;
 
+    // Defense v2 (docs/DEFENSE_PLAN.md): table-driven danger + push/fold budget. Off = the
+    // v1.3 heuristics, kept for A/B auto-play runs.
+    public bool DefenseV2 { get; set; } = true;
+
+    // Experimental offline discard lookup and optional public-state corpus capture.
+    // Both take effect after a plugin reload.
+    public bool PrecomputedPolicyEnabled { get; set; }
+
+    public bool LearnedPolicyEnabled { get; set; }
+
+    public bool CapturePrecomputedSnapshots { get; set; }
+
+    // Tag written into the calibration CSVs so human and NPC opponents are fitted apart.
+    public string CalibrationPopulation { get; set; } = "human";
+
     // Auto play / requeue (dev tooling for unattended matches; both live in the main
     // window). Persisted so a hot reload mid-session picks up where it left off.
     public bool AutoPlay { get; set; }

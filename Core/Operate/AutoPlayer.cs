@@ -44,6 +44,9 @@ public sealed class AutoPlayer
     private DateTime actedAtUtc;
     private int attempts;
 
+    private string? pendingFingerprint;
+    private DateTime actAfterUtc;
+
     private long lastSequence = -1;
     private DateTime lastChangeUtc;
     private DateTime lastRecapClickUtc;
@@ -118,6 +121,7 @@ public sealed class AutoPlayer
 
         if (state.Phase == GamePhase.RoundEnd)
         {
+            this.pendingFingerprint = null;
             this.HandleRecap(now);
             return;
         }
@@ -142,18 +146,21 @@ public sealed class AutoPlayer
         var publication = this.analysis.Latest;
         if (publication?.Choice is not { } choice || publication.Status != AnalysisStatus.Ready)
         {
+            this.pendingFingerprint = null;
             this.Status = this.analysis.IsStalled ? "Analysis stalled" : publication is null ? "Waiting for analysis" : $"Analysis {publication.Status}";
             return;
         }
 
         if (publication.Fingerprint != AnalysisService.ComputeFingerprint(state))
         {
+            this.pendingFingerprint = null;
             this.Status = "Waiting for a fresh decision";
             return;
         }
 
         if (!IsActionable(choice, state))
         {
+            this.pendingFingerprint = null;
             this.Status = choice.Kind == ActionKind.None ? $"Decision: none — {choice.Summary}"
                 : state.Phase == GamePhase.OthersTurn ? "Waiting for others" : $"Decision {choice.Kind}: nothing to do";
             return;
@@ -166,12 +173,14 @@ public sealed class AutoPlayer
         var labelOnly = this.reader.Tracker.CallWindowFromLabels;
         if (labelOnly && choice.Kind is not (ActionKind.Discard or ActionKind.Riichi))
         {
+            this.pendingFingerprint = null;
             this.Status = $"Decision {choice.Kind} on a label-only window — not answering";
             return;
         }
 
         if (publication.Fingerprint == this.actedFingerprint)
         {
+            this.pendingFingerprint = null;
             if (this.attempts >= MaxAttempts || now - this.actedAtUtc < RetryAfter)
             {
                 this.Status = $"Acted {choice.Kind} {choice.Tile?.ToString() ?? string.Empty} ({this.attempts}×), waiting for the game";
@@ -183,6 +192,22 @@ public sealed class AutoPlayer
         }
         else
         {
+            // Start once the recommendation is ready and actionable so it remains
+            // readable. Poll the deadline without blocking the framework thread;
+            // the freshness checks above cancel it if the game moves on.
+            if (this.pendingFingerprint != publication.Fingerprint)
+            {
+                this.pendingFingerprint = publication.Fingerprint;
+                this.actAfterUtc = now + TimeSpan.FromSeconds(2 + Random.Shared.NextDouble() * 2);
+            }
+
+            if (now < this.actAfterUtc)
+            {
+                this.Status = $"In {(this.actAfterUtc - now).TotalSeconds:F1} s: {choice.Kind} {choice.Tile?.ToString() ?? string.Empty}";
+                return;
+            }
+
+            this.pendingFingerprint = null;
             this.actedFingerprint = publication.Fingerprint;
             this.attempts = 1;
             this.DecisionsExecuted++;
@@ -374,6 +399,7 @@ public sealed class AutoPlayer
 
     private void ResetProgress()
     {
+        this.pendingFingerprint = null;
         this.actedFingerprint = null;
         this.attempts = 0;
         this.lastSequence = -1;

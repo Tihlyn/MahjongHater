@@ -10,6 +10,7 @@ public sealed class DecisionPolicy : IPolicy
     private readonly IPushFoldPolicy pushFold;
     private readonly ICallPolicy calls;
     private readonly IRiichiPolicy riichi;
+    private readonly BetaoriPolicy betaori;
     private readonly PolicyWeights weights;
     // Only used for the between-turns hand summary (13 tiles, nothing legal).
     private readonly HandAnalyzer analyzer;
@@ -25,6 +26,7 @@ public sealed class DecisionPolicy : IPolicy
         this.pushFold = pushFold ?? new PushFoldPolicy(this.weights);
         this.calls = calls ?? new CallPolicy();
         this.riichi = riichi ?? new RiichiPolicy(this.weights);
+        this.betaori = new BetaoriPolicy(this.weights);
     }
 
     public ActionChoice Choose(StateSnapshot state, CancellationToken ct)
@@ -71,8 +73,20 @@ public sealed class DecisionPolicy : IPolicy
         ct.ThrowIfCancellationRequested();
         this.opponents.Update(state);
         ct.ThrowIfCancellationRequested();
-        steps.Add(new Reason("opponents", string.Join(", ", Enumerable.Range(1, 3)
-            .Select(s => $"seat {s} tenpai {this.opponents.TenpaiProbability(s):P0}"))));
+        steps.Add(new Reason("opponents", string.Join("; ", Enumerable.Range(1, 3).Select(s =>
+        {
+            var seat = state.Seats[s];
+            var who = s == state.DealerSeat ? $"seat {s} (dealer)" : $"seat {s}";
+            var live = this.opponents.LiveSuji(s) is var ls and >= 0 ? $", {ls} live suji" : string.Empty;
+            if (seat.Riichi)
+            {
+                var tile = seat.RiichiDiscardIndex >= 0 && seat.RiichiDiscardIndex < seat.Discards.Count ? $" on {seat.Discards[seat.RiichiDiscardIndex]}" : string.Empty;
+                return $"{who} riichi{tile}, ~{this.opponents.Value(s):0} pts{live}";
+            }
+
+            var melds = seat.Melds.Count(m => m.IsOpen);
+            return $"{who} tenpai {this.opponents.TenpaiProbability(s):P0}{(melds > 0 ? $", {melds} call(s), ~{this.opponents.Value(s):0} pts" : string.Empty)}{live}";
+        }))));
 
         if ((state.Legal & Calls) != 0)
         {
@@ -111,15 +125,48 @@ public sealed class DecisionPolicy : IPolicy
 
         var best = candidates[0];
         steps.Add(new Reason("discard", $"Best attack discard {best.Tile}: {best.ShantenAfter}-shanten, {best.Ukeire} live improving tiles."));
-        var stance = this.pushFold.Evaluate(state, this.opponents, best, out var foldReason);
-        ct.ThrowIfCancellationRequested();
-        steps.Add(foldReason);
-        if (stance == PushFoldStance.Fold)
+        PushFoldStance stance;
+        if (this.weights.DefenseModel == DefenseModel.V2)
         {
-            candidates = candidates.OrderBy(c => c.DealInRisk).ThenBy(c => c.ShantenAfter)
-                .ThenByDescending(c => c.Score).ThenBy(c => c.Tile).ToArray();
-            best = candidates[0];
-            steps.Add(new Reason("discard", $"Safest discard {best.Tile}: deal-in risk {best.DealInRisk:P1}."));
+            // Danger budget: keep attacking with any tile every threat accepts; otherwise
+            // give up a shanten for a safe tile (mawashi) or fold outright (betaori).
+            var decision = this.pushFold.Decide(state, this.opponents, candidates);
+            ct.ThrowIfCancellationRequested();
+            steps.Add(decision.Reason);
+            var eligible = decision.NoThreat
+                ? candidates
+                : candidates.Where(c => decision.ThreatSeats.All(s => this.opponents.Danger(c.Tile, s) <= decision.MaxDanger)).ToList();
+            if (eligible.Count > 0)
+            {
+                stance = PushFoldStance.Push;
+                best = eligible[0];
+                if (best.ShantenAfter > candidates[0].ShantenAfter)
+                    steps.Add(new Reason("discard", $"Turn: {best.Tile} stays within budget ({best.Danger:P1} vs seat {best.DangerSeat}) at the cost of a shanten."));
+                else if (!decision.NoThreat)
+                    steps.Add(new Reason("discard", $"Push: {best.Tile} is within budget ({best.Danger:P1} vs seat {best.DangerSeat})."));
+                // Keep the display order: chosen tile first, then the rest by attack merit.
+                candidates = [best, .. candidates.Where(c => !ReferenceEquals(c, best))];
+            }
+            else
+            {
+                stance = PushFoldStance.Fold;
+                candidates = this.betaori.Order(state, this.opponents, candidates, decision);
+                best = candidates[0];
+                steps.Add(new Reason("discard", $"Fold: nothing within budget; safest discard {best.Tile} ({best.Danger:P1} vs seat {best.DangerSeat}, {decision.SafeTiles} safe tile(s) in hand)."));
+            }
+        }
+        else
+        {
+            stance = this.pushFold.Evaluate(state, this.opponents, best, out var foldReason);
+            ct.ThrowIfCancellationRequested();
+            steps.Add(foldReason);
+            if (stance == PushFoldStance.Fold)
+            {
+                candidates = candidates.OrderBy(c => c.DealInRisk).ThenBy(c => c.ShantenAfter)
+                    .ThenByDescending(c => c.Score).ThenBy(c => c.Tile).ToArray();
+                best = candidates[0];
+                steps.Add(new Reason("discard", $"Safest discard {best.Tile}: deal-in risk {best.DealInRisk:P1}."));
+            }
         }
 
         var action = ActionKind.Discard;

@@ -21,6 +21,19 @@ public sealed class EventTracker
     private readonly string?[] lastMeldSignature = new string?[4];
     private readonly Wind?[] seatWinds = new Wind?[4];
 
+    // Global discard order this round (0-based, every seat), parallel to seatDiscards, so
+    // "discarded after seat X's riichi" survives calls that skip turns.
+    private readonly List<int>[] seatDiscardOrder = [[], [], [], []];
+    private int discardCounter;
+    // Set by a discard, cleared by the next turn advance: a type-32 win that arrives while
+    // it is set was a ron on that discard (a tsumo needs a draw, i.e. a type-5, first).
+    private bool discardSinceTurnAdvance;
+    private int lastDiscardSeat = -1;
+    private Tile? lastDiscardTile;
+    // Round-end tile runs seen in events (≥ 10 tile icons in one frame): the draw recap
+    // reveals every hand and this is where its layout gets confirmed (docs/DEFENSE_PLAN.md §3.6).
+    private readonly List<(int Type, int Count, List<(int Index, Tile Tile)> Tiles)> revealedRuns = [];
+
     private int eventWallRemaining = 70;
     private Tile? lastOpponentDiscard;
     private int lastOpponentDiscardSeat = -1;
@@ -66,6 +79,23 @@ public sealed class EventTracker
     public IReadOnlyList<Meld> SeatMeldsOf(int seat) => this.seatMelds[seat];
 
     public IReadOnlyList<Tile> SeatDiscardsOf(int seat) => this.seatDiscards[seat];
+
+    // Global order index of each discard in SeatDiscardsOf(seat), same length.
+    public IReadOnlyList<int> SeatDiscardOrderOf(int seat) => this.seatDiscardOrder[seat];
+
+    // Hand number inside the round (East 1 → 1), 0 when no text has said yet.
+    public int HandNumber { get; private set; }
+
+    // Set at the type-32 win screen: true when the win was a ron on the last discard.
+    public bool LastWinByRon { get; private set; }
+
+    // The seat whose discard was ron'd and the tile, valid when LastWinByRon.
+    public int RonVictimSeat { get; private set; } = -1;
+
+    public Tile? RonTile { get; private set; }
+
+    // Tile runs captured from round-end events (see revealedRuns).
+    public IReadOnlyList<(int Type, int Count, List<(int Index, Tile Tile)> Tiles)> RevealedRuns => this.revealedRuns;
 
     // Relative seat showing "East" in the wind texts, -1 when unknown.
     public int DealerSeat => Array.IndexOf(this.seatWinds, Wind.East);
@@ -125,12 +155,23 @@ public sealed class EventTracker
 
     public int WinsThisSession { get; private set; }
 
+    // Our point change announced by the last type-29 score screen (0 until one arrives).
+    public int LastScoreDelta { get; private set; }
+
     public int LossesThisSession { get; private set; }
 
     public Tile? LastOpponentDiscard => this.lastOpponentDiscard;
 
     // Best-effort round wind from the addon's visible text (fed by the reader).
     public void HintRoundWind(Wind wind) => this.trackedRoundWind = wind;
+
+    // "South 4 South Wind": the round text also carries the hand number.
+    public void HintRound(Wind wind, int handNumber)
+    {
+        this.trackedRoundWind = wind;
+        if (handNumber is >= 1 and <= 4)
+            this.HandNumber = handNumber;
+    }
 
     // Seat winds from the four score-panel texts (nodes.seatWindTexts), null = unreadable.
     public void HintSeatWinds(IReadOnlyList<Wind?> winds)
@@ -152,11 +193,17 @@ public sealed class EventTracker
         if (type is not (5 or 6 or 8) && f.IsInt(2) && WindFromIcon(f.Int(2)) is { } sw)
             this.eventSeatWind = sw;
 
+        // The deal (type-21) also carries our 14 tiles; everything else with a tile run
+        // after a discard/turn is a reveal candidate (draw recap, win screen).
+        if (type is not (21 or 13 or 25) && this.discardCounter > 0)
+            this.CaptureRevealRun(f);
+
         switch (type)
         {
             case 5: // turn advance: [1]=wall remaining, [2]=seat that draws next
                 if (f.Int(1) is > 0 and <= 70)
                     this.eventWallRemaining = f.Int(1);
+                this.discardSinceTurnAdvance = false;
                 this.ClearCallWindow("turn advance (type-5)");
                 this.DropWinDeclared("turn advance (type-5)");
                 break;
@@ -167,6 +214,10 @@ public sealed class EventTracker
                 if (seat is < 0 or > 3 || !TileHelpers.TryTileFromIconId(f.Int(2), out var tile))
                     break;
                 this.seatDiscards[seat].Add(tile);
+                this.seatDiscardOrder[seat].Add(this.discardCounter++);
+                this.discardSinceTurnAdvance = true;
+                this.lastDiscardSeat = seat;
+                this.lastDiscardTile = tile;
                 if (seat != 0)
                 {
                     this.lastOpponentDiscard = tile;
@@ -295,6 +346,7 @@ public sealed class EventTracker
                 this.WinDeclared = false;
                 this.ClearCallWindow("score (type-29)");
                 var delta = f.Int(1) * 100;
+                this.LastScoreDelta = delta;
                 if (delta >= 100)
                     this.WinsThisSession++;
                 else if (delta <= -100)
@@ -307,8 +359,13 @@ public sealed class EventTracker
                 this.roundEnded = true;
                 this.WinDeclared = false;
                 this.LastWinnerSeat = f.Int(1) is >= 0 and <= 3 ? f.Int(1) : -1;
+                this.LastWinByRon = this.discardSinceTurnAdvance && this.LastWinnerSeat >= 0 && this.LastWinnerSeat != this.lastDiscardSeat;
+                this.RonVictimSeat = this.LastWinByRon ? this.lastDiscardSeat : -1;
+                this.RonTile = this.LastWinByRon ? this.lastDiscardTile : null;
                 this.ClearCallWindow("win screen (type-32)");
                 var round = f.Str(2) ?? string.Empty;
+                if (ParseHandNumber(round) is { } handNo)
+                    this.HandNumber = handNo;
                 if (round.StartsWith("East", StringComparison.OrdinalIgnoreCase)) this.trackedRoundWind = Wind.East;
                 else if (round.StartsWith("South", StringComparison.OrdinalIgnoreCase)) this.trackedRoundWind = Wind.South;
                 else if (round.StartsWith("West", StringComparison.OrdinalIgnoreCase)) this.trackedRoundWind = Wind.West;
@@ -547,7 +604,18 @@ public sealed class EventTracker
         this.answeredCallTile = null;
         this.answeredCallFromSeat = -1;
         this.LastWinnerSeat = -1;
+        this.LastScoreDelta = 0;
+        this.LastWinByRon = false;
+        this.RonVictimSeat = -1;
+        this.RonTile = null;
+        this.discardSinceTurnAdvance = false;
+        this.lastDiscardSeat = -1;
+        this.lastDiscardTile = null;
+        this.discardCounter = 0;
+        this.revealedRuns.Clear();
         foreach (var list in this.seatDiscards)
+            list.Clear();
+        foreach (var list in this.seatDiscardOrder)
             list.Clear();
         foreach (var list in this.seatMelds)
             list.Clear();
@@ -559,6 +627,33 @@ public sealed class EventTracker
         this.ClearCallWindow(why);
         this.lastPromptSignature = string.Empty;
         this.Log($"[Round] reset: {why}");
+    }
+
+    // "East 3 South Wind" → 3. The hand number is the first integer token.
+    public static int? ParseHandNumber(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+        foreach (var token in text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            if (int.TryParse(token, out var n) && n is >= 1 and <= 4)
+                return n;
+        return null;
+    }
+
+    // Any frame carrying ten or more tile icons after the hand ended is a hand reveal
+    // candidate; keep it with its event type and slot indices so the layout can be read
+    // off the first live draw (docs/DEFENSE_PLAN.md §3.6) and calibration can use it later.
+    private void CaptureRevealRun(AtkFrame f)
+    {
+        var tiles = new List<(int Index, Tile Tile)>();
+        for (var i = 1; i < f.Copied; i++)
+            if (f.IsInt(i) && TileHelpers.TryTileFromIconId(f.Int(i), out var t))
+                tiles.Add((i, t));
+        if (tiles.Count < 10)
+            return;
+        this.revealedRuns.Add((f.EventType, f.Count, tiles));
+        this.Note($"reveal? type={f.EventType} n={f.Count} copied={f.Copied} tiles={tiles.Count}: "
+                  + string.Join(" ", tiles.Select(x => $"[{x.Index}]{x.Tile}")));
     }
 
     private static Wind? WindFromIcon(int icon) => icon switch

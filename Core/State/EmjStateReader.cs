@@ -29,6 +29,8 @@ public sealed unsafe class EmjStateReader : IDisposable
     private StateSnapshot? lastPlaySnapshot;
     private StateSnapshot? pendingCalibration;
     private int calibrationTicks;
+    // Deal-in ground truth: our discards against threats, labelled at hand end.
+    private readonly Policy.DealInRecorder dealIns = new();
 
     public EmjStateReader(IGameGui gameGui, IPluginLog pluginLog, IAddonLifecycle addonLifecycle, Configuration configuration, EmjLayout layout)
     {
@@ -59,6 +61,12 @@ public sealed unsafe class EmjStateReader : IDisposable
 
     // Receives the tenpai samples of every finished hand (plugin appends them to CSV).
     public Action<IReadOnlyList<Policy.TenpaiSample>>? CalibrationSink { get; set; }
+
+    // Receives the deal-in samples of every finished hand (plugin appends them to CSV).
+    public Action<IReadOnlyList<Policy.DealInSample>>? DealInSink { get; set; }
+
+    // Receives one result row per finished hand (plugin appends it to CSV).
+    public Action<Policy.HandResult>? HandResultSink { get; set; }
 
     public void Dispose()
     {
@@ -102,7 +110,7 @@ public sealed unsafe class EmjStateReader : IDisposable
             if (++this.ticks % WindScanInterval == 0)
                 this.ScanWinds(addon);
 
-            this.Current = this.builder.Build(decoded, this.tracker, this.Layout, new RulesetOptions(this.configuration.Kuitan));
+            this.Current = this.builder.Build(decoded, this.tracker, this.Layout, new RulesetOptions(this.configuration.Kuitan, (int)this.configuration.GameLength));
             this.RecordTenpaiGroundTruth(addon, this.Current);
         }
         catch (Exception ex)
@@ -173,10 +181,15 @@ public sealed unsafe class EmjStateReader : IDisposable
         // "South 4 South Wind": the round is the leading word; the string is win-screen
         // residue, so it lags by at most one hand and beats the East default on a
         // mid-session load (docs/EMJ_STRUCT.md, "Not in the struct").
-        var roundText = this.Layout.RoundWind is null ? EmjScanner.ReadTextAtPath(addon, nodes.RoundWindText) : null;
+        var roundText = EmjScanner.ReadTextAtPath(addon, nodes.RoundWindText);
         var leading = roundText?.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
         if (EmjScanner.ParseWindText(leading) is { } round)
-            this.tracker.HintRoundWind(round);
+        {
+            if (this.Layout.RoundWind is null)
+                this.tracker.HintRound(round, EventTracker.ParseHandNumber(roundText) ?? 0);
+            else if (EventTracker.ParseHandNumber(roundText) is { } handNo)
+                this.tracker.HintRound(this.tracker.RoundWind, handNo);
+        }
     }
 
     // Draw screens label every seat "Tenpai!"/"Noten..." in the seat banners; a win names
@@ -187,7 +200,13 @@ public sealed unsafe class EmjStateReader : IDisposable
         if (snapshot.Phase != GamePhase.RoundEnd)
         {
             if (snapshot.Phase is not (GamePhase.NotInGame or GamePhase.Dealing) && snapshot.Hand.Count > 0)
+            {
                 this.lastPlaySnapshot = snapshot;
+                this.dealIns.Population = this.configuration.CalibrationPopulation;
+                this.dealIns.Model = this.configuration.DefenseV2 ? "V2" : "Legacy";
+                this.dealIns.Observe(snapshot, DateTime.UtcNow);
+            }
+
             this.pendingCalibration = null;
             return;
         }
@@ -217,6 +236,19 @@ public sealed unsafe class EmjStateReader : IDisposable
         this.tracker.Note($"tenpai calibration: {samples.Count} sample(s) (winner={winner}, banners=[{string.Join("|", banners.Select(b => b ?? "-"))}])");
         if (samples.Count > 0)
             sink?.Invoke(samples);
+
+        var last = this.pendingCalibration;
+        var dealIns = this.dealIns.Finish(winner, this.tracker.LastWinByRon, this.tracker.RonVictimSeat, this.tracker.RonTile);
+        this.tracker.Note($"deal-in calibration: {dealIns.Count} row(s), ron={this.tracker.LastWinByRon} victim={this.tracker.RonVictimSeat} tile={this.tracker.RonTile?.ToString() ?? "-"}");
+        if (dealIns.Count > 0)
+            this.DealInSink?.Invoke(dealIns);
+
+        var outcome = Policy.HandResult.Classify(winner, this.tracker.LastWinByRon, this.tracker.RonVictimSeat,
+            winner >= 0 ? null : Policy.TenpaiCalibration.BannerMeansTenpai(banners[0]));
+        this.HandResultSink?.Invoke(new Policy.HandResult(DateTime.UtcNow, last.RoundWind.ToString(), last.HandNumber,
+            Math.Max(last.Us.Discards.Count, last.Us.DiscardCount), outcome, this.tracker.LastScoreDelta, last.OurRiichi,
+            last.Seats.Count(s => s.Seat != 0 && s.Riichi), this.configuration.CalibrationPopulation,
+            this.configuration.DefenseV2 ? "V2" : "Legacy"));
     }
 
     // Visible texts of the call panel (Pon/Chi/Pass, Riichi/Tsumo/…). They persist after a

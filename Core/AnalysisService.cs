@@ -1,4 +1,5 @@
 using MahjongHater.Core.Policy;
+using MahjongHater.Core.Precomputed;
 using MahjongHater.Core.State;
 
 namespace MahjongHater.Core;
@@ -69,24 +70,9 @@ public sealed class AnalysisService : IDisposable
     // tile changing, so they are part of the identity too.
     public static string ComputeFingerprint(StateSnapshot state)
     {
-        var closed = string.Join(",", state.Hand.OrderBy(t => t).Select(t => t.ToString()));
-        var melds = string.Join("|", state.OurMelds.Select(m => string.Join(",", m.Tiles.Select(TileHelpers.ToIndex).OrderBy(i => i))));
-        var doras = string.Join(",", state.DoraIndicators.Select(TileHelpers.ToIndex));
-
-        var seenHash = 17;
-        foreach (var seat in state.Seats)
-        {
-            foreach (var tile in seat.Discards)
-                seenHash = unchecked((seenHash * 31) + TileHelpers.ToIndex(tile));
-            foreach (var meld in seat.Melds)
-                foreach (var tile in meld.Tiles)
-                    seenHash = unchecked((seenHash * 31) + TileHelpers.ToIndex(tile) + 64);
-            seenHash = unchecked((seenHash * 31) + (seat.Riichi ? 1 : 0));
-        }
-
-        var call = state.CallTile is { } ct ? $"{ct}@{state.CallFromSeat}" : "-";
-        return $"{closed}:{melds}:{doras}:{seenHash:X}:{(state.OurRiichi ? 1 : 0)}:" +
-               $"{(int)state.Phase}:{(int)state.Legal}:{call}:{state.WallRemaining}:{state.DrawnTile?.ToString() ?? "-"}";
+        // Also track score/round/rules and discard chronology: these change utility
+        // or opponent beliefs even when the hand and action flags stay identical.
+        return IncrementalStateKey.Create(state).Verification;
     }
 
     // Framework thread, every tick. Cheap: fingerprint compare + debounce counter.

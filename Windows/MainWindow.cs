@@ -342,10 +342,17 @@ public sealed class MainWindow : Window
         for (var i = 0; i < this.candidateText.Length; i++)
         {
             var candidate = choice.Candidates[i];
+            // "Risk" is the aggregate deal-in chance; the rank letter is the tile's conditional
+            // danger against the primary threat (docs/DEFENSE_PLAN.md §2).
+            var rank = candidate.DangerSeat >= 1
+                ? $"  ·  {RankLabel(candidate.DangerRank)} {candidate.Danger:P1} vs seat {candidate.DangerSeat}"
+                : string.Empty;
+            var dangerLine = candidate.DangerSeat >= 1 && !string.IsNullOrEmpty(candidate.DangerNote)
+                ? $"\nDanger: {candidate.DangerNote}" : string.Empty;
             this.candidateText[i] = new CandidateText(
                 $"{(candidate.ShantenAfter <= 0 ? "Tenpai" : $"{candidate.ShantenAfter}-shanten")} / {candidate.Ukeire} tiles",
-                $"Risk {candidate.DealInRisk:P0}",
-                $"Two-step ukeire: {candidate.Ukeire2}\nValue: {candidate.Value:0.##}\nRanking score: {candidate.Score:0.##}");
+                $"Risk {candidate.DealInRisk:P0}{rank}",
+                $"Two-step ukeire: {candidate.Ukeire2}\nValue: {candidate.Value:0.##}\nRanking score: {candidate.Score:0.##}{dangerLine}");
         }
     }
 
@@ -489,4 +496,11 @@ public sealed class MainWindow : Window
     }
 
     private readonly record struct CandidateText(string Summary, string Risk, string Details);
+
+    private static string RankLabel(DangerRank rank) => rank switch
+    {
+        DangerRank.S => "S",
+        DangerRank.APlus => "A+",
+        _ => rank.ToString(),
+    };
 }

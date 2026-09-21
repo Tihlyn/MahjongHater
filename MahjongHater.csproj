@@ -21,6 +21,7 @@
     <EmbeddedResource Remove="validation-libs/**/*" />
     <None Remove="validation-libs/**/*" />
     <Compile Remove="MahjongHater.Tests/**/*.cs" />
+    <Compile Remove="tools/Precompute/**/*.cs" />
     <EmbeddedResource Remove="MahjongHater.Tests/**/*" />
     <None Remove="MahjongHater.Tests/**/*" />
   </ItemGroup>
@@ -57,5 +58,10 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <EmbeddedResource Include="resources/layouts/emj.json" LogicalName="MahjongHater.resources.layouts.emj.json" />
+    <!-- Deal-in rate tables (docs/research → tools/make_deal_in_rates.py); same ship/embed rule. -->
+    <None Update="resources/policy/*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <EmbeddedResource Include="resources/policy/deal_in_rates.json" LogicalName="MahjongHater.resources.policy.deal_in_rates.json" />
   </ItemGroup>
 </Project>
