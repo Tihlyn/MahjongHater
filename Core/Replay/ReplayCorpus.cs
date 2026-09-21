@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -15,7 +16,7 @@ public sealed record ReplayLearningRow(int Schema, string Game, string Split, in
 
 public sealed class ReplayCorpus
 {
-    public const string ImporterVersion = "tenhou-turn-decisions-v1";
+    public const string ImporterVersion = "tenhou-decisions-v2";   // v2: claim-window reactions added
     private const int MaxXmlBytes = 32 * 1024 * 1024;
     private readonly string directory;
     public ReplayCorpusManifest Manifest { get; }
@@ -84,10 +85,14 @@ public sealed class ReplayCorpus
         return game;
     }
 
+    // Archive entries are read and de-duplicated by content hash on the calling thread;
+    // parsing (the expensive part) and per-game serialization run on `workers` threads.
+    // Output is order-independent: games are sorted by hash, counters are sums.
     public static ReplayCorpusManifest Import(string input, string destination, SimulationRules rules, int minimumRank = 0,
-        Action<string>? progress = null, CancellationToken ct = default)
+        Action<string>? progress = null, CancellationToken ct = default, int workers = 0)
     {
         rules.Validate();
+        if (workers < 1) workers = Math.Max(1, Environment.ProcessorCount - 1);
         var target = Path.GetFullPath(destination);
         if (Directory.Exists(input) && target.StartsWith(Path.GetFullPath(input).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new IOException("Corpus destination must be outside the source directory.");
@@ -100,12 +105,45 @@ public sealed class ReplayCorpus
         var gameIds = new HashSet<string>();
         var skipped = new Dictionary<string, int>();
         var duplicates = 0;
-        void Consume(string label, Stream source)
+        var results = new object();
+        using var queue = new BlockingCollection<(string Label, byte[] Bytes)>(boundedCapacity: 4 * workers);
+        void Consume(string label, byte[] bytes)
         {
-            ct.ThrowIfCancellationRequested();
             try
             {
-                using var expanded = new MemoryStream();
+                var game = TenhouReplay.Parse(bytes, rules, minimumRank);
+                lock (results)
+                {
+                    if (!gameIds.Add(game.Sha256)) { duplicates++; return; }
+                    foreach (var (why, count) in game.Skipped) skipped[why] = skipped.GetValueOrDefault(why) + count;
+                }
+                if (game.Decisions.Length == 0) throw new NotSupportedException("No eligible decisions after rank/rule filters.");
+                var path = Path.Combine(temporary, "games", game.Sha256 + ".json.gz");
+                SimulationFiles.Write(path, game);
+                string stored;
+                using (var file = File.OpenRead(path)) stored = Convert.ToHexString(SHA256.HashData(file));
+                lock (results)
+                {
+                    games.Add(new ReplayCorpusEntry(game.Sha256, stored, game.Decisions.Length));
+                    progress?.Invoke($"Imported {label}: {game.Match.Hands} hands, {game.Decisions.Length} decisions.");
+                }
+            }
+            catch (Exception ex) when (ex is InvalidDataException or NotSupportedException or System.Xml.XmlException
+                or FormatException or OverflowException or EndOfStreamException or ArgumentException)
+            {
+                lock (results)
+                {
+                    rejected.Add(new ReplayImportFailure(label, ex.Message));
+                    progress?.Invoke($"Rejected {label}: {ex.Message}");
+                }
+            }
+        }
+        void Enqueue(string label, Stream source)
+        {
+            ct.ThrowIfCancellationRequested();
+            using var expanded = new MemoryStream();
+            try
+            {
                 var prefix = new byte[2];
                 source.ReadExactly(prefix);
                 using var packed = new MemoryStream();
@@ -118,47 +156,47 @@ public sealed class ReplayCorpus
                     CopyLimited(gzip, expanded, ct);
                 }
                 else CopyLimited(packed, expanded, ct);
-                var bytes = expanded.ToArray();
-                var digest = Convert.ToHexString(SHA256.HashData(bytes));
-                if (!seen.Add(digest)) { duplicates++; return; }
-                var game = TenhouReplay.Parse(bytes, rules, minimumRank);
-                if (!gameIds.Add(game.Sha256)) { duplicates++; return; }
-                foreach (var (why, count) in game.Skipped) skipped[why] = skipped.GetValueOrDefault(why) + count;
-                if (game.Decisions.Length == 0) throw new NotSupportedException("No eligible decisions after rank/rule filters.");
-                var path = Path.Combine(temporary, "games", game.Sha256 + ".json.gz");
-                SimulationFiles.Write(path, game);
-                using var stored = File.OpenRead(path);
-                games.Add(new ReplayCorpusEntry(game.Sha256, Convert.ToHexString(SHA256.HashData(stored)), game.Decisions.Length));
-                progress?.Invoke($"Imported {label}: {game.Match.Hands} hands, {game.Decisions.Length} decisions.");
             }
-            catch (Exception ex) when (ex is InvalidDataException or NotSupportedException or System.Xml.XmlException
-                or FormatException or OverflowException or EndOfStreamException or ArgumentException)
+            catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
             {
-                rejected.Add(new ReplayImportFailure(label, ex.Message));
-                progress?.Invoke($"Rejected {label}: {ex.Message}");
+                lock (results) { rejected.Add(new ReplayImportFailure(label, ex.Message)); progress?.Invoke($"Rejected {label}: {ex.Message}"); }
+                return;
             }
+            var bytes = expanded.ToArray();
+            var digest = Convert.ToHexString(SHA256.HashData(bytes));
+            if (!seen.Add(digest)) { lock (results) duplicates++; return; }
+            queue.Add((label, bytes), ct);
         }
         var files = Directory.Exists(input) ? Directory.EnumerateFiles(input, "*", SearchOption.AllDirectories)
             .Where(f => new[] { ".xml", ".mjlog", ".gz", ".zip", ".txt" }.Contains(Path.GetExtension(f).ToLowerInvariant()))
             .Order(StringComparer.Ordinal) : new[] { input }.AsEnumerable();
-        foreach (var path in files)
+        var consumers = Enumerable.Range(0, workers).Select(_ => Task.Run(() =>
         {
-            ct.ThrowIfCancellationRequested();
-            using var file = File.OpenRead(path);
-            if (Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+            foreach (var (label, bytes) in queue.GetConsumingEnumerable(ct)) Consume(label, bytes);
+        }, ct)).ToArray();
+        try
+        {
+            foreach (var path in files)
             {
-                // Stream entries directly: no extraction paths or archive traversal.
-                using var archive = new ZipArchive(file, ZipArchiveMode.Read);
-                foreach (var entry in archive.Entries.Where(e => e.Length > 0).OrderBy(e => e.FullName, StringComparer.Ordinal))
+                ct.ThrowIfCancellationRequested();
+                using var file = File.OpenRead(path);
+                if (Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase))
                 {
-                    using var stream = entry.Open();
-                    Consume(Path.GetFileName(path) + "/" + entry.FullName, stream);
+                    // Stream entries directly: no extraction paths or archive traversal.
+                    using var archive = new ZipArchive(file, ZipArchiveMode.Read);
+                    foreach (var entry in archive.Entries.Where(e => e.Length > 0).OrderBy(e => e.FullName, StringComparer.Ordinal))
+                    {
+                        using var stream = entry.Open();
+                        Enqueue(Path.GetFileName(path) + "/" + entry.FullName, stream);
+                    }
                 }
+                else Enqueue(Path.GetFileName(path), file);
             }
-            else Consume(Path.GetFileName(path), file);
         }
+        finally { queue.CompleteAdding(); }
+        Task.WaitAll(consumers, ct);
         var manifest = new ReplayCorpusManifest(1, ImporterVersion, rules, minimumRank, games.OrderBy(g => g.Sha256, StringComparer.Ordinal).ToArray(),
-            duplicates, rejected.ToArray(), skipped);
+            duplicates, rejected.OrderBy(r => r.File, StringComparer.Ordinal).ToArray(), skipped);
         SimulationFiles.Write(Path.Combine(temporary, "manifest.json.gz"), manifest);
         ct.ThrowIfCancellationRequested();
         Directory.Move(temporary, target);

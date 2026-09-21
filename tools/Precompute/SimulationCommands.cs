@@ -7,7 +7,7 @@ using MahjongHater.Core.Replay;
 
 internal static class SimulationCommands
 {
-    public const string Usage = "sim-config <config.json> | sim-check <matches> [seed] | sim-run <config.json> <run-dir> [workers] [matches] | sim-pack <db-dir> <run-dir>... | sim-export <run-dir> <snapshots.jsonl> | sim-probe <db-dir> <snapshots.jsonl> | sim-inspect <db-dir> | replay-import <config.json> <xml/mjlog/zip/folder> <new-corpus> [min-rank=16] | replay-run <config.json> <corpus> <run-dir> [workers] [matches] | replay-inspect <corpus> | replay-export <corpus> <new-jsonl> [all|train|validation|test]";
+    public const string Usage = "sim-config <config.json> | sim-check <matches> [seed] | sim-run <config.json> <run-dir> [workers] [matches] | sim-pack <db-dir> <run-dir>... | sim-export <run-dir> <snapshots.jsonl> | sim-probe <db-dir> <snapshots.jsonl> | sim-inspect <db-dir> | replay-import <config.json> <xml/mjlog/zip/folder> <new-corpus> [min-rank=16] [workers] | replay-run <config.json> <corpus> <run-dir> [workers] [matches] | replay-inspect <corpus> | replay-export <corpus> <new-jsonl> [all|train|validation|test]";
     public static bool Handles(string command) => command is "sim-config" or "sim-check" or "sim-run" or "sim-pack" or "sim-export" or "sim-probe" or "sim-inspect"
         or "replay-import" or "replay-run" or "replay-inspect" or "replay-export";
     public static async Task<int> Run(string[] args, CancellationToken ct)
@@ -25,7 +25,8 @@ internal static class SimulationCommands
             var config = JsonSerializer.Deserialize<GenerationConfig>(File.ReadAllText(args[1]), SimulationFiles.Json)
                 ?? throw new InvalidDataException("Empty config.");
             config.Validate();
-            var result = ReplayCorpus.Import(args[2], args[3], config.Rules, args.Length > 4 ? int.Parse(args[4]) : 16, Console.WriteLine, ct);
+            var result = ReplayCorpus.Import(args[2], args[3], config.Rules, args.Length > 4 ? int.Parse(args[4]) : 16, Console.WriteLine, ct,
+                args.Length > 5 ? int.Parse(args[5]) : 0);
             Console.WriteLine($"Imported {result.Games.Length} unique games, {result.Games.Sum(g => g.Decisions)} decisions; {result.Duplicates} duplicates, {result.Rejected.Length} rejected files. Rejection reasons are in the corpus manifest.");
             return result.Games.Length > 0 ? 0 : 1;
         }

@@ -14,11 +14,11 @@ public sealed class LearnedPolicy(IPolicy fallback, LearnedModel network, Policy
         var actions = Legal(state);
         if (!network.Supports(state) || actions.Length == 0) return fallback.Choose(state, ct);
         var prediction = network.Predict(state, ct);
-        var maximum = actions.Max(a => prediction[LearningFeatures.ActionIndex(a)]);
-        var denominator = actions.Sum(a => Math.Exp(prediction[LearningFeatures.ActionIndex(a)] - maximum));
-        var ordered = actions.OrderByDescending(a => prediction[LearningFeatures.ActionIndex(a)]).ThenBy(a => a.Key, StringComparer.Ordinal).ToArray();
+        var maximum = actions.Max(a => prediction[network.ActionIndex(a)]);
+        var denominator = actions.Sum(a => Math.Exp(prediction[network.ActionIndex(a)] - maximum));
+        var ordered = actions.OrderByDescending(a => prediction[network.ActionIndex(a)]).ThenBy(a => a.Key, StringComparer.Ordinal).ToArray();
         var best = ordered[0];
-        var probability = Math.Exp(prediction[LearningFeatures.ActionIndex(best)] - maximum) / denominator;
+        var probability = Math.Exp(prediction[network.ActionIndex(best)] - maximum) / denominator;
         var opponents = new LearnedOpponentModel(network, weights);
         opponents.Update(state);
         var candidates = new HeuristicDiscardPolicy(weights: weights).Rank(state, opponents, ct);

@@ -163,6 +163,9 @@ public static class TenhouReplay
         private readonly bool[] declaring = new bool[4];
         private int wall = 70, expectedDraw, drawn = -1, pendingDiscard = -1, pendingFrom = -1;
         private bool replacement;
+        // Reaction windows opened by the last discard: one entry per seat that could call
+        // (chi/pon/open kan legal, no ron available), resolved by the next draw or call.
+        private readonly List<(int Seat, int Event, SimulationObservation Observation, SimAction[] Legal, OpponentTrainingTarget[] Targets)> reactions = [];
         private int[]? terminalBase, terminalScores;
         public bool Ended => this.terminalScores is not null;
 
@@ -191,6 +194,7 @@ public static class TenhouReplay
             Tile136(tile);
             if (seat != this.expectedDraw || this.wall <= 0 || this.hands.Any(h => h.Contains(tile)) || this.revealed.Contains(tile))
                 throw new InvalidDataException("Impossible draw order or physical tile.");
+            this.ResolveReactions(null);
             this.PassedDiscard();
             this.wall--;
             this.hands[seat].Add(tile);
@@ -240,6 +244,65 @@ public static class TenhouReplay
             this.drawn = -1; this.game.DrawnTile = null;
             this.game.ForbiddenDiscards.Clear();
             this.expectedDraw = (seat + 1) % 4;
+            this.OpenReactions(seat, Tile136(tile), eventIndex);
+        }
+
+        // Mirror RiichiSimulator.OpenResponses for one event: every other seat sees the
+        // discard with its own legal reactions. Only seats that could actually call are
+        // recorded (a window with just "pass" carries no decision); a legal ron is an
+        // available win and is skipped like tsumo/ron turn decisions.
+        private void OpenReactions(int from, Tile tile, int eventIndex)
+        {
+            this.reactions.Clear();
+            if (this.game.RoundIndex >= this.game.Rules.HandsInMatch || this.indicators.Count != this.game.KanCount + 1) return;
+            this.SynchronizeHands();
+            this.game.Phase = SimPhase.DiscardResponses;
+            this.game.PendingSeat = from;
+            this.game.PendingTile = tile;
+            this.game.PendingMeldIndex = -1;
+            this.game.ResponseOrder = Enumerable.Range(1, 3).Select(i => (from + i) % 4).ToArray();
+            this.game.Responses = new SimAction?[4];
+            try
+            {
+                for (var i = 0; i < 3; i++)
+                {
+                    this.game.ResponseIndex = i;
+                    var seat = this.game.ResponseOrder[i];
+                    if (this.ranks[seat] < this.minimumRank && this.minimumRank > 0) continue;
+                    var legal = RiichiSimulator.Legal(this.game);
+                    if (!legal.Any(a => a.Kind is SimActionKind.Chi or SimActionKind.Pon or SimActionKind.OpenKan)) continue;
+                    if (legal.Any(a => a.Kind == SimActionKind.Ron)) { this.skip("forced move or available win"); continue; }
+                    this.reactions.Add((seat, eventIndex, SimulationObservation.Observe(this.game, legal), legal.ToArray(), this.OpponentTargets(seat)));
+                }
+            }
+            finally
+            {
+                this.game.Phase = SimPhase.Turn;
+                this.game.PendingSeat = -1;
+                this.game.PendingTile = null;
+                this.game.ResponseOrder = [];
+                this.game.ResponseIndex = 0;
+            }
+        }
+
+        // `called` is the action the caller took on the pending discard, null when the
+        // next player simply drew (everyone passed).
+        private void ResolveReactions((int Seat, SimAction Action)? called)
+        {
+            foreach (var (seat, eventIndex, observation, legal, targets) in this.reactions)
+            {
+                var chosen = called is { } c && c.Seat == seat ? c.Action : new SimAction(SimActionKind.Pass);
+                if (!legal.Contains(chosen))
+                {
+                    // A call whose physical composition the simulator did not enumerate
+                    // (should not happen); keep the corpus honest rather than mislabel.
+                    this.skip("recorded reaction not legal under target rules");
+                    continue;
+                }
+                this.samples.Add(new ReplayDecision(this.number, eventIndex, seat, this.ranks[seat], chosen, observation, 0)
+                    { LegalActions = legal, OpponentTargets = targets });
+            }
+            this.reactions.Clear();
         }
 
         public void Reach(int seat, int step)
@@ -275,8 +338,13 @@ public static class TenhouReplay
             }
             else if (this.pendingFrom != meld.From || this.pendingDiscard != meld.Called || seat == meld.From)
                 throw new InvalidDataException("Meld does not claim the pending physical discard.");
-            if (!closed && !added) this.PassedDiscard();
             var consumed = added ? new[] { meld.Called } : meld.Tiles.Where(t => closed || t != meld.Called).ToArray();
+            if (!closed && !added)
+            {
+                var kind = meld.Type switch { MeldType.Chi => SimActionKind.Chi, MeldType.Pon => SimActionKind.Pon, _ => SimActionKind.OpenKan };
+                this.ResolveReactions((seat, SimAction.Make(kind, Tile136(meld.Called), consumed.Select(Tile136))));
+                this.PassedDiscard();
+            }
             foreach (var tile in consumed)
             {
                 if (!this.hands[seat].Remove(tile)) throw new InvalidDataException("Called tile missing from concealed hand.");
@@ -377,6 +445,7 @@ public static class TenhouReplay
 
         public void End(XElement e)
         {
+            this.reactions.Clear();
             var sc = Numbers(e, "sc", 8);
             var before = Enumerable.Range(0, 4).Select(s => sc[2 * s] * 100).ToArray();
             var delta = Enumerable.Range(0, 4).Select(s => sc[2 * s + 1] * 100).ToArray();

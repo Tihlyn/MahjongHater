@@ -17,7 +17,7 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
         this.fallback.Update(state);
         if (!network.Supports(state) || !state.LayoutHealthy || state.Seats.Any(s => !s.DiscardsVerified))
         { Volatile.Write(ref this.view, null); return; }
-        var features = LearningFeatures.Encode(state);
+        var features = network.Encode(state);
         var output = network.Predict(features);
         var tenpai = new double[4];
         var danger = new double[4, 34];
@@ -25,15 +25,15 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
         var values = new double[4];
         for (var seat = 1; seat <= 3; seat++)
         {
-            tenpai[seat] = state.Seats[seat].Riichi ? 1 : network.Tenpai(output[74 + seat - 1]);
+            tenpai[seat] = state.Seats[seat].Riichi ? 1 : network.Tenpai(output[network.TenpaiOffset + seat - 1]);
             var probability = 0d;
             for (var kind = 0; kind < 34; kind++)
             {
                 var index = (seat - 1) * 34 + kind;
                 var c = 8 + seat * 6;
                 var safe = features[c * 34 + kind] > 0 || features[(c + 5) * 34 + kind] > 0;
-                danger[seat, kind] = safe ? 0 : useLearnedDanger ? network.Wait(output[77 + index]) : this.fallback.Danger(TileHelpers.FromIndex(kind), seat);
-                points[seat, kind] = network.Points(output[179 + index]);
+                danger[seat, kind] = safe ? 0 : useLearnedDanger ? network.Wait(output[network.RonOffset + index]) : this.fallback.Danger(TileHelpers.FromIndex(kind), seat);
+                points[seat, kind] = network.Points(output[network.PointsOffset + index]);
                 probability += danger[seat, kind];
                 values[seat] += danger[seat, kind] * points[seat, kind];
             }

@@ -135,3 +135,17 @@ The tables discriminate winning tiles clearly better than the learned head; the 
 head is better calibrated but slightly worse at ranking than the refit logistic. Both
 waiting models are in the class of Bakuuchi's (different data and era, so not a strict
 comparison). See `STRENGTH_COMPARISON.md`.
+
+## Run 5, continued — c96/h256 finished
+
+12 epochs (best validation loss 1.0296 at epoch 10), 45 min for the last two epochs at
+1.1 GB RSS. Trainer test split (383 k rows): **policy top-1 69.1 %** (run 3: 65.2 %),
+tenpai Brier 0.048. Harness evaluation on the v2 corpus: run 7.
+
+## Corpus v2 — claim-window reactions (`corpus-all-v2`, importer `tenhou-decisions-v2`)
+
+Same four archives re-imported with the reaction windows: 16 479 games, **9 942 310
+decisions** (7 864 306 turn + 2 078 004 reactions), 9 min on 10 workers. The earlier
+corpora (`tenhou-turn-decisions-v1`) no longer load; runs 1–6 stay as recorded. Runs 1–6
+used the n24-only test split; from run 7 the test split is drawn from all four archives
+(the split is by game hash, so the n24 test games are a subset of it).

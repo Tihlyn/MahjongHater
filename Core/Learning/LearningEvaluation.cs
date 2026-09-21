@@ -99,6 +99,14 @@ public static class LearningEvaluation
                 $"{report.Agreement[p][category].Agreement,11:P1} ")));
         }
 
+        if (report.Agreement.Values.First().TryGetValue("reaction", out var reaction) && reaction.Decisions > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add($"{"call rate on claim windows",-34}{"human",12}" + string.Join(string.Empty, report.Agreement.Keys.Select(p => $"{p,12}")));
+            lines.Add($"{"reaction (n=" + reaction.Decisions + ")",-34}{(double)reaction.HumanSafeChoices / reaction.Decisions,11:P1} "
+                      + string.Join(string.Empty, report.Agreement.Keys.Select(p => $"{(double)report.Agreement[p]["reaction"].SafeChoices / reaction.Decisions,11:P1} ")));
+        }
+
         lines.Add(string.Empty);
         lines.Add($"{"deal-in rate of the chosen tile",-34}{"human",12}" + string.Join(string.Empty, report.Agreement.Keys.Select(p => $"{p,12}")));
         foreach (var category in new[] { "all", "vs-riichi", "vs-open", "late" })
@@ -160,7 +168,7 @@ public static class LearningEvaluation
                     Hybrid => new DecisionPolicy(opponents: new LearnedOpponentModel(model!, weights), weights: weights),
                     HybridTenpai => new DecisionPolicy(opponents: new LearnedOpponentModel(model!, weights, useLearnedDanger: false), weights: weights),
                     Guarded => new DecisionPolicy(opponents: new LearnedOpponentModel(model!, weights, useLearnedDanger: false),
-                        discards: new LearnedDiscardPolicy(model!, weights), weights: weights),
+                        discards: new LearnedDiscardPolicy(model!, weights), calls: new LearnedCallPolicy(model!, weights), weights: weights),
                     _ => throw new ArgumentException(name),
                 };
             this.Local = new Totals(names, model is not null);
@@ -169,8 +177,14 @@ public static class LearningEvaluation
         public void Evaluate(ReplayDecision d)
         {
             var state = d.Observation.Snapshot;
-            // Only the turn decisions both policy families model: a closed or open hand with a
-            // discard legal (riichi optional). Wins/calls are never recorded as replay decisions.
+            if (d.ObservedAction.Kind is SimActionKind.Pass or SimActionKind.Chi or SimActionKind.Pon or SimActionKind.OpenKan && state.CallTile is not null)
+            {
+                this.EvaluateReaction(d);
+                return;
+            }
+
+            // Turn decisions: a closed or open hand with a discard legal (riichi optional).
+            // Wins are never recorded as replay decisions.
             if (!state.Can(LegalAction.Discard) || state.Hand.Count + 3 * state.OurMelds.Count != 14
                 || d.ObservedAction.Kind is not (SimActionKind.Discard or SimActionKind.Riichi) || d.ObservedAction.Tile is null)
             {
@@ -208,6 +222,39 @@ public static class LearningEvaluation
             }
 
             this.Calibrate(state, targets);
+        }
+
+        // A claim window: the human passed or called. Agreement = same decision (pass, or the
+        // same call kind and, for chi, the same shape). "reaction-called" counts how often each
+        // side calls, so over- and under-calling show up even when agreement looks fine.
+        private void EvaluateReaction(ReplayDecision d)
+        {
+            var state = d.Observation.Snapshot;
+            var human = d.ObservedAction;
+            var humanIndex = LearningFeatures.ActionIndex(human);
+            var categories = new List<string> { "reaction", human.Kind == SimActionKind.Pass ? "reaction-human-pass" : "reaction-human-call" };
+            if (d.LegalActions.Any(a => a.Kind == SimActionKind.Chi)) categories.Add("reaction-chi-available");
+            if (d.LegalActions.Any(a => a.Kind == SimActionKind.Pon)) categories.Add("reaction-pon-available");
+            this.Local.Decisions++;
+            var none = (false, 0);
+            foreach (var (name, policy) in this.policies)
+            {
+                var choice = policy.Choose(state, CancellationToken.None);
+                int chosenIndex;
+                if (choice.Kind == ActionKind.Pass || !choice.IsCall) chosenIndex = LearningFeatures.PassAction;
+                else if (choice.Call is { } meld && state.CallTile is { } tile)
+                {
+                    var consumed = meld.Tiles.Where(t => !TileHelpers.SameKind(t, tile)).ToArray();
+                    if (meld.Type == MeldType.Chi && consumed.Length == 3) consumed = consumed.Take(2).ToArray();
+                    var kind = choice.Kind switch { ActionKind.Pon => SimActionKind.Pon, ActionKind.Chi => SimActionKind.Chi, _ => SimActionKind.OpenKan };
+                    chosenIndex = LearningFeatures.ActionIndex(SimAction.Make(kind, tile, kind == SimActionKind.Chi ? consumed : []));
+                }
+                else chosenIndex = -1;
+                var agree = chosenIndex == humanIndex;
+                var called = chosenIndex >= 0 && chosenIndex != LearningFeatures.PassAction;
+                foreach (var category in categories)
+                    this.Local.Add(name, category, agree, chosenIndex < 0, none, none, called, human.Kind != SimActionKind.Pass);
+            }
         }
 
         private static (bool DealtIn, int Points) DealIn(Tile tile, OpponentTrainingTarget[] targets)
@@ -320,7 +367,8 @@ public static class LearningEvaluation
 
         public EvaluationReport Report(string corpus, string split, int games, string? model, double seconds)
         {
-            var order = new[] { "all", "human-discard", "human-riichi", "riichi-available", "riichi-choice", "vs-riichi", "vs-open", "quiet", "tenpai", "1-shanten", "2+-shanten", "early", "mid", "late", "all-last" };
+            var order = new[] { "all", "human-discard", "human-riichi", "riichi-available", "riichi-choice", "vs-riichi", "vs-open", "quiet", "tenpai", "1-shanten", "2+-shanten", "early", "mid", "late", "all-last",
+                "reaction", "reaction-human-pass", "reaction-human-call", "reaction-chi-available", "reaction-pon-available" };
             var agreement = this.agreement.ToDictionary(kv => kv.Key, kv => order.Where(kv.Value.ContainsKey)
                 .ToDictionary(c => c, c => kv.Value[c].ToRecord()));
             var calibration = this.calibration.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToDictionary(kv => kv.Key, kv => kv.Value.OrderBy(v => v.Key, StringComparer.Ordinal)

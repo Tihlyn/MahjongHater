@@ -6,7 +6,7 @@ using MahjongHater.Core.Simulation;
 
 internal static class LearningCommands
 {
-    public const string Usage = "learn-data <replay-corpus> <new-dataset> [search-run|-] [max-games] | learn-check <model.json> <parity.json>"
+    public const string Usage = "learn-data <replay-corpus> <new-dataset> [search-run|-] [max-games] [float32|float16] [workers] | learn-check <model.json> <parity.json>"
         + " | learn-eval <replay-corpus> <report.json> [model.json|-] [split=test] [max-games] [threads]"
         + " | learn-fit-tenpai <replay-corpus> [split=train] [max-games]";
     public static bool Handles(string command) => command is "learn-data" or "learn-check" or "learn-eval" or "learn-fit-tenpai";
@@ -45,8 +45,10 @@ internal static class LearningCommands
         }
         if (args[0] == "learn-data")
         {
+            var dtype = args.Length > 5 ? args[5] : "float32";
+            if (dtype is not ("float32" or "float16")) throw new ArgumentException("dtype must be float32 or float16");
             LearningDataset.Export(new ReplayCorpus(args[1]), args[2], args.Length > 3 && args[3] != "-" ? args[3] : null, ct,
-                args.Length > 4 ? int.Parse(args[4]) : int.MaxValue);
+                args.Length > 4 ? int.Parse(args[4]) : int.MaxValue, dtype == "float16", args.Length > 6 ? int.Parse(args[6]) : 0);
             Console.WriteLine(File.ReadAllText(Path.Combine(args[2], "manifest.json")));
         }
         else
@@ -64,6 +66,10 @@ internal static class LearningCommands
             }
             if (worst > .0002) throw new InvalidDataException($"Inference parity failed: maximum error {worst}.");
             Console.WriteLine($"Verified {cases.Length} PyTorch/C# inference vectors; maximum absolute error {worst:G6}.");
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            const int repetitions = 50;
+            for (var i = 0; i < repetitions; i++) model.Predict(cases[i % cases.Length].Input, ct);
+            Console.WriteLine($"Inference: {clock.Elapsed.TotalMilliseconds / repetitions:F2} ms per position on one thread (schema {model.Schema}, {model.FeatureVersion}).");
         }
         return 0;
     }

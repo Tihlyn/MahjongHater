@@ -266,6 +266,9 @@ public sealed record PolicyWeights
     // Chasing a riichi with a bad wait needs this much (Fukuchi: 5 200, mangan vs the dealer).
     public double ChaseBadWaitPoints { get; init; } = 5200;
     public double ChaseBadWaitPointsVsDealer { get; init; } = 8000;
+    // Learned call decisions: decline a heuristic call when the network's pass probability
+    // reaches this (LearnedCallPolicy).
+    public double LearnedCallPassThreshold { get; init; } = 0.5;
 
     public static PolicyWeights Default { get; } = new();
 }

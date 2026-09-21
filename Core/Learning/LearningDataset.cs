@@ -8,7 +8,8 @@ using MahjongHater.Core.State;
 
 namespace MahjongHater.Core.Learning;
 
-// Fixed little-endian float32 rows, memory-mappable on the training box.
+// Fixed little-endian rows (float32, or float16 for large exports: every input value is
+// a small fraction or a count and the targets are 0/1/-1, small ratios or NaN).
 // features | legal mask | human action (-1 absent) | opponent targets | Q labels.
 // Missing opponent/Q targets are -1 / NaN respectively, never manufactured zeros.
 public static class LearningDataset
@@ -19,32 +20,39 @@ public static class LearningDataset
     private static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true };
 
     public const int Opponents = 207;
-    public const int RowFloats = LearningFeatures.Count + 74 + 1 + Opponents + 74;
+    public const int Schema = 2;
+    // features | legal mask | human action | opponent targets | search Q, all v2 sizes.
+    public const int RowFloats = LearningFeatures.Count + LearningFeatures.Actions + 1 + Opponents + LearningFeatures.Actions;
 
     // `maxGames` takes a uniform, split-independent subset (ordered by a hash slice the
-    // split function does not use) so a large corpus can be exported at dense float32 size.
-    public static void Export(ReplayCorpus corpus, string destination, string? searchRun = null, CancellationToken ct = default, int maxGames = int.MaxValue)
+    // split function does not use) so a large corpus can be exported at dense size.
+    // Rows of one game are encoded on `workers` threads and written in corpus order.
+    public static void Export(ReplayCorpus corpus, string destination, string? searchRun = null, CancellationToken ct = default,
+        int maxGames = int.MaxValue, bool half = false, int workers = 0)
     {
+        if (workers < 1) workers = Math.Max(1, Environment.ProcessorCount - 1);
         var path = Path.GetFullPath(destination);
         if (Directory.Exists(path) || File.Exists(path)) throw new IOException("Learning dataset destination exists.");
         var temp = path + ".building-" + Guid.NewGuid().ToString("N");
         Directory.CreateDirectory(temp);
+        var extension = half ? ".f16" : ".f32";
         var counts = new Dictionary<string, int> { ["train"] = 0, ["validation"] = 0, ["test"] = 0 };
         var humans = new Dictionary<string, int>(counts);
         var skipped = 0;
         var searchRows = 0;
-        var writers = counts.Keys.ToDictionary(k => k, k => new BinaryWriter(File.Create(Path.Combine(temp, k + ".f32"))));
+        var writers = counts.Keys.ToDictionary(k => k, k => new BinaryWriter(new BufferedStream(File.Create(Path.Combine(temp, k + extension)), 1 << 20)));
         using var provenance = new StreamWriter(Path.Combine(temp, "rows.jsonl"));
-        void Write(string split, string game, StateSnapshot state, SimAction[] legal, int human, OpponentTrainingTarget[] targets, ActionStatistics[]? search)
+        // null = skipped (the legal set has an action outside the space or the human action is not in it).
+        static float[]? Encode(StateSnapshot state, SimAction[] legal, int human, OpponentTrainingTarget[] targets, ActionStatistics[]? search)
         {
-            var actionIds = legal.Select(LearningFeatures.ActionIndex).ToArray();
+            // Physical variants of one action (red vs plain five in a chi) share an index.
+            var actionIds = legal.Select(LearningFeatures.ActionIndex).Distinct().ToArray();
             // Do not pretend a policy over a subset is a policy over all legal actions.
-            if (actionIds.Length < 2 || actionIds.Any(a => a < 0) || actionIds.Distinct().Count() != actionIds.Length
-                || human >= 0 && !actionIds.Contains(human)) { skipped++; return; }
+            if (actionIds.Length < 2 || actionIds.Any(a => a < 0) || human >= 0 && !actionIds.Contains(human)) return null;
             var row = new float[RowFloats];
             LearningFeatures.Encode(state).CopyTo(row, 0);
             foreach (var a in actionIds) row[LearningFeatures.Count + a] = 1;
-            var offset = LearningFeatures.Count + 74;
+            var offset = LearningFeatures.Count + LearningFeatures.Actions;
             row[offset++] = human;
             Array.Fill(row, -1, offset, Opponents);
             foreach (var target in targets)
@@ -62,29 +70,49 @@ public static class LearningDataset
                 }
             }
             offset += Opponents;
-            Array.Fill(row, float.NaN, offset, 74);
+            Array.Fill(row, float.NaN, offset, LearningFeatures.Actions);
             if (search is not null)
-                foreach (var a in search.Where(a => a.Visits >= 8)) row[offset + LearningFeatures.ActionIndex(a.Action)] = (float)(a.MeanScore / 32000);
-            foreach (var value in row) writers[split].Write(value);
-            provenance.WriteLine(JsonSerializer.Serialize(new { Split = split, Row = counts[split], Game = game, Human = human >= 0 }, SimulationFiles.Json));
-            counts[split]++;
-            if (human >= 0) humans[split]++; else searchRows++;
+                foreach (var a in search.Where(a => a.Visits >= 8 && LearningFeatures.ActionIndex(a.Action) >= 0)) row[offset + LearningFeatures.ActionIndex(a.Action)] = (float)(a.MeanScore / 32000);
+            return row;
         }
+        void Write(string split, string game, float[]? row, bool human)
+        {
+            if (row is null) { skipped++; return; }
+            var writer = writers[split];
+            if (half) foreach (var value in row) writer.Write((Half)value);
+            else foreach (var value in row) writer.Write(value);
+            provenance.WriteLine(JsonSerializer.Serialize(new { Split = split, Row = counts[split], Game = game, Human = human }, SimulationFiles.Json));
+            counts[split]++;
+            if (human) humans[split]++; else searchRows++;
+        }
+        var options = new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = ct };
         try
         {
             var selected = Enumerable.Range(0, corpus.Count);
             if (maxGames < corpus.Count)
                 selected = selected.OrderBy(i => corpus.Manifest.Games[i].Sha256.Substring(8, 8), StringComparer.Ordinal).Take(maxGames).Order();
-            foreach (var i in selected)
+            // Read + encode game i+1 while game i is written: one game of rows in flight.
+            Task<(ReplayGame Game, float[]?[] Rows)>? next = null;
+            Task<(ReplayGame Game, float[]?[] Rows)> Prepare(int index) => Task.Run(() =>
+            {
+                var game = corpus.Read(index);
+                var rows = new float[]?[game.Decisions.Length];
+                Parallel.For(0, rows.Length, options, j =>
+                {
+                    var d = game.Decisions[j];
+                    rows[j] = Encode(d.Observation.Snapshot, d.LegalActions, LearningFeatures.ActionIndex(d.ObservedAction), d.OpponentTargets, null);
+                });
+                return (game, rows);
+            }, ct);
+            var order = selected.ToArray();
+            for (var n = 0; n < order.Length; n++)
             {
                 ct.ThrowIfCancellationRequested();
-                var game = corpus.Read(i);
-                foreach (var d in game.Decisions)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    Write(ReplayCorpus.Split(game.Sha256), game.Sha256, d.Observation.Snapshot, d.LegalActions,
-                        LearningFeatures.ActionIndex(d.ObservedAction), d.OpponentTargets, null);
-                }
+                var current = next ?? Prepare(order[n]);
+                next = n + 1 < order.Length ? Prepare(order[n + 1]) : null;
+                var (game, rows) = current.GetAwaiter().GetResult();
+                foreach (var row in rows)
+                    Write(ReplayCorpus.Split(game.Sha256), game.Sha256, row, true);
             }
             if (searchRun is not null)
             {
@@ -103,7 +131,7 @@ public static class LearningDataset
                     // Search must not expose held-out replay outcomes to training.
                     if (manifest.CorpusSha256 is not null && ReplayCorpus.Split(game) != "train") continue;
                     foreach (var r in job.Records)
-                        Write("train", game, SnapshotJson.Deserialize(r.Snapshot), r.Actions.Select(a => a.Action).ToArray(), -1, [], r.Actions);
+                        Write("train", game, Encode(SnapshotJson.Deserialize(r.Snapshot), r.Actions.Select(a => a.Action).ToArray(), -1, [], r.Actions), false);
                 }
             }
         }
@@ -111,13 +139,13 @@ public static class LearningDataset
         provenance.Dispose();
         var hashes = counts.Keys.ToDictionary(k => k, k =>
         {
-            using var file = File.OpenRead(Path.Combine(temp, k + ".f32"));
+            using var file = File.OpenRead(Path.Combine(temp, k + extension));
             return Convert.ToHexString(SHA256.HashData(file));
         });
         File.WriteAllText(Path.Combine(temp, "manifest.json"), JsonSerializer.Serialize(new
         {
-            Schema = 1, Features = LearningFeatures.Version, Channels = LearningFeatures.Channels, Width = 34, Actions = 74,
-            RowFloats, Corpus = corpus.Fingerprint, Rules = corpus.Manifest.TargetRules, Rows = counts, HumanRows = humans,
+            Schema, Features = LearningFeatures.Version, Channels = LearningFeatures.Channels, Width = 34, Actions = LearningFeatures.Actions,
+            RowFloats, Dtype = half ? "float16" : "float32", Extension = extension, Corpus = corpus.Fingerprint, Rules = corpus.Manifest.TargetRules, Rows = counts, HumanRows = humans,
             GamesUsed = Math.Min(maxGames, corpus.Count), GamesInCorpus = corpus.Count,
             SearchRows = searchRows, Skipped = skipped, Sha256 = hashes,
             SearchRunFingerprint = searchRun is null ? null : SimulationFiles.Read<RunManifest>(Path.Combine(searchRun, "manifest.json.gz")).Fingerprint,

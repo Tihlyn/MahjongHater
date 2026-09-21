@@ -63,7 +63,8 @@ public sealed class Plugin : IDalamudPlugin
                 // ordering and tenpai head inside the measured danger budget; danger itself stays
                 // on the Houou tables, riichi/calls/wins on the heuristic rules.
                 var opponents = new MahjongHater.Core.Learning.LearnedOpponentModel(model, weights, useLearnedDanger: false);
-                policy = new DecisionPolicy(opponents: opponents, discards: new MahjongHater.Core.Learning.LearnedDiscardPolicy(model, weights), weights: weights);
+                policy = new DecisionPolicy(opponents: opponents, discards: new MahjongHater.Core.Learning.LearnedDiscardPolicy(model, weights),
+                    calls: new MahjongHater.Core.Learning.LearnedCallPolicy(model, weights), weights: weights);
                 pluginLog.Information($"Learned policy loaded ({model.Status}) as learned-guarded; exact cache remains first when enabled.");
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)

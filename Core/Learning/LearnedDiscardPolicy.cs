@@ -25,10 +25,10 @@ public sealed class LearnedDiscardPolicy(LearnedModel network, PolicyWeights? we
         var riichiLegal = legal.Where(a => a.Kind == SimActionKind.Riichi).Select(a => a.Tile).ToHashSet(StringComparer.Ordinal);
         // The network scores "discard t" and "riichi with t" separately; the tile's weight is
         // the sum of both (the riichi layer decides the declaration afterwards).
-        var maximum = prediction.Take(LearningFeatures.Actions).Max();
+        var maximum = prediction.Take(network.Actions).Max();
         double Weight(DiscardCandidate c)
         {
-            var discard = LearningFeatures.ActionIndex(SimAction.Make(SimActionKind.Discard, c.Tile));
+            var discard = network.ActionIndex(SimAction.Make(SimActionKind.Discard, c.Tile));
             if (discard < 0) return 0;
             var weight = Math.Exp(prediction[discard] - maximum);
             if (riichiLegal.Contains(c.Tile.ToString()))

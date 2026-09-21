@@ -39,7 +39,7 @@ public sealed class LearningTests
         var state = Seat(Snap("123m456m4578p447s1z"), 2, "4s1m", riichi: true, riichiIndex: 1) with { DoraIndicators = [Tile.Parse("3p")] };
         var x = LearningFeatures.Encode(state);
         Assert.Equal(LearningFeatures.Count, x.Length);
-        Assert.Equal(64 * 34, LearningFeatures.Count);
+        Assert.Equal(72 * 34, LearningFeatures.Count);
         int Kind(string t) => TileHelpers.ToIndex(Tile.Parse(t));
         Assert.Equal(0.5f, x[0 * 34 + Kind("4s")]);             // two copies × 0.25
         Assert.Equal(1f, x[2 * 34 + Kind("1z")]);                // drawn tile = last in hand
@@ -50,6 +50,13 @@ public sealed class LearningTests
         Assert.Equal(1f, x[(c + 4) * 34 + Kind("1m")]);          // riichi tile
         Assert.All(x, v => Assert.True(float.IsFinite(v)));
         Assert.Equal(x, LearningFeatures.Encode(state));          // deterministic
+        // Look-ahead planes: a 14-tile hand has a per-discard shanten plane and a broadcast
+        // current-shanten plane; the legacy encoding is the same first 64 planes.
+        Assert.True(x[68 * 34] > 0 && x[65 * 34 + Kind("1z")] > 0);
+        var legacy = LearningFeatures.Encode(state, LearningFeatures.LegacyVersion);
+        Assert.Equal(64 * 34, legacy.Length);
+        Assert.Equal(legacy, x.Take(64 * 34));
+        Assert.Throws<ArgumentException>(() => LearningFeatures.Encode(state, "other"));
     }
 
     [Fact]
@@ -60,8 +67,16 @@ public sealed class LearningTests
         var riichi = SimAction.Make(SimActionKind.Riichi, Tile.Parse("5p"));
         Assert.NotEqual(LearningFeatures.ActionIndex(discard), LearningFeatures.ActionIndex(red));
         Assert.Equal(LearningFeatures.ActionIndex(discard) + 37, LearningFeatures.ActionIndex(riichi));
-        Assert.Equal(-1, LearningFeatures.ActionIndex(SimAction.Make(SimActionKind.Pass)));
-        Assert.InRange(LearningFeatures.ActionIndex(riichi), 0, LearningFeatures.Actions - 1);
+        Assert.Equal(LearningFeatures.PassAction, LearningFeatures.ActionIndex(SimAction.Make(SimActionKind.Pass)));
+        Assert.Equal(-1, LearningFeatures.ActionIndex(SimAction.Make(SimActionKind.Pass), LearningFeatures.LegacyVersion));
+        Assert.InRange(LearningFeatures.ActionIndex(riichi), 0, LearningFeatures.LegacyActions - 1);
+        // Chi shapes by the position of the called tile; pon/kan by kind.
+        Assert.Equal(LearningFeatures.ChiLowAction, LearningFeatures.ActionIndex(SimAction.Make(SimActionKind.Chi, Tile.Parse("4p"), TestTiles.Parse("56p"))));
+        Assert.Equal(LearningFeatures.ChiMiddleAction, LearningFeatures.ActionIndex(SimAction.Make(SimActionKind.Chi, Tile.Parse("5p"), TestTiles.Parse("46p"))));
+        Assert.Equal(LearningFeatures.ChiHighAction, LearningFeatures.ActionIndex(SimAction.Make(SimActionKind.Chi, Tile.Parse("6p"), TestTiles.Parse("45p"))));
+        Assert.Equal(LearningFeatures.PonAction, LearningFeatures.ActionIndex(SimAction.Make(SimActionKind.Pon, Tile.Parse("5z"), TestTiles.Parse("55z"))));
+        Assert.Equal(LearningFeatures.OpenKanAction, LearningFeatures.ActionIndex(SimAction.Make(SimActionKind.OpenKan, Tile.Parse("5z"), TestTiles.Parse("555z"))));
+        Assert.InRange(LearningFeatures.AddedKanAction, 0, LearningFeatures.Actions - 1);
     }
 
     [Fact]
@@ -83,8 +98,10 @@ public sealed class LearningTests
         LearningDataset.Export(corpus, dataset);
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(dataset, "manifest.json")));
         var root = manifest.RootElement;
-        Assert.Equal(1, root.GetProperty("Schema").GetInt32());
+        Assert.Equal(LearningDataset.Schema, root.GetProperty("Schema").GetInt32());
         Assert.Equal(LearningFeatures.Version, root.GetProperty("Features").GetString());
+        Assert.Equal(LearningFeatures.Channels, root.GetProperty("Channels").GetInt32());
+        Assert.Equal(LearningFeatures.Actions, root.GetProperty("Actions").GetInt32());
         Assert.Equal(LearningDataset.RowFloats, root.GetProperty("RowFloats").GetInt32());
         Assert.Equal(corpus.Fingerprint, root.GetProperty("Corpus").GetString());
         var rows = root.GetProperty("Rows");
@@ -106,15 +123,25 @@ public sealed class LearningTests
         var artifact = SyntheticArtifact(channels: 2, hidden: 3);
         var model = new LearnedModel(artifact);
         var output = model.Predict(Snap("123m456m4578p447s1z"));
-        Assert.Equal(LearnedModel.Outputs, output.Length);
+        Assert.Equal(model.Outputs, output.Length);
+        Assert.Equal(2 * LearningFeatures.Actions + LearnedModel.OpponentOutputs, output.Length);
+        Assert.Equal(LearningFeatures.Version, model.FeatureVersion);
         Assert.All(output, v => Assert.True(float.IsFinite(v)));
         Assert.InRange(model.Tenpai(0), 0, 1);
         Assert.InRange(model.Points(0.5f), 0, 128000);
         Assert.True(model.Supports(Snap("")));
         Assert.False(model.Supports(Snap("") with { Ruleset = new RulesetOptions(true, 4) }));
 
-        Assert.Throws<InvalidDataException>(() => new LearnedModel(artifact with { Schema = 2 }));
+        Assert.Throws<InvalidDataException>(() => new LearnedModel(artifact with { Schema = 1 }));      // no Conv1/Conv2
+        Assert.Throws<InvalidDataException>(() => new LearnedModel(artifact with { Schema = 3 }));
         Assert.Throws<InvalidDataException>(() => new LearnedModel(artifact with { Features = "other" }));
+        Assert.Throws<InvalidDataException>(() => new LearnedModel(artifact with { Features = LearningFeatures.LegacyVersion }));   // stem width mismatch
+        Assert.Throws<InvalidDataException>(() => new LearnedModel(artifact with { Blocks = [new ResidualBlock(artifact.Stem!, artifact.Stem!)] }));
+        // A legacy schema-1 artifact (two plain convs, v1 planes, 74 actions) still loads.
+        var legacy = SyntheticArtifact(2, 3, legacy: true);
+        var legacyModel = new LearnedModel(legacy);
+        Assert.Equal(2 * LearningFeatures.LegacyActions + LearnedModel.OpponentOutputs, legacyModel.Predict(Snap("123m456m4578p447s1z")).Length);
+        Assert.Throws<InvalidDataException>(() => new LearnedModel(legacy with { Features = LearningFeatures.Version }));
         Assert.Throws<InvalidDataException>(() => new LearnedModel(artifact with { Output = artifact.Output with { Outputs = 10, Weight = new float[30], Bias = new float[10] } }));
         var nan = (float[])artifact.Dense.Weight.Clone();
         nan[0] = float.NaN;
@@ -201,10 +228,14 @@ public sealed class LearningTests
         var report = LearningEvaluation.Run(corpus, model, PolicyWeights.Default, new EvaluationOptions { Split = "all", Threads = 2 });
         Assert.Equal(corpus.Count, report.Games);
         Assert.True(report.Decisions > 0);
+        // Turn decisions go to "all"; claim-window reactions to "reaction" (both count in Decisions).
+        var reactions = report.Agreement.Values.First().TryGetValue("reaction", out var cell) ? cell.Decisions : 0;
+        Assert.True(reactions > 0);
         foreach (var name in new[] { LearningEvaluation.Heuristic, LearningEvaluation.HeuristicEv, LearningEvaluation.Legacy, LearningEvaluation.Learned, LearningEvaluation.Hybrid, LearningEvaluation.HybridTenpai, LearningEvaluation.Guarded })
         {
             var all = report.Agreement[name]["all"];
-            Assert.Equal(report.Decisions, all.Decisions);
+            Assert.Equal(report.Decisions, all.Decisions + reactions);
+            Assert.Equal(reactions, report.Agreement[name]["reaction"].Decisions);
             Assert.InRange(all.Agreement, 0, 1);
             Assert.InRange(all.PolicyDealInRate, 0, 1);
         }
@@ -216,6 +247,60 @@ public sealed class LearningTests
         var json = Path.Combine(temp.Path, "report.json");
         LearningEvaluation.Write(json, report);
         Assert.True(new FileInfo(json).Length > 100);
+    }
+
+    [Fact]
+    public void Learned_call_policy_answers_claim_windows_and_defers_elsewhere()
+    {
+        var model = new LearnedModel(SyntheticArtifact(2, 3));
+        var policy = new LearnedCallPolicy(model);
+        // 13 tiles, a yakuhai pair, pon offered: a claim window the network scores.
+        var offered = Snap("123m456p67s1155z9s", LegalAction.Pon) with
+        {
+            DrawnTile = null, CallTile = Tile.Parse("5z"), CallFromSeat = 3, Phase = GamePhase.CallPrompt,
+        };
+        Assert.True(LearnedCallPolicy.IsClaimWindow(offered));
+        var decision = policy.Evaluate(offered, Model(offered), CancellationToken.None);
+        Assert.Contains("Learned", decision.Reason.Display);
+        if (decision.Accept) Assert.Equal(ActionKind.Pon, decision.Kind);
+        // Never accepts a call the heuristic would not make (no yaku-preserving meld).
+        var weights = PolicyWeights.Default with { LearnedCallPassThreshold = 1.01 };
+        var eager = new LearnedCallPolicy(model, weights);
+        var heuristic = new CallPolicy().Evaluate(offered, Model(offered), CancellationToken.None);
+        var eagerDecision = eager.Evaluate(offered, Model(offered), CancellationToken.None);
+        Assert.True(!eagerDecision.Accept || heuristic.Accept);
+        // Not a claim window (own turn): pure heuristic, no learned note.
+        var turn = Snap("123m456m4578p447s1z", LegalAction.Discard);
+        Assert.False(LearnedCallPolicy.IsClaimWindow(turn));
+        Assert.DoesNotContain("Learned", policy.Evaluate(turn, Model(turn), CancellationToken.None).Reason.Display);
+        // A legacy model has no reaction actions: heuristic answer on claim windows too.
+        var legacyPolicy = new LearnedCallPolicy(new LearnedModel(SyntheticArtifact(2, 3, legacy: true)));
+        Assert.DoesNotContain("Learned", legacyPolicy.Evaluate(offered, Model(offered), CancellationToken.None).Reason.Display);
+    }
+
+    [Fact]
+    public void Importer_records_reaction_decisions_for_seats_that_could_call()
+    {
+        using var temp = new TemporaryDirectory();
+        var input = Path.Combine(temp.Path, "raw");
+        Directory.CreateDirectory(input);
+        // Seat 0 discards its drawn tile (id 82 = kind 20, 3s); no other seat holds two of that
+        // kind in the synthetic hands, so only chi by seat 1 is possible when seat 1 holds
+        // neighbours. Import the standard trace and check reaction rows are well-formed.
+        File.WriteAllBytes(Path.Combine(input, "game0.xml"), Trace());
+        var corpusPath = Path.Combine(temp.Path, "corpus");
+        var imported = ReplayCorpus.Import(input, corpusPath, Rules, 0);
+        Assert.Empty(imported.Rejected);
+        var corpus = new ReplayCorpus(corpusPath);
+        var decisions = Enumerable.Range(0, corpus.Count).SelectMany(i => corpus.Read(i).Decisions).ToList();
+        Assert.NotEmpty(decisions);
+        foreach (var d in decisions.Where(d => d.LegalActions.Any(a => a.Kind == SimActionKind.Pass)))
+        {
+            Assert.Contains(d.LegalActions, a => a.Kind is SimActionKind.Chi or SimActionKind.Pon or SimActionKind.OpenKan);
+            Assert.DoesNotContain(d.LegalActions, a => a.Kind == SimActionKind.Ron);
+            Assert.Contains(d.ObservedAction, d.LegalActions);
+            Assert.Equal(SimPhase.DiscardResponses, d.Observation.Phase);
+        }
     }
 
     [Fact]
@@ -235,16 +320,23 @@ public sealed class LearningTests
         Assert.Contains("TenpaiLogitIntercept", result.Initializers);
     }
 
-    // A structurally valid artifact with small random weights (not a trained model).
-    private static LearnedArtifact SyntheticArtifact(int channels, int hidden)
+    // A structurally valid artifact with small random weights (not a trained model):
+    // schema 2 (stem + one residual block, v2 planes) or the legacy schema-1 shape.
+    private static LearnedArtifact SyntheticArtifact(int channels, int hidden, bool legacy = false)
     {
         var random = new Random(3);
         NeuralLayer Layer(int inputs, int outputs, int kernel) => new(inputs, outputs, kernel,
             Enumerable.Range(0, inputs * outputs * kernel).Select(_ => (float)(random.NextDouble() - 0.5) * 0.1f).ToArray(),
             new float[outputs]);
-        return new LearnedArtifact(1, LearningFeatures.Version, "synthetic", Rules,
-            Layer(LearningFeatures.Channels, channels, 3), Layer(channels, channels, 3), Layer(channels * 34, hidden, 1), Layer(hidden, LearnedModel.Outputs, 1),
-            new ProbabilityCalibration(1, 0), new ProbabilityCalibration(1, 0), 1f, false, "synthetic");
+        if (legacy)
+            return new LearnedArtifact(1, LearningFeatures.LegacyVersion, "synthetic", Rules,
+                Layer(LearningFeatures.LegacyChannels, channels, 3), Layer(channels, channels, 3), Layer(channels * 34, hidden, 1),
+                Layer(hidden, 2 * LearningFeatures.LegacyActions + LearnedModel.OpponentOutputs, 1),
+                new ProbabilityCalibration(1, 0), new ProbabilityCalibration(1, 0), 1f, false, "synthetic");
+        return new LearnedArtifact(2, LearningFeatures.Version, "synthetic", Rules, null, null, Layer(channels * 34, hidden, 1),
+            Layer(hidden, 2 * LearningFeatures.Actions + LearnedModel.OpponentOutputs, 1),
+            new ProbabilityCalibration(1, 0), new ProbabilityCalibration(1, 0), 1f, false, "synthetic")
+        { Stem = Layer(LearningFeatures.Channels, channels, 3), Blocks = [new ResidualBlock(Layer(channels, channels, 3), Layer(channels, channels, 3))] };
     }
 
     private sealed class TemporaryDirectory : IDisposable

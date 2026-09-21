@@ -69,3 +69,23 @@ When the simulator A/B runs, compare against the published per-hand rates in the
 expert room: win 22.7–23.1 %, deal-in 10.1–12.2 %, first-place 25.6–29.3 %, fourth-place
 18.7–22.4 %. Our own environment differs (Doman rules, our opponents are our own policies), so
 these are orientation, not targets; the target is beating our previous build on matched seeds.
+
+## 5. Status after the training-package work (2026-09-21, evening)
+
+The project owner's order: the weakest point first (D), then affordability. Implemented on
+`experimentalv2`, all measured with the same harness:
+
+| path | state | evidence |
+|---|---|---|
+| **D** learned calls | importer emits every claim-window reaction (pass / chi / pon / open kan; 26 % of decisions); 82-action space (`public-tiles-v2`); `LearnedCallPolicy` gates the heuristic call with the network's pass probability | pilot (34 games): heuristic calls on **24.2 %** of windows, humans **15.8 %**, agreement 80.4 % (pass 83.7 %, call 63.0 %) — this is the gap a trained call head has to close |
+| **A** look-ahead planes | eight planes: tenpai / shanten / ukeire / wait count after each discard, current shanten + ukeire, best shanten and tenpai after the offered claim | encoder + tests; effect measurable only after a real training run |
+| **C** residual network | schema-2 artifact (stem + N residual blocks), C# inference vectorized (3 M-parameter net: 4.6 ms per position, was ~45 ms), per-thread memo so a decision runs the network once; parity verified 1e-6 | `train.py --blocks --channels --device cuda` with mixed precision |
+| **B** all archives | `Run-Training.ps1` fetches n1–n30 (1.06 GB, ~100 k games) with SHA-256 provenance; parallel importer (9 min for 4 archives on 10 workers); float16 export at 8 600 rows/s | `docs/TRAINING_PACKAGE.md`; `artifacts/training-win-x64.zip` (31 MB) |
+| F placement head, E runtime EV | not started | — |
+
+What the GPU box should produce first: `Run-Training.ps1` with the defaults (24 000 games ≈
+14 M rows, blocks 6 × 128, 20 epochs). Judge it on `test.policy_top1` (was 69.1 % for the
+v1 c96/h256 net on 3 M rows), `test.reaction_top1` (heuristic 80 %), the learned-guarded
+call rate against the human 16 %, and the chosen-tile deal-in block. If reaction accuracy
+clears ~88 % the call gate threshold (`LearnedCallPassThreshold`, default 0.5) can be
+tuned on the validation split rather than guessed.

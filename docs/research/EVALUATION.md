@@ -21,7 +21,12 @@ category. A decision counts in every category it matches: `all`, `human-discard`
 `human-riichi`, `riichi-available` (a riichi was legal), `riichi-choice` (declare or not,
 ignoring the tile), `vs-riichi` / `vs-open` (an opponent with ≥ 2 calls) / `quiet`,
 `tenpai` / `1-shanten` / `2+-shanten` (our best shanten after a discard), `early` / `mid` /
-`late` (turn ≤ 6 / ≤ 11 / later), `all-last`.
+`late` (turn ≤ 6 / ≤ 11 / later), `all-last`. Claim-window reactions (importer v2
+corpora) are scored separately: `reaction` (agreement = same decision: pass, or the same
+call kind and chi shape), `reaction-human-pass` / `reaction-human-call`,
+`reaction-chi-available` / `reaction-pon-available`, plus a **call rate on claim windows**
+line for the humans and every policy so over- and under-calling show even when agreement
+looks fine.
 
 **Deal-in rate of the chosen tile**: using the hidden targets, whether the tile the policy
 would have cut was a legal ron for a tenpai opponent *at that moment* — and the same for the
@@ -36,8 +41,10 @@ is counterfactual, exact, and directly comparable across policies and the human 
   split by `vs-riichi` and `vs-tenpai-no-riichi`.
 
 Policies: `heuristic` (defense v2, analyzer ordering), `heuristic-ev` (defense v2 with
-`RankByPointEv`), `legacy` (v1.3), and with a model `learned` (`LearnedPolicy`) and `hybrid`
-(`DecisionPolicy` with `LearnedOpponentModel`).
+`RankByPointEv`), `legacy` (v1.3), and with a model `learned` (`LearnedPolicy`), `hybrid`
+(`DecisionPolicy` with `LearnedOpponentModel`), `hybrid-tenpai` (learned tenpai head, table
+danger) and `learned-guarded` (imitation ordering under the danger budget, learned tenpai,
+`LearnedCallPolicy` on claim windows — the plugin's "learned policy" toggle).
 
 ## Reading the numbers
 

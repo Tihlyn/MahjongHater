@@ -39,15 +39,18 @@ Use the new portable package, or substitute
 Copy the configuration from your simulator run so target rules agree:
 
 ```powershell
-.\Precompute.exe replay-import generation.json raw-logs corpus/competitive 16
+.\Precompute.exe replay-import generation.json raw-logs corpus/competitive 16 [workers]
 .\Precompute.exe replay-inspect corpus/competitive
 ```
 
-The last argument is the minimum **acting player's** Tenhou rank code:
+The rank argument is the minimum **acting player's** Tenhou rank code:
 `10` = first dan, `13` = fourth dan, `16` = seventh dan, `19` = tenth dan,
 `20` = Tenhoui. Default is `16`; `0` disables rank filtering for parser fixtures.
 An opponent at a different rank does not cause the whole game to be rejected.
 Ranks alone do not prove that a file is authentic or that every participant is human.
+`workers` (default: cores − 1) parses games in parallel; archive reading and
+de-duplication stay sequential, so the corpus is identical whatever the worker count
+(four Phoenix archives, 21 011 games: 9 min on 10 workers).
 
 The importer checks physical tiles, draw/discard/call order, concealed hand sizes,
 riichi payments and settlement base scores. It keeps only complete matches with
@@ -111,7 +114,8 @@ Each JSONL row has:
   private information known to that actor, such as their own temporary furiten.
   Opponents' hands, wall order, shuffle seeds and ura are absent.
 - `LegalActions`: target-rule actions available at that decision.
-- `Targets.HumanAction`: the recorded discard or riichi-discard choice.
+- `Targets.HumanAction`: the recorded discard / riichi-discard choice, or on a claim
+  window the recorded reaction (`Pass`, `Chi`, `Pon`, `OpenKan`).
 - `Targets.ObservedHandDelta`: the recorded hand-end point change from this
   snapshot; this is one observed return under source rules, **not action EV**.
 - `Targets.ObservedFinalPlacement`: recorded match placement under source rules.
@@ -127,9 +131,14 @@ The parser never learns future walls from the log's shuffle seed.
 
 ## Current scope and rule differences
 
-Decision samples currently cover **discard and riichi-discard decisions**, including
-open-hand turns. Calls/kans are reconstructed to keep later observations accurate,
-but call/pass/kan choice labels are not emitted yet. Forced moves and positions
+Decision samples cover **discard and riichi-discard decisions**, including open-hand
+turns, and since corpus importer `tenhou-decisions-v2` the **claim-window reactions**:
+for every discard, each other seat that could legally chi, pon or open-kan it gets a
+decision whose observation is the simulator's `DiscardResponses` phase for that seat and
+whose action is the recorded call (composition from the meld event) or `Pass`. Windows
+whose only option is pass carry no decision; windows where ron was legal are skipped as
+available wins (about 26 % of a corpus's decisions are reactions; 16 % of them are calls).
+Own-turn closed/added kan choices are still not emitted. Forced moves and positions
 with an available immediate win are skipped. Source extension rounds and states
 waiting for a delayed source kan-dora reveal are also skipped. These filters are
 visible in the manifest and bias the exported training distribution accordingly.
