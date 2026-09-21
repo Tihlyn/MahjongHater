@@ -31,7 +31,7 @@ public sealed record AgreementCell(int Decisions, int Agree, int Unmapped, int H
     public double PolicyDealInRate => this.Decisions == 0 ? 0 : (double)this.PolicyDealIns / this.Decisions;
 }
 
-public sealed record CalibrationCell(int Count, int Positives, double Brier, double LogLoss, double Ece, double MeanPredicted)
+public sealed record CalibrationCell(int Count, int Positives, double Brier, double LogLoss, double Ece, double MeanPredicted, double Auc)
 {
     public double BaseRate => this.Count == 0 ? 0 : (double)this.Positives / this.Count;
 }
@@ -110,10 +110,10 @@ public static class LearningEvaluation
         }
 
         lines.Add(string.Empty);
-        lines.Add($"{"calibration (Brier / log-loss / ECE / n / base)",-46}");
+        lines.Add($"{"calibration (Brier / log-loss / ECE / n / base / AUC)",-46}");
         foreach (var (estimator, views) in report.Calibration)
             foreach (var (view, cell) in views)
-                lines.Add($"{estimator + " " + view,-46}{cell.Brier,8:F4}{cell.LogLoss,9:F4}{cell.Ece,8:F4}{cell.Count,9}{cell.BaseRate,9:P2}  mean p {cell.MeanPredicted:P2}");
+                lines.Add($"{estimator + " " + view,-46}{cell.Brier,8:F4}{cell.LogLoss,9:F4}{cell.Ece,8:F4}{cell.Count,9}{cell.BaseRate,9:P2}  mean p {cell.MeanPredicted:P2}  AUC {cell.Auc:F3}");
         lines.Add(string.Empty);
         lines.Add("elapsed " + string.Join(", ", report.Seconds.Select(kv => $"{kv.Key} {kv.Value:F0} s")));
         return string.Join(Environment.NewLine, lines);
@@ -344,9 +344,12 @@ public static class LearningEvaluation
         private sealed class Calib
         {
             private const int Bins = 10;
+            private const int RankBins = 1000;   // AUC from a fine histogram of predictions (ties split)
             private readonly int[] binCount = new int[Bins];
             private readonly double[] binPredicted = new double[Bins];
             private readonly int[] binPositives = new int[Bins];
+            private readonly long[] rankPositives = new long[RankBins];
+            private readonly long[] rankNegatives = new long[RankBins];
             private int count, positives;
             private double brier, logLoss, predicted;
             public void Add(double p, bool truth)
@@ -358,20 +361,33 @@ public static class LearningEvaluation
                 this.logLoss -= y * Math.Log(q) + (1 - y) * Math.Log(1 - q);
                 var bin = Math.Min(Bins - 1, (int)(p * Bins));
                 this.binCount[bin]++; this.binPredicted[bin] += p; this.binPositives[bin] += y;
+                var rank = Math.Min(RankBins - 1, (int)(p * RankBins));
+                if (truth) this.rankPositives[rank]++; else this.rankNegatives[rank]++;
             }
             public void Merge(Calib o)
             {
                 this.count += o.count; this.positives += o.positives; this.brier += o.brier; this.logLoss += o.logLoss; this.predicted += o.predicted;
                 for (var b = 0; b < Bins; b++) { this.binCount[b] += o.binCount[b]; this.binPredicted[b] += o.binPredicted[b]; this.binPositives[b] += o.binPositives[b]; }
+                for (var b = 0; b < RankBins; b++) { this.rankPositives[b] += o.rankPositives[b]; this.rankNegatives[b] += o.rankNegatives[b]; }
             }
             public CalibrationCell ToRecord()
             {
-                if (this.count == 0) return new CalibrationCell(0, 0, 0, 0, 0, 0);
+                if (this.count == 0) return new CalibrationCell(0, 0, 0, 0, 0, 0, 0);
                 var ece = 0d;
                 for (var b = 0; b < Bins; b++)
                     if (this.binCount[b] > 0)
                         ece += (double)this.binCount[b] / this.count * Math.Abs(this.binPredicted[b] / this.binCount[b] - (double)this.binPositives[b] / this.binCount[b]);
-                return new CalibrationCell(this.count, this.positives, this.brier / this.count, this.logLoss / this.count, ece, this.predicted / this.count);
+                // P(score(positive) > score(negative)) + ½ P(tie), from the histograms.
+                double pairs = 0, negativesBelow = 0;
+                var totalPositives = this.rankPositives.Sum();
+                var totalNegatives = this.rankNegatives.Sum();
+                for (var b = 0; b < RankBins; b++)
+                {
+                    pairs += this.rankPositives[b] * (negativesBelow + 0.5 * this.rankNegatives[b]);
+                    negativesBelow += this.rankNegatives[b];
+                }
+                var auc = totalPositives > 0 && totalNegatives > 0 ? pairs / ((double)totalPositives * totalNegatives) : 0.5;
+                return new CalibrationCell(this.count, this.positives, this.brier / this.count, this.logLoss / this.count, ece, this.predicted / this.count, auc);
             }
         }
     }

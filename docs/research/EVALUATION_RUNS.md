@@ -108,5 +108,30 @@ Conclusions:
 
 ## Run 5 — `dataset-all-8k`: 8 000 games from the combined corpus, c96/h256
 
-3.03 M training rows (36 GB); ≈ 22 min/epoch on 12 threads. Epoch 1 validation loss 1.118
-(already below run 3's best 1.155). Full run and its test-split evaluation: pending.
+3.03 M training rows (36 GB). The first attempt was killed by system memory pressure: the
+trainer memory-mapped the whole file and copied entire splits for evaluation. `train.py` now
+streams shuffled chunks through a bounded buffer and accumulates metrics per batch
+(`--buffer-rows`, `--memory-log`); resumed from the epoch-1 checkpoint at **1.1 GB RSS
+(peak 1.8 GB)**, ≈ 20 min/epoch on 10 threads. Validation loss 1.118 → 1.084 → 1.063 over
+epochs 1–3 (run-3 model's best: 1.155). Final metrics and test-split evaluation: pending.
+
+## Run 6 — AUC of the opponent models (60 test games, run-3 model)
+
+Added a streaming AUC to the calibration cells so the waiting model can be compared with
+Bakuuchi's published 0.777.
+
+| estimator | view | AUC | Brier | ECE | n |
+|---|---|---:|---:|---:|---:|
+| tenpai / refit logistic | closed | **0.867** | 0.0203 | 0.017 | 66 530 |
+| tenpai / refit logistic | open | 0.757 | 0.189 | 0.064 | 16 026 |
+| tenpai / learned head | closed | 0.851 | 0.0201 | 0.007 | 66 530 |
+| tenpai / learned head | open | 0.745 | 0.190 | 0.051 | 16 026 |
+| danger / Houou tables | vs-riichi, all kinds | **0.799** | 0.0442 | 0.005 | 190 876 |
+| danger / Houou tables | vs-riichi, in-hand | 0.733 | 0.0636 | 0.010 | 56 851 |
+| danger / learned head | vs-riichi, all kinds | 0.767 | 0.0448 | 0.004 | 190 876 |
+| danger / learned head | vs-riichi, in-hand | 0.685 | 0.0647 | 0.006 | 56 851 |
+
+The tables discriminate winning tiles clearly better than the learned head; the learned tenpai
+head is better calibrated but slightly worse at ranking than the refit logistic. Both
+waiting models are in the class of Bakuuchi's (different data and era, so not a strict
+comparison). See `STRENGTH_COMPARISON.md`.
