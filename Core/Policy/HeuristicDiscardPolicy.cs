@@ -67,8 +67,12 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
                 else
                     valuePoints = HandValue.EstimatePoints(state, option.ValueEstimate, this.weights);
                 winProbability = HandValue.WinProbability(option.Eval.ShantenAfter, option.Eval.Ukeire, option.Eval.Ukeire2, state.WallRemaining, this.weights);
-                ev = winProbability * valuePoints - this.weights.PushExposureTurns * opponents.ExpectedDealInCost(tile);
-                score = ev;
+                var cost = opponents.ExpectedDealInCost(tile);
+                ev = winProbability * valuePoints - this.weights.PushExposureTurns * cost;
+                // The budget/betaori layer decides defense; here risk only breaks ties unless
+                // point-EV ranking is switched on.
+                score = this.weights.RankByPointEv ? ev
+                    : option.Score - cost * (option.Eval.ShantenAfter == 0 ? this.weights.TenpaiRiskTieBreakPerPoint : this.weights.RiskTieBreakPerPoint);
             }
             else
             {

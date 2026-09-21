@@ -43,9 +43,13 @@ public class DiscardAndStanceTests
             Assert.True(candidate.ValuePoints >= 0);
             var expected = candidate.WinProbability * candidate.ValuePoints
                            - PolicyWeights.Default.PushExposureTurns * model.ExpectedDealInCost(candidate.Tile);
-            Assert.Equal(expected, candidate.Score, 6);
-            Assert.Equal(candidate.Score, candidate.ExpectedValue, 6);
+            Assert.Equal(expected, candidate.ExpectedValue, 6);
         }
+
+        // Point-EV ranking is opt-in; by default the analyzer score orders a shanten level.
+        var byEv = new HeuristicDiscardPolicy(weights: PolicyWeights.Default with { RankByPointEv = true }).Rank(state, model, default);
+        foreach (var candidate in byEv)
+            Assert.Equal(candidate.ExpectedValue, candidate.Score, 6);
 
         // The tenpai keep (discard 1z, wait 5-8p: riichi, pinfu, ittsu as dealer) is priced
         // from the scoring engine plus the ippatsu/ura expectation.

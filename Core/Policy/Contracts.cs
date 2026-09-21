@@ -235,6 +235,14 @@ public sealed record PolicyWeights
     public double TenpaiRateK { get; init; } = 1.0;
     public double ExtraShantenFactor { get; init; } = 0.35;
     public double PushExposureTurns { get; init; } = 3;
+    // Inside a shanten level: false = the analyzer's tile-efficiency score with the risk
+    // term scaled to a tie-break (RiskTieBreakPerPoint units per point at shanten >= 1,
+    // TenpaiRiskTieBreakPerPoint at tenpai); true = point EV (WinProbability × ValuePoints −
+    // exposure × expected loss). Measured on Phoenix replays with `learn-eval`: the analyzer
+    // score agrees with human choices more often (docs/research/EVALUATION.md).
+    public bool RankByPointEv { get; init; }
+    public double RiskTieBreakPerPoint { get; init; } = 1.0;        // < 10 000 / max cost: never outranks a ukeire tile
+    public double TenpaiRiskTieBreakPerPoint { get; init; } = 0.002; // tenpai scores are ~5–30
     // Push/fold budget (PushFoldPolicy.Decide): phases by our turn, wait quality, the
     // budgets that "cut a 10 % / 7 % / 5 % tile" map to, and situational factors.
     public int EarlyTurnMax { get; init; } = 6;
