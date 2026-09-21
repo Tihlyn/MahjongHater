@@ -83,6 +83,11 @@ The project owner's order: the weakest point first (D), then affordability. Impl
 | **B** all archives | `Run-Training.ps1` fetches n1–n30 (1.06 GB, ~100 k games) with SHA-256 provenance; parallel importer (9 min for 4 archives on 10 workers); float16 export at 8 600 rows/s | `docs/TRAINING_PACKAGE.md`; `artifacts/training-win-x64.zip` (31 MB) |
 | F placement head, E runtime EV | not started | — |
 
+Run 7 (`EVALUATION_RUNS.md`) puts the v1 c96/h256 net on the v2 corpus test split, 1 500
+games: learned 66.3 % agreement, learned-guarded 64.1 % with chosen-tile deal-in vs riichi
+1.52 % (humans 2.03 %); the learned tenpai head now beats the refit logistic (AUC 0.852 /
+0.782 closed / open, ECE 0.004 / 0.038). These are the numbers the GPU model is compared to.
+
 What the GPU box should produce first: `Run-Training.ps1` with the defaults (24 000 games ≈
 14 M rows, blocks 6 × 128, 20 epochs). Judge it on `test.policy_top1` (was 69.1 % for the
 v1 c96/h256 net on 3 M rows), `test.reaction_top1` (heuristic 80 %), the learned-guarded

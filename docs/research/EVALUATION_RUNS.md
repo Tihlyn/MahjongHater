@@ -149,3 +149,38 @@ decisions** (7 864 306 turn + 2 078 004 reactions), 9 min on 10 workers. The ear
 corpora (`tenhou-turn-decisions-v1`) no longer load; runs 1–6 stay as recorded. Runs 1–6
 used the n24-only test split; from run 7 the test split is drawn from all four archives
 (the split is by game hash, so the n24 test games are a subset of it).
+
+## Run 7 — `corpus-all-v2` test split, c96/h256 (v1 features, 3 M rows)
+
+1 500 held-out games, 902 564 decisions (713 820 turn, 188 744 claim-window reactions);
+55 min on 10 threads. The model has no reaction actions, so every policy answers claim windows
+with the heuristic `CallPolicy`.
+
+| | human | heuristic | heuristic-ev | legacy | learned | hybrid | hybrid-tenpai | learned-guarded |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| agreement, all (n=713 820) | — | 51.8 % | 49.3 % | 51.8 % | **66.3 %** | 54.1 % | 51.7 % | 64.1 % |
+| agreement, vs-riichi (n=127 794) | — | 56.4 % | 59.5 % | 52.6 % | 65.3 % | 56.9 % | 56.2 % | 63.1 % |
+| agreement, human-riichi (n=11 218) | — | 85.5 % | 85.0 % | 79.9 % | 62.9 % | 84.0 % | 85.1 % | 76.4 % |
+| agreement, tenpai (n=85 413) | — | 66.7 % | 66.9 % | 66.7 % | 74.1 % | 67.0 % | 66.1 % | 65.5 % |
+| chosen-tile deal-in, all | 0.92 % | 0.90 % | 0.70 % | 1.13 % | 0.87 % | 0.89 % | 0.85 % | **0.75 %** |
+| chosen-tile deal-in, vs-riichi | 2.03 % | 2.05 % | 1.62 % | 2.72 % | 1.82 % | 2.16 % | 2.04 % | **1.52 %** |
+| chosen-tile deal-in, late | 2.29 % | 2.36 % | 1.91 % | 3.51 % | 2.18 % | 2.30 % | 2.20 % | **1.82 %** |
+| reaction agreement (n=188 744) | — | 81.1 % (all policies: heuristic calls) |
+| call rate on claim windows | 16.3 % | 23.6 % (all policies) |
+
+Calibration (n = 4.7 M riichi rows, 1.6 M closed non-riichi seats):
+
+| estimator | view | AUC | Brier | ECE |
+|---|---|---:|---:|---:|
+| tenpai / refit logistic | closed / open | 0.850 / 0.769 | 0.0230 / 0.185 | 0.014 / 0.059 |
+| tenpai / learned head | closed / open | **0.852 / 0.782** | **0.0221 / 0.175** | **0.004 / 0.038** |
+| danger / Houou tables | vs-riichi all-kinds / in-hand | **0.803 / 0.732** | 0.0455 / 0.0666 | 0.006 / 0.012 |
+| danger / learned head | vs-riichi all-kinds / in-hand | 0.782 / 0.705 | 0.0460 / 0.0672 | 0.004 / 0.006 |
+
+Conclusions: with 3 M rows the learned tenpai head now beats the refit logistic on ranking
+*and* calibration (run 6 had it slightly behind on AUC), so `hybrid-tenpai` / `learned-guarded`
+keep it; the danger tables still discriminate better than the learned head. `learned-guarded`
+is the strongest runtime configuration on every defensive number (25 % fewer deal-ins than
+the humans against a riichi at 63 % agreement). The two remaining gaps are exactly the ones
+the v2 stack targets: riichi declaration (the network under-declares, 62.9 % of human
+riichis) and calls (heuristic over-calls, 23.6 % vs 16.3 %).
