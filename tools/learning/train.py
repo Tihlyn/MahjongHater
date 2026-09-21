@@ -16,7 +16,9 @@ into a bounded shuffle buffer (--buffer-rows); validation/test are streamed with
 accumulated per batch. --memory-log prints the resident set after every epoch.
 
 GPU: --device cuda (or auto) with automatic mixed precision; an 8 GB card takes
---blocks 6 --channels 128 --batch 1024 comfortably.
+--blocks 6 --channels 128 --batch 1024 comfortably. The loader runs on a background thread
+(--prefetch batches ahead, pinned memory) and the objective has no host/device
+synchronisation points, so disk and CPU work overlap the GPU instead of stalling it.
 """
 import argparse
 import ctypes
@@ -25,8 +27,10 @@ import json
 import math
 import os
 from pathlib import Path
+import queue
 import random
 import sys
+import threading
 
 import numpy as np
 import torch
@@ -97,30 +101,71 @@ def unpack(rows, layout):
 
 
 def masked_loss(prediction, target, kind):
-    mask = torch.isfinite(target) if kind == "q" else target >= 0
-    if not mask.any():
-        return prediction.sum() * 0
+    """Mean over the labelled elements (-1 / NaN = unlabelled), 0 when nothing is labelled.
+    Weights instead of boolean indexing: no host/device synchronisation."""
+    mask = (torch.isfinite(target) if kind == "q" else target >= 0).float()
+    target = torch.nan_to_num(target.float(), nan=0.).clamp(min=0)
+    prediction = prediction.float()
     if kind == "binary":
-        return F.binary_cross_entropy_with_logits(prediction[mask].float(), target[mask].float())
-    if kind == "value":
-        prediction = F.softplus(prediction.float())
-    return F.mse_loss(prediction[mask].float(), target[mask].float())
+        total = F.binary_cross_entropy_with_logits(prediction, target, weight=mask, reduction="sum")
+    else:
+        if kind == "value":
+            prediction = F.softplus(prediction)
+        total = ((prediction - target) ** 2 * mask).sum()
+    return total / mask.sum().clamp(min=1)
+
+
+def classes_loss(logits, labels):
+    """Cross-entropy averaged over the rows whose label is not -1, 0 when there are none."""
+    total = F.cross_entropy(logits.float(), labels, ignore_index=-1, reduction="sum")
+    return total / (labels >= 0).sum().clamp(min=1)
 
 
 def objective(output, legal, human, targets, q, placement, layout):
     output = output.float()
-    labeled = human >= 0
     a = layout.actions
-    policy = (F.cross_entropy(output[labeled, :a].masked_fill(~legal[labeled], -1e9), human[labeled])
-              if labeled.any() else output.sum() * 0)
-    known = placement >= 0
-    placed = (F.cross_entropy(output[known, layout.placement_offset:layout.placement_offset + 4], placement[known])
-              if layout.placement and known.any() else output.sum() * 0)
+    policy = classes_loss(output[:, :a].masked_fill(~legal, -1e9), human)
+    placed = classes_loss(output[:, layout.placement_offset:layout.placement_offset + 4], placement) if layout.placement else 0.
     return (policy + .5 * masked_loss(output[:, layout.tenpai:layout.tenpai + 3], targets[:, :3], "binary")
             + .5 * masked_loss(output[:, layout.ron:layout.ron + 102], targets[:, 3:105], "binary")
             + masked_loss(output[:, layout.points:layout.points + 102], targets[:, 105:], "value")
             + .2 * masked_loss(output[:, layout.q:layout.q + a], q, "q")
             + .3 * placed)
+
+
+class Prefetcher:
+    """Runs a batch iterator on a background thread: rows are read, shuffled, unpacked and
+    (on CUDA) pinned and copied ahead of use, so the loader overlaps the optimiser step.
+    Exceptions on the thread are re-raised in the consumer."""
+
+    _done = object()
+
+    def __init__(self, batches, layout, device, depth):
+        self.queue = queue.Queue(maxsize=max(1, depth))
+        self.layout, self.device = layout, device
+        self.thread = threading.Thread(target=self._run, args=(batches,), daemon=True)
+        self.thread.start()
+
+    def _run(self, batches):
+        try:
+            for rows in batches:
+                parts = unpack(rows, self.layout)
+                if self.device.type == "cuda":
+                    parts = tuple(t.contiguous().pin_memory().to(self.device, non_blocking=True) for t in parts)
+                self.queue.put((len(rows), parts))
+        except BaseException as error:  # noqa: BLE001 - forwarded to the consumer
+            self.queue.put(error)
+        finally:
+            self.queue.put(self._done)
+
+    def __iter__(self):
+        while True:
+            item = self.queue.get()
+            if item is self._done:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
 
 
 class Split:
@@ -400,6 +445,7 @@ def train(args):
         raise ValueError("channels 1-256, hidden 1-512, blocks 0-64 (LearnedModel limits)")
     device = pick_device(args.device)
     torch.set_num_threads(args.threads)
+    torch.backends.cudnn.benchmark = True   # fixed 34-wide shapes: let cuDNN pick the conv kernels once
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
@@ -430,23 +476,27 @@ def train(args):
     for epoch in range(start, args.epochs):
         model.train()
         rng = np.random.default_rng(args.seed + epoch)
-        total_loss, seen = 0., 0
-        for rows in splits["train"].shuffled_batches(args.batch, args.buffer_rows, rng):
-            x, legal, human, targets, q, placement = unpack(rows, layout)
-            x, legal, human, targets, q, placement = (t.to(device, non_blocking=True) for t in (x, legal, human, targets, q, placement))
+        total_loss, seen, steps = torch.zeros((), device=device), 0, 0
+        batches = Prefetcher(splits["train"].shuffled_batches(args.batch, args.buffer_rows, rng), layout, device, args.prefetch)
+        for count, (x, legal, human, targets, q, placement) in batches:
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type=device.type, enabled=device.type == "cuda"):
                 output = model(x)
             loss = objective(output, legal, human, targets, q, placement, layout)
-            if not torch.isfinite(loss):
-                raise FloatingPointError("Nonfinite training loss")
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             nn.utils.clip_grad_norm_(model.parameters(), 5.)
             scaler.step(optimizer)
             scaler.update()
-            total_loss += float(loss.detach()) * len(rows)
-            seen += len(rows)
+            total_loss += loss.detach() * count
+            seen += count
+            steps += 1
+            # The only synchronisation in the loop: a periodic finiteness check.
+            if steps % 256 == 0 and not torch.isfinite(total_loss):
+                raise FloatingPointError("Nonfinite training loss")
+        total_loss = float(total_loss)
+        if not math.isfinite(total_loss):
+            raise FloatingPointError("Nonfinite training loss")
         validation_loss = validation_pass(model, splits["validation"], args.batch, device)[0]
         entry = {"epoch": epoch + 1, "train_loss": total_loss / max(1, seen), "validation_loss": validation_loss}
         if args.memory_log:
@@ -518,4 +568,5 @@ if __name__ == "__main__":
     parser.add_argument("--hidden", type=int, default=64, help="dense width (up to 512)")
     parser.add_argument("--blocks", type=int, default=0, help="residual blocks after the stem (0-64)")
     parser.add_argument("--device", default="auto", help="cpu, cuda or auto")
+    parser.add_argument("--prefetch", type=int, default=6, help="batches prepared ahead on the loader thread")
     train(parser.parse_args())
