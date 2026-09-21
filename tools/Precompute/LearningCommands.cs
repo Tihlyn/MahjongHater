@@ -6,7 +6,7 @@ using MahjongHater.Core.Simulation;
 
 internal static class LearningCommands
 {
-    public const string Usage = "learn-data <replay-corpus> <new-dataset> [search-run] | learn-check <model.json> <parity.json>"
+    public const string Usage = "learn-data <replay-corpus> <new-dataset> [search-run|-] [max-games] | learn-check <model.json> <parity.json>"
         + " | learn-eval <replay-corpus> <report.json> [model.json|-] [split=test] [max-games] [threads]"
         + " | learn-fit-tenpai <replay-corpus> [split=train] [max-games]";
     public static bool Handles(string command) => command is "learn-data" or "learn-check" or "learn-eval" or "learn-fit-tenpai";
@@ -45,7 +45,8 @@ internal static class LearningCommands
         }
         if (args[0] == "learn-data")
         {
-            LearningDataset.Export(new ReplayCorpus(args[1]), args[2], args.Length > 3 ? args[3] : null, ct);
+            LearningDataset.Export(new ReplayCorpus(args[1]), args[2], args.Length > 3 && args[3] != "-" ? args[3] : null, ct,
+                args.Length > 4 ? int.Parse(args[4]) : int.MaxValue);
             Console.WriteLine(File.ReadAllText(Path.Combine(args[2], "manifest.json")));
         }
         else

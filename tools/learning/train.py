@@ -180,12 +180,14 @@ def train(args):
     np.random.seed(args.seed)
     random.seed(args.seed)
     manifest, arrays = load_dataset(args.dataset)
+    if args.channels < 1 or args.channels > 256 or args.hidden < 1 or args.hidden > 512:
+        raise ValueError("channels must be 1-256 and hidden 1-512 (LearnedModel limits)")
     identity = hashlib.sha256(json.dumps({"dataset": manifest, "seed": args.seed, "batch": args.batch, "lr": args.lr,
-                                         "architecture": "cnn24-dense64-v1"}, sort_keys=True).encode()).hexdigest()
+                                         "architecture": f"cnn{args.channels}-dense{args.hidden}-v1"}, sort_keys=True).encode()).hexdigest()
     if args.output.exists() and not args.resume:
         raise ValueError("Output exists; use a new directory or --resume")
     args.output.mkdir(parents=True, exist_ok=True)
-    model = Network()
+    model = Network(args.channels, args.hidden)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     start, best_loss, history = 0, math.inf, []
     checkpoint = args.output / "checkpoint.pt"
@@ -275,4 +277,6 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=.001)
     parser.add_argument("--seed", type=int, default=20260921)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--channels", type=int, default=24, help="conv channels (C# LearnedModel allows up to 256)")
+    parser.add_argument("--hidden", type=int, default=64, help="dense width (up to 512)")
     train(parser.parse_args())

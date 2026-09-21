@@ -21,7 +21,9 @@ public static class LearningDataset
     public const int Opponents = 207;
     public const int RowFloats = LearningFeatures.Count + 74 + 1 + Opponents + 74;
 
-    public static void Export(ReplayCorpus corpus, string destination, string? searchRun = null, CancellationToken ct = default)
+    // `maxGames` takes a uniform, split-independent subset (ordered by a hash slice the
+    // split function does not use) so a large corpus can be exported at dense float32 size.
+    public static void Export(ReplayCorpus corpus, string destination, string? searchRun = null, CancellationToken ct = default, int maxGames = int.MaxValue)
     {
         var path = Path.GetFullPath(destination);
         if (Directory.Exists(path) || File.Exists(path)) throw new IOException("Learning dataset destination exists.");
@@ -70,7 +72,10 @@ public static class LearningDataset
         }
         try
         {
-            foreach (var i in Enumerable.Range(0, corpus.Count))
+            var selected = Enumerable.Range(0, corpus.Count);
+            if (maxGames < corpus.Count)
+                selected = selected.OrderBy(i => corpus.Manifest.Games[i].Sha256.Substring(8, 8), StringComparer.Ordinal).Take(maxGames).Order();
+            foreach (var i in selected)
             {
                 ct.ThrowIfCancellationRequested();
                 var game = corpus.Read(i);
@@ -113,6 +118,7 @@ public static class LearningDataset
         {
             Schema = 1, Features = LearningFeatures.Version, Channels = LearningFeatures.Channels, Width = 34, Actions = 74,
             RowFloats, Corpus = corpus.Fingerprint, Rules = corpus.Manifest.TargetRules, Rows = counts, HumanRows = humans,
+            GamesUsed = Math.Min(maxGames, corpus.Count), GamesInCorpus = corpus.Count,
             SearchRows = searchRows, Skipped = skipped, Sha256 = hashes,
             SearchRunFingerprint = searchRun is null ? null : SimulationFiles.Read<RunManifest>(Path.Combine(searchRun, "manifest.json.gz")).Fingerprint,
         }, ManifestJson));
