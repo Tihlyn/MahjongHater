@@ -237,7 +237,7 @@ public sealed unsafe class EmjStateReader : IDisposable
         if (samples.Count > 0)
             sink?.Invoke(samples);
 
-        var last = this.pendingCalibration;
+        var last = this.pendingCalibration!;   // non-null here: set before the banner wait began
         var dealIns = this.dealIns.Finish(winner, this.tracker.LastWinByRon, this.tracker.RonVictimSeat, this.tracker.RonTile);
         this.tracker.Note($"deal-in calibration: {dealIns.Count} row(s), ron={this.tracker.LastWinByRon} victim={this.tracker.RonVictimSeat} tile={this.tracker.RonTile?.ToString() ?? "-"}");
         if (dealIns.Count > 0)

@@ -13,6 +13,11 @@ namespace MahjongHater.Core.Learning;
 // Missing opponent/Q targets are -1 / NaN respectively, never manufactured zeros.
 public static class LearningDataset
 {
+    // Not SimulationFiles.Json: its IgnoreReadOnlyProperties (needed for StateSnapshot's
+    // computed members) also drops every scalar of the anonymous manifest object, which
+    // left train.py without Schema/Features/RowFloats.
+    private static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true };
+
     public const int Opponents = 207;
     public const int RowFloats = LearningFeatures.Count + 74 + 1 + Opponents + 74;
 
@@ -110,7 +115,7 @@ public static class LearningDataset
             RowFloats, Corpus = corpus.Fingerprint, Rules = corpus.Manifest.TargetRules, Rows = counts, HumanRows = humans,
             SearchRows = searchRows, Skipped = skipped, Sha256 = hashes,
             SearchRunFingerprint = searchRun is null ? null : SimulationFiles.Read<RunManifest>(Path.Combine(searchRun, "manifest.json.gz")).Fingerprint,
-        }, new JsonSerializerOptions(SimulationFiles.Json) { WriteIndented = true }));
+        }, ManifestJson));
         ct.ThrowIfCancellationRequested();
         Directory.Move(temp, path);
     }
