@@ -57,23 +57,29 @@ to `work\logs\<stage>-<timestamp>.log`.
 | fetch | downloads `mjlog_pf4-20_n1..n30.zip` from tenhou.net with SHA-256 provenance | `work\raw\` + `archives.json` | minutes (1.1 GB) |
 | import | parses every game; keeps East-South games with a 7-dan+ acting player; emits turn and claim-window decisions | `work\corpus\` | ~1 h for all archives (16 479 games / 4 archives took 9 min on 10 workers) |
 | export | dense float16 rows for a uniform sample of `-MaxGames` games | `work\dataset-<games>-float16\` | ~30–45 min for 24 000 games (8 600 rows/s on 10 workers) |
-| train | residual network on CUDA with mixed precision, early-stopped on validation loss, calibration fitted on validation | `work\model-<run>\learned_policy.json`, `metrics.json`, `parity.json` | first run measured 15 min per epoch at 14 M rows with the loader on the training thread; the prefetching loader (below) should cut that to a few minutes |
+| train | residual network on CUDA with mixed precision, early-stopped on validation loss, calibration fitted on validation | `work\model-<run>\learned_policy.json`, `metrics.json`, `parity.json` | GPU-bound: ~5–8 min per epoch at 14 M rows for the default net on an RTX 2070-class card (the first, loader-bound version of the script took 15 min for a net a third the size) |
 | check | C# inference reproduces the PyTorch outputs on the parity vectors | log line "Verified 8 PyTorch/C# inference vectors" | seconds |
 | eval | `learn-eval` on 1 500 held-out test games: agreement per category, reaction agreement + call rate, counterfactual deal-in of the chosen tile, tenpai/danger calibration, for the heuristics and the learned policies side by side | `work\eval\<run>-test.json` + log | ~30 min |
 
-Defaults: `-MaxGames 24000 -Blocks 6 -Channels 128 -Hidden 512 -Epochs 20 -Batch 1024
--BufferRows 262144`. The network is ≈ 3 M parameters (62 MB as JSON; the plugin's load
-limit is 256 MB), needs < 2 GB of VRAM at batch 1024 and costs ≈ 5 ms per position in the
-plugin's C# inference. The box can take `-Blocks 10 -Channels 192` if the first run looks
-data-limited rather than capacity-limited (train loss ≫ validation loss says the opposite).
+Defaults: `-MaxGames 24000 -Blocks 8 -Channels 160 -Hidden 512 -Epochs 20 -Batch 4096
+-WindowRows 0`. The network is ≈ 5 M parameters (~100 MB as JSON; the plugin's load limit
+is 256 MB) and costs ≈ 10 ms per position in the plugin's C# inference (a decision runs it
+once, plus three score counterfactuals for the placement stakes). `-Blocks 10 -Channels 192`
+(≈ 8 M parameters, ≈ 16 ms) is the next step up if the run looks capacity-limited (train
+and validation loss still falling together at the end); `-LearningRate 0.002` is reasonable
+at batch 4096.
 
-The GPU is not the bottleneck for this network (≈ 70 s of compute per 14 M-row epoch on a
-mid-range card); the loader is. `train.py` therefore reads, shuffles and unpacks batches on
-a background thread with pinned memory (`--prefetch 6` batches ahead) and the objective has
-no host/device synchronisation points, so disk and CPU work overlap the optimiser step. If
-`nvidia-smi` still shows low utilisation, raise `-Batch` to 2048 (halves the per-step
-overhead; the learning rate does not need to change at this scale) and check the dataset
-sits on an SSD.
+How the data reaches the GPU: `train.py` streams the training split through device memory.
+A reader thread fills a pinned window (`-WindowRows`, default ≈ a third of free GPU memory,
+≈ 450 k rows / 2.5 GB on an 8 GB card) with randomly ordered contiguous chunks of the file
+while the GPU trains on the previous window; the window is copied over in float16 and
+shuffled, sliced and unpacked on the device, and the objective has no host/device
+synchronisation points. Host work per epoch is one read of the file (80 GB: 40 s on NVMe,
+~3 min on a SATA SSD, either well under the compute time) and ~3 GB of RAM. `train_seconds`
+and `gpu_peak_mb` in the log say whether the card is busy: expect several GB of peak GPU
+memory and `nvidia-smi` near 100 %. The first version of the script kept the loader on the
+training thread with a sync per loss term, which starved the GPU (200 MB peak, 15 min per
+epoch); that is what the log line `window_rows` distinguishes.
 
 Useful variations:
 

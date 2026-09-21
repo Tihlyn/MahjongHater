@@ -12,7 +12,7 @@
 .EXAMPLE
   .\Run-Training.ps1                       # everything, default archives n1-n30, 24 000 games, res-net on the GPU
   .\Run-Training.ps1 -Stage fetch,import   # only download and build the corpus
-  .\Run-Training.ps1 -Stage train,check,eval -Blocks 8 -Channels 128 -Epochs 30 -RunName res8
+  .\Run-Training.ps1 -Stage train,check,eval -Blocks 10 -Channels 192 -Epochs 30 -RunName res10
   .\Run-Training.ps1 -HandsInMatch 4 -RunName quick   # a Quick Match (East-only) model from the tonpuusen games
 #>
 param(
@@ -30,15 +30,17 @@ param(
     [int]$MaxGames = 24000,
     [ValidateSet('float16', 'float32')][string]$Dtype = 'float16',
     [int]$Workers = [Math]::Max(1, [Environment]::ProcessorCount - 1),
-    # Network and optimisation. blocks 6 / channels 128 / hidden 512 is ~3 M parameters and fits
-    # an 8 GB card at batch 1024 with mixed precision.
-    [int]$Blocks = 6,
-    [int]$Channels = 128,
+    # Network and optimisation. blocks 8 / channels 160 / hidden 512 is ~5 M parameters; with the
+    # training data streamed through GPU memory the card, not the loader, sets the epoch time, so
+    # batches are large. -WindowRows 0 sizes the device-resident window from free GPU memory.
+    [int]$Blocks = 8,
+    [int]$Channels = 160,
     [int]$Hidden = 512,
     [int]$Epochs = 20,
-    [int]$Batch = 1024,
+    [int]$Batch = 4096,
     [double]$LearningRate = 0.001,
     [int]$BufferRows = 262144,
+    [int]$WindowRows = 0,
     [ValidateSet('auto', 'cuda', 'cpu')][string]$Device = 'auto',
     [string]$RunName = 'res',
     # Evaluation: held-out test split of the corpus; 0 = every test game (slow: ~1 s per game per thread).
@@ -124,7 +126,7 @@ if ($stages -contains 'export') {
 if ($stages -contains 'train') {
     if (-not (Test-Path -LiteralPath $python)) { throw 'Run .\Setup-Training.ps1 first (creates .venv with torch).' }
     $trainArgs = @((Join-Path $root 'train.py'), $dataset, $model, '--epochs', $Epochs, '--batch', $Batch, '--threads', $Workers, '--lr', $LearningRate,
-        '--channels', $Channels, '--hidden', $Hidden, '--blocks', $Blocks, '--device', $Device, '--buffer-rows', $BufferRows, '--memory-log')
+        '--channels', $Channels, '--hidden', $Hidden, '--blocks', $Blocks, '--device', $Device, '--buffer-rows', $BufferRows, '--window-rows', $WindowRows, '--memory-log')
     if ($Resume -or (Test-Path -LiteralPath (Join-Path $model 'checkpoint.pt'))) { $trainArgs += '--resume' }
     Invoke-Logged "train-$RunName" { & $python @trainArgs }
 }

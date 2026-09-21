@@ -15,10 +15,13 @@ Memory: nothing is memory-mapped or copied whole. Training reads shuffled chunks
 into a bounded shuffle buffer (--buffer-rows); validation/test are streamed with metrics
 accumulated per batch. --memory-log prints the resident set after every epoch.
 
-GPU: --device cuda (or auto) with automatic mixed precision; an 8 GB card takes
---blocks 6 --channels 128 --batch 1024 comfortably. The loader runs on a background thread
-(--prefetch batches ahead, pinned memory) and the objective has no host/device
-synchronisation points, so disk and CPU work overlap the GPU instead of stalling it.
+GPU: --device cuda (or auto) with automatic mixed precision. Training data streams through
+device memory: a reader thread fills a pinned window of randomly ordered contiguous chunks
+(--window-rows, default ~a third of free GPU memory) while the GPU trains on the previous
+window; shuffling, batching and unpacking happen on the device, and the objective has no
+host/device synchronisation points. With that the GPU, not the loader, sets the epoch time,
+so use big batches (--batch 4096) and a deeper network. On the CPU the loader runs on a
+background thread instead (--prefetch batches ahead).
 """
 import argparse
 import ctypes
@@ -31,6 +34,7 @@ import queue
 import random
 import sys
 import threading
+import time
 
 import numpy as np
 import torch
@@ -96,7 +100,7 @@ def unpack(rows, layout):
     targets = rows[:, offset:offset + OPPONENTS]
     q = rows[:, offset + OPPONENTS:offset + OPPONENTS + layout.actions]
     # Placement 1..4 -> class 0..3, -1 = unknown (search rows).
-    placement = rows[:, -1].long() - 1 if layout.placement else torch.full((len(rows),), -1, dtype=torch.long)
+    placement = rows[:, -1].long() - 1 if layout.placement else torch.full((len(rows),), -1, dtype=torch.long, device=rows.device)
     return x, legal, human, targets, q, placement
 
 
@@ -133,10 +137,71 @@ def objective(output, legal, human, targets, q, placement, layout):
             + .3 * placed)
 
 
+class DeviceWindows:
+    """Training batches from windows of rows resident on the device. The file is visited in
+    random chunk order (contiguous chunks of `chunk` rows, like Split.shuffled_batches); a
+    reader thread fills a pinned staging buffer with the next window while the GPU trains on
+    the current one; the window is copied over in its stored dtype and shuffled, sliced and
+    unpacked on the device. Host work per epoch is one sequential-ish read of the file."""
+
+    def __init__(self, split, batch, window_rows, rng, device, seed):
+        self.split, self.batch, self.device = split, batch, device
+        layout = split.layout
+        self.chunk = max(batch, min(8192, window_rows))
+        starts = list(range(0, split.rows, self.chunk))
+        rng.shuffle(starts)
+        per_window = max(1, window_rows // self.chunk)
+        self.windows = [starts[i:i + per_window] for i in range(0, len(starts), per_window)]
+        dtype = torch.float16 if layout.item == 2 else torch.float32
+        self.staging = torch.empty((per_window * self.chunk, layout.row), dtype=dtype, pin_memory=device.type == "cuda")
+        self.view = self.staging.numpy()
+        self.ready = queue.Queue(maxsize=1)     # rows filled in staging, or an exception
+        self.free = threading.Semaphore(1)      # staging may be overwritten
+        self.generator = torch.Generator().manual_seed(seed)
+        self.thread = threading.Thread(target=self._read, daemon=True)
+        self.thread.start()
+
+    def _read(self):
+        try:
+            with self.split.file.open("rb") as file:
+                for window in self.windows:
+                    self.free.acquire()
+                    filled = 0
+                    for start in window:
+                        count = min(self.chunk, self.split.rows - start)
+                        file.seek(start * self.split.layout.row * self.split.layout.item)
+                        file.readinto(memoryview(self.view[filled:filled + count]).cast("B"))
+                        filled += count
+                    self.ready.put(filled)
+        except BaseException as error:  # noqa: BLE001 - forwarded to the consumer
+            self.ready.put(error)
+
+    def __iter__(self):
+        layout = self.split.layout
+        for _ in self.windows:
+            item = self.ready.get()
+            if isinstance(item, BaseException):
+                raise item
+            rows = self.staging[:item].to(self.device, copy=True)   # synchronous: staging is reused right after
+            self.free.release()
+            order = torch.randperm(item, generator=self.generator).to(self.device)
+            for j in range(0, item, self.batch):
+                index = order[j:j + self.batch]
+                yield len(index), unpack(rows.index_select(0, index).float(), layout)
+            del rows
+
+
+def device_window_rows(split, requested, device):
+    """Rows per device window: the request, or about a third of the free device memory."""
+    if requested > 0 or device.type != "cuda":
+        return min(requested if requested > 0 else 262144, split.rows)
+    free, _ = torch.cuda.mem_get_info()
+    return max(8192, min(split.rows, int(free * .35 // (split.layout.row * split.layout.item))))
+
+
 class Prefetcher:
-    """Runs a batch iterator on a background thread: rows are read, shuffled, unpacked and
-    (on CUDA) pinned and copied ahead of use, so the loader overlaps the optimiser step.
-    Exceptions on the thread are re-raised in the consumer."""
+    """CPU training: runs the batch iterator on a background thread so reading, shuffling and
+    unpacking overlap the optimiser step. Exceptions on the thread are re-raised in the consumer."""
 
     _done = object()
 
@@ -470,14 +535,20 @@ def train(args):
         optimizer.load_state_dict(saved["optimizer"])
         torch.set_rng_state(saved["rng"])
         start, best_loss, history = saved["epoch"], saved["best_loss"], saved["history"]
-    print(json.dumps({"device": str(device), "architecture": architecture, "parameters": sum(p.numel() for p in model.parameters()),
+    use_windows = args.loader == "windows" or args.loader == "auto" and device.type == "cuda"
+    window_rows = device_window_rows(splits["train"], args.window_rows, device) if use_windows else 0
+    print(json.dumps({"device": str(device), "window_rows": window_rows, "architecture": architecture, "parameters": sum(p.numel() for p in model.parameters()),
                       "train_rows": len(splits["train"]), "schema": layout.schema}), flush=True)
     # Test data is not evaluated until model selection and calibration are frozen.
     for epoch in range(start, args.epochs):
         model.train()
         rng = np.random.default_rng(args.seed + epoch)
         total_loss, seen, steps = torch.zeros((), device=device), 0, 0
-        batches = Prefetcher(splits["train"].shuffled_batches(args.batch, args.buffer_rows, rng), layout, device, args.prefetch)
+        epoch_started = time.time()
+        if use_windows:
+            batches = DeviceWindows(splits["train"], args.batch, window_rows, rng, device, args.seed + epoch)
+        else:
+            batches = Prefetcher(splits["train"].shuffled_batches(args.batch, args.buffer_rows, rng), layout, device, args.prefetch)
         for count, (x, legal, human, targets, q, placement) in batches:
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type=device.type, enabled=device.type == "cuda"):
@@ -497,8 +568,10 @@ def train(args):
         total_loss = float(total_loss)
         if not math.isfinite(total_loss):
             raise FloatingPointError("Nonfinite training loss")
+        train_seconds = time.time() - epoch_started
         validation_loss = validation_pass(model, splits["validation"], args.batch, device)[0]
-        entry = {"epoch": epoch + 1, "train_loss": total_loss / max(1, seen), "validation_loss": validation_loss}
+        entry = {"epoch": epoch + 1, "train_loss": total_loss / max(1, seen), "validation_loss": validation_loss,
+                 "train_seconds": round(train_seconds), "validation_seconds": round(time.time() - epoch_started - train_seconds)}
         if args.memory_log:
             current, peak = resident_mb()
             entry["rss_mb"], entry["peak_rss_mb"] = round(current), round(peak)
@@ -568,5 +641,7 @@ if __name__ == "__main__":
     parser.add_argument("--hidden", type=int, default=64, help="dense width (up to 512)")
     parser.add_argument("--blocks", type=int, default=0, help="residual blocks after the stem (0-64)")
     parser.add_argument("--device", default="auto", help="cpu, cuda or auto")
-    parser.add_argument("--prefetch", type=int, default=6, help="batches prepared ahead on the loader thread")
+    parser.add_argument("--prefetch", type=int, default=6, help="CPU training: batches prepared ahead on the loader thread")
+    parser.add_argument("--window-rows", type=int, default=0, help="CUDA training: rows per device-resident window (0 = ~a third of free GPU memory)")
+    parser.add_argument("--loader", default="auto", choices=["auto", "windows", "prefetch"], help="auto = device windows on CUDA, prefetch thread on CPU")
     train(parser.parse_args())
