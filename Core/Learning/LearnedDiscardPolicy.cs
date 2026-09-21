@@ -21,16 +21,25 @@ public sealed class LearnedDiscardPolicy(LearnedModel network, PolicyWeights? we
             return candidates;
         ct.ThrowIfCancellationRequested();
         var prediction = network.Predict(state, ct);
-        double Logit(DiscardCandidate c)
+        var legal = LearnedPolicy.Legal(state);
+        var riichiLegal = legal.Where(a => a.Kind == SimActionKind.Riichi).Select(a => a.Tile).ToHashSet(StringComparer.Ordinal);
+        // The network scores "discard t" and "riichi with t" separately; the tile's weight is
+        // the sum of both (the riichi layer decides the declaration afterwards).
+        var maximum = prediction.Take(LearningFeatures.Actions).Max();
+        double Weight(DiscardCandidate c)
         {
-            var index = LearningFeatures.ActionIndex(SimAction.Make(SimActionKind.Discard, c.Tile));
-            return index >= 0 ? prediction[index] : double.NegativeInfinity;
+            var discard = LearningFeatures.ActionIndex(SimAction.Make(SimActionKind.Discard, c.Tile));
+            if (discard < 0) return 0;
+            var weight = Math.Exp(prediction[discard] - maximum);
+            if (riichiLegal.Contains(c.Tile.ToString()))
+                weight += Math.Exp(prediction[discard + 37] - maximum);
+            return weight;
         }
 
-        var maximum = candidates.Max(Logit);
-        var denominator = candidates.Sum(c => Math.Exp(Logit(c) - maximum));
+        var denominator = candidates.Sum(Weight);
+        if (denominator <= 0) return candidates;
         return candidates
-            .Select(c => c with { Score = Math.Exp(Logit(c) - maximum) / denominator, Note = $"{c.Note}; imitation {Math.Exp(Logit(c) - maximum) / denominator:P0}" })
+            .Select(c => c with { Score = Weight(c) / denominator, Note = $"{c.Note}; imitation {Weight(c) / denominator:P0}" })
             .OrderByDescending(c => c.Score).ThenBy(c => c.ShantenAfter).ThenBy(c => c.Tile)
             .ToArray();
     }
