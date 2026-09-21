@@ -1,5 +1,6 @@
 bin/
 obj/
+artifacts/
 
 # Claude Code agent worktrees
 .claude/worktrees/

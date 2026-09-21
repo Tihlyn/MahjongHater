@@ -1,0 +1,184 @@
+[
+  {
+    "id": "rb1-ch8-perfect-1shanten-push",
+    "source": "https://github.com/dainachiba/RiichiBooks/blob/master/RiichiBook1-ch8-defense.tex (\"Three conditions to push/fold\", first example)",
+    "channel": "book:riichi-book-1",
+    "situation": {
+      "roundWind": "E",
+      "seatWind": "S",
+      "dealerSeat": 3,
+      "turn": 8,
+      "wallRemaining": 40,
+      "hand": "234m66m667p45s666z4z",
+      "drawn": "4z",
+      "ourMelds": [],
+      "doraIndicators": "5z",
+      "ourRiichi": false,
+      "scores": null,
+      "seats": [
+        {
+          "seat": 1,
+          "discards": "1z9m2z4s9p6m7p",
+          "riichiIndex": 6
+        },
+        {
+          "seat": 2,
+          "discards": "3z1p9s2m8p6s",
+          "riichiIndex": -1
+        },
+        {
+          "seat": 3,
+          "discards": "2z1m1s3p7z2p8m",
+          "riichiIndex": -1
+        }
+      ]
+    },
+    "consensus": {
+      "action": "discard",
+      "tile": "4z",
+      "stance": "push",
+      "confidence": "high",
+      "rationale": "Perfect 1-shanten (every completion gives a ryanmen) with three green dragons as dora + yakuhai: guaranteed mangan, so push to the fullest (zentsu) even against the riichi.",
+      "alternatives": [],
+      "dissent": null
+    },
+    "transcription_confidence": "high"
+  },
+  {
+    "id": "rb1-ch8-1shanten-bad-shape-fold",
+    "source": "https://github.com/dainachiba/RiichiBooks/blob/master/RiichiBook1-ch8-defense.tex (\"Three conditions to push/fold\", second example)",
+    "channel": "book:riichi-book-1",
+    "situation": {
+      "roundWind": "E",
+      "seatWind": "S",
+      "dealerSeat": 3,
+      "turn": 9,
+      "wallRemaining": 36,
+      "hand": "34m340p689p234s66s4z",
+      "drawn": "4z",
+      "ourMelds": [],
+      "doraIndicators": "2s",
+      "ourRiichi": false,
+      "scores": null,
+      "seats": [
+        {
+          "seat": 1,
+          "discards": "1z9m2z4s9p6m7p1p",
+          "riichiIndex": 7
+        },
+        {
+          "seat": 2,
+          "discards": "3z1p9s2m8p6s5z",
+          "riichiIndex": -1
+        },
+        {
+          "seat": 3,
+          "discards": "2z1m1s3p7z2p8m6z",
+          "riichiIndex": -1
+        }
+      ]
+    },
+    "consensus": {
+      "action": "fold",
+      "tile": null,
+      "stance": "fold",
+      "confidence": "high",
+      "rationale": "1-shanten with dora and aka, but it only becomes a ryanmen tenpai if 7p comes first; drawing 2-5m first leaves a kanchan. Best wait in the worst case is bad, so fold against the riichi.",
+      "alternatives": [],
+      "dissent": null
+    },
+    "transcription_confidence": "high"
+  },
+  {
+    "id": "rb1-ch7-cheap-hand-value-over-wait",
+    "source": "https://github.com/dainachiba/RiichiBooks/blob/master/RiichiBook1-ch7-riichi.tex (\"Good wait vs. high scores\", cheap hand)",
+    "channel": "book:riichi-book-1",
+    "situation": {
+      "roundWind": "E",
+      "seatWind": "S",
+      "dealerSeat": 3,
+      "turn": 6,
+      "wallRemaining": 48,
+      "hand": "789m345p233s678s55z",
+      "drawn": null,
+      "ourMelds": [],
+      "doraIndicators": "3z",
+      "ourRiichi": false,
+      "scores": null,
+      "seats": [
+        {
+          "seat": 1,
+          "discards": "1z9m2z4s9p",
+          "riichiIndex": -1
+        },
+        {
+          "seat": 2,
+          "discards": "3z1p9s2m8p",
+          "riichiIndex": -1
+        },
+        {
+          "seat": 3,
+          "discards": "2z1m1s3p7z",
+          "riichiIndex": -1
+        }
+      ]
+    },
+    "consensus": {
+      "action": "riichi",
+      "tile": "2s",
+      "stance": "push",
+      "confidence": "high",
+      "rationale": "Riichi on 2s keeps the white-dragon shanpon (riichi + haku = 2600) over the riichi-only 1-4s ryanmen (1300): below a 5200 minimum, value beats wait.",
+      "alternatives": [
+        "riichi 3s"
+      ],
+      "dissent": "Some players prefer the 8-tile ryanmen for speed."
+    },
+    "transcription_confidence": "high"
+  },
+  {
+    "id": "rb1-ch7-expensive-hand-wait-over-value",
+    "source": "https://github.com/dainachiba/RiichiBooks/blob/master/RiichiBook1-ch7-riichi.tex (\"Good wait vs. high scores\", expensive hand)",
+    "channel": "book:riichi-book-1",
+    "situation": {
+      "roundWind": "E",
+      "seatWind": "S",
+      "dealerSeat": 3,
+      "turn": 6,
+      "wallRemaining": 48,
+      "hand": "789m345p455s555z66z",
+      "drawn": null,
+      "ourMelds": [],
+      "doraIndicators": "8m",
+      "ourRiichi": false,
+      "scores": null,
+      "seats": [
+        {
+          "seat": 1,
+          "discards": "1z9m2z4s9p",
+          "riichiIndex": -1
+        },
+        {
+          "seat": 2,
+          "discards": "3z1p9s2m8p",
+          "riichiIndex": -1
+        },
+        {
+          "seat": 3,
+          "discards": "2z1m1s3p7z",
+          "riichiIndex": -1
+        }
+      ]
+    },
+    "consensus": {
+      "action": "riichi",
+      "tile": "5s",
+      "stance": "push",
+      "confidence": "high",
+      "rationale": "Riichi + haku + dora already guarantee 5200, so take the 3-6s ryanmen (discard 5s) over the 6z shanpon: at 5200 and above, wait beats value.",
+      "alternatives": [],
+      "dissent": null
+    },
+    "transcription_confidence": "high"
+  }
+]

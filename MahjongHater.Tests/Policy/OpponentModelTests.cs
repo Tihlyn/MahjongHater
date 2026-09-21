@@ -64,9 +64,9 @@ public class OpponentModelTests
     }
 
     [Fact]
-    public void Genbutsu_uses_configured_floor()
+    public void Legacy_genbutsu_uses_configured_floor()
     {
-        Assert.Equal(0.01, Model(Seat(Snap(""), discards: "5s"), new PolicyWeights { GenbutsuDanger = 0.01 })
+        Assert.Equal(0.01, Model(Seat(Snap(""), discards: "5s"), new PolicyWeights { GenbutsuDanger = 0.01, DefenseModel = DefenseModel.Legacy })
             .Danger(Tile.Parse("5s"), 1));
     }
 
@@ -79,23 +79,36 @@ public class OpponentModelTests
     }
 
     [Fact]
-    public void Middle_suji_requires_both_sides()
+    public void Middle_tile_half_suji_then_nakasuji_get_safer()
     {
         var none = Model(Snap(""));
         var one = Model(Seat(Snap(""), discards: "2s"));
         var both = Model(Seat(Snap(""), discards: "28s"));
+        Assert.True(one.Danger(Tile.Parse("5s"), 1) < none.Danger(Tile.Parse("5s"), 1));
+        Assert.True(both.Danger(Tile.Parse("5s"), 1) < one.Danger(Tile.Parse("5s"), 1));
+    }
+
+    [Fact]
+    public void Legacy_middle_suji_requires_both_sides()
+    {
+        var legacy = new PolicyWeights { DefenseModel = DefenseModel.Legacy };
+        var none = Model(Snap(""), legacy);
+        var one = Model(Seat(Snap(""), discards: "2s"), legacy);
+        var both = Model(Seat(Snap(""), discards: "28s"), legacy);
         Assert.Equal(none.Danger(Tile.Parse("5s"), 1), one.Danger(Tile.Parse("5s"), 1));
         Assert.True(both.Danger(Tile.Parse("5s"), 1) < one.Danger(Tile.Parse("5s"), 1));
     }
 
     [Fact]
-    public void Visible_honors_reduce_danger_to_zero_at_four()
+    public void Visible_honors_reduce_danger_to_the_kokushi_floor_at_four()
     {
         var zero = Model(Snap(""));
         var three = Model(Snap("555z"));
         var four = Model(Snap("5555z"));
         Assert.True(three.Danger(Tile.Parse("5z"), 1) < zero.Danger(Tile.Parse("5z"), 1));
-        Assert.Equal(0, four.Danger(Tile.Parse("5z"), 1));
+        // Holding all four: only a kokushi can still take the last copy we throw.
+        Assert.True(four.Danger(Tile.Parse("5z"), 1) <= DealInRateTable.Default.Multipliers.HonorKokushiFloor);
+        Assert.Equal(0, Model(Snap("5555z1111m")).Danger(Tile.Parse("5z"), 1));
     }
 
     [Fact]
@@ -131,10 +144,11 @@ public class OpponentModelTests
     }
 
     [Fact]
-    public void Early_outside_and_late_middle_discards_increase_tenpai()
+    public void Late_middle_discards_increase_tenpai()
     {
-        Assert.True(Model(Seat(Snap(""), discards: "19m19p19s456m")).TenpaiProbability(1)
-            > Model(Seat(Snap(""), discards: "234m567p123z")).TenpaiProbability(1));
+        // Same discard count; the second seat threw middle tiles from turn 7 on.
+        Assert.True(Model(Seat(Snap(""), discards: "19m19p19s456m4p")).TenpaiProbability(1)
+            > Model(Seat(Snap(""), discards: "19m19p19s123z9s")).TenpaiProbability(1));
     }
 
     [Fact]
@@ -144,8 +158,9 @@ public class OpponentModelTests
         for (var seat = 1; seat <= 3; seat++)
             state = Seat(state, seat, riichi: true);
         var model = Model(state);
-        var expected = Enumerable.Range(1, 3).Sum(s => model.TenpaiProbability(s) * model.Danger(Tile.Parse("5s"), s) * 4000);
+        var expected = Enumerable.Range(1, 3).Sum(s => model.TenpaiProbability(s) * model.Danger(Tile.Parse("5s"), s) * model.Value(s));
         Assert.Equal(expected, model.ExpectedDealInCost(Tile.Parse("5s")), 8);
+        Assert.Equal(PolicyWeights.Default.RiichiValue, model.Value(1));
     }
 
     [Fact]

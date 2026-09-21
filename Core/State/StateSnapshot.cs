@@ -47,6 +47,18 @@ public sealed record SeatState(
     // Struct discard count when known (-1 otherwise); authoritative even when Discards is short.
     public int DiscardCount { get; init; } = -1;
 
+    // Global order of each discard this round (parallel to Discards; empty when the
+    // tracker did not see them). Lets "discarded after seat X's riichi" survive calls.
+    public IReadOnlyList<int> DiscardOrder { get; init; } = [];
+
+    // Simulator/replay observations retain called discards for furiten/history, but
+    // do not count their physical copies again in visible-tile availability.
+    public IReadOnlyList<int> ClaimedDiscardIndices { get; init; } = [];
+
+    // Order index of the riichi declaration discard, -1 when unknown or not in riichi.
+    public int RiichiDiscardOrder => this.Riichi && this.RiichiDiscardIndex >= 0 && this.RiichiDiscardIndex < this.DiscardOrder.Count
+        ? this.DiscardOrder[this.RiichiDiscardIndex] : -1;
+
     public static SeatState Empty(int seat) => new(seat, [], [], false, -1, 0);
 }
 
@@ -78,6 +90,18 @@ public sealed record StateSnapshot(
     // compositions, layout shift…). Empty when everything reconciled.
     public IReadOnlyList<string> Notes { get; init; } = [];
 
+    // Hand number inside the round (East 1 → 1), 0 when unknown.
+    public int HandNumber { get; init; }
+
+    // Our turn number: discards made + 1 (a claimed-tile turn counts like any other); the
+    // struct's count stands in when the tracker missed the discard events.
+    public int Turn => Math.Max(this.Us.Discards.Count, this.Us.DiscardCount) + 1;
+
+    // Last scheduled hand of the match (East 4 in a tonpuusen, South 4 in a hanchan);
+    // renchan on it still counts. False while the hand number is unknown.
+    public bool IsAllLast => this.HandNumber == 4
+        && (this.Ruleset.HandsInMatch <= 4 ? this.RoundWind == Wind.East : this.RoundWind == Wind.South);
+
     // Chi-shape chooser (game state 25): the sequences the game offers, in its button
     // order. Non-empty only after a Chi was accepted and more than one shape fits.
     public IReadOnlyList<Meld> CallShapes { get; init; } = [];
@@ -97,8 +121,9 @@ public sealed record StateSnapshot(
     {
         foreach (var seat in this.Seats)
         {
-            foreach (var t in seat.Discards)
-                yield return t;
+            for (var i = 0; i < seat.Discards.Count; i++)
+                if (!seat.ClaimedDiscardIndices.Contains(i))
+                    yield return seat.Discards[i];
             if (seat.Seat == 0)
                 continue;
             foreach (var m in seat.Melds)

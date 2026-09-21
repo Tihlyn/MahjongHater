@@ -69,6 +69,40 @@ public sealed class ConfigWindow : Window
 
             Tooltip("Enable open tanyao except in the special kuitan-disabled room.");
             this.DrawGameLength();
+            Widgets.Label("DEFENSE");
+            if (Widgets.ToggleRow("Defense model v2", "##defensev2", this.configuration.DefenseV2))
+            {
+                this.configuration.DefenseV2 = !this.configuration.DefenseV2;
+                this.saved = false;
+            }
+
+            Tooltip("Measured deal-in rates by tile class and live suji plus a push/fold budget (docs/DEFENSE_PLAN.md). Off = the v1.3 heuristics for A/B runs. Takes effect after a reload.");
+            if (Widgets.ToggleRow("Experimental learned policy", "##learned", this.configuration.LearnedPolicyEnabled))
+            {
+                this.configuration.LearnedPolicyEnabled = !this.configuration.LearnedPolicyEnabled;
+                this.saved = false;
+            }
+            Tooltip("Use the trained discard/riichi policy and opponent predictions. Requires learned_policy.json. Save and reload to apply.");
+            if (Widgets.ToggleRow("Experimental precomputed policy", "##precomputed", this.configuration.PrecomputedPolicyEnabled))
+            {
+                this.configuration.PrecomputedPolicyEnabled = !this.configuration.PrecomputedPolicyEnabled;
+                this.saved = false;
+            }
+            Tooltip("Use offline discard estimates when this position is covered; otherwise use the learned policy when enabled, then the existing policy. Requires a trained policy file. Save and reload to apply.");
+            if (Widgets.ToggleRow("Record situations for offline training", "##precomputedcapture", this.configuration.CapturePrecomputedSnapshots))
+            {
+                this.configuration.CapturePrecomputedSnapshots = !this.configuration.CapturePrecomputedSnapshots;
+                this.saved = false;
+            }
+            Tooltip("Save public table snapshots locally to build a training corpus. Save and reload to apply.");
+            var human = string.Equals(this.configuration.CalibrationPopulation, "human", StringComparison.OrdinalIgnoreCase);
+            if (Widgets.ToggleRow("Opponents are human (calibration tag)", "##population", human))
+            {
+                this.configuration.CalibrationPopulation = human ? "npc" : "human";
+                this.saved = false;
+            }
+
+            Tooltip("Tags the calibration CSV rows so human and NPC opponents are fitted separately.");
             Widgets.Label("DOUBLE-WIND PAIR FU");
             var half = (Widgets.ContentWidth - Theme.Px(Theme.Gap)) / 2f;
             if (Widgets.Pill("2 fu", this.configuration.DoubleWindPairFu == 2, half))

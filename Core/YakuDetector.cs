@@ -2,7 +2,9 @@ namespace MahjongHater.Core;
 
 // Ruleset switches the analysis core needs, kept free of Dalamud/Configuration types
 // so the whole analysis path stays unit-testable.
-public readonly record struct RulesetOptions(bool Kuitan)
+// HandsInMatch: 4 for a tonpuusen (Quick Match), 8 for a hanchan (Full Match); only the
+// all-last test reads it.
+public readonly record struct RulesetOptions(bool Kuitan, int HandsInMatch = 8)
 {
     public static RulesetOptions Default => new(Kuitan: true);
 }
@@ -39,7 +41,7 @@ public sealed class YakuDetector
             yakuman.Add(new YakuResult("Kokushi Musou", 13, true, false));
         }
 
-        if (CountConcealedTriplets(hand, triplets) == 4)
+        if (CountConcealedTriplets(hand, triplets, wait) == 4)
         {
             yakuman.Add(new YakuResult("Suuankou", 13, true, false));
         }
@@ -130,7 +132,7 @@ public sealed class YakuDetector
             results.Add(new YakuResult("Houtei Raoyui", 1, false, false));
         }
 
-        var chiitoitsu = IsChiitoitsu(tiles);
+        var chiitoitsu = decomposition.Count == 7 && decomposition.All(m => m.Type == MeldType.Pair) && IsChiitoitsu(tiles);
         if (chiitoitsu)
         {
             results.Add(new YakuResult("Chiitoitsu", 2, false, false));
@@ -214,7 +216,7 @@ public sealed class YakuDetector
             results.Add(new YakuResult("Sanshoku Doukou", 2, false, false));
         }
 
-        if (CountConcealedTriplets(hand, triplets) >= 3)
+        if (CountConcealedTriplets(hand, triplets, wait) >= 3)
         {
             results.Add(new YakuResult("Sanankou", 2, false, false));
         }
@@ -280,14 +282,14 @@ public sealed class YakuDetector
 
     private static bool IsChanta(IEnumerable<Meld> melds, Tile pair)
     {
-        var allParts = melds.All(ContainsTerminalOrHonor) && ContainsTerminalOrHonor(pair);
+        var allParts = melds.Any(m => m.IsSequence) && melds.All(ContainsTerminalOrHonor) && ContainsTerminalOrHonor(pair);
         var hasHonor = melds.SelectMany(m => m.Tiles).Any(t => t.IsHonor) || pair.IsHonor;
         return allParts && hasHonor;
     }
 
     private static bool IsJunchan(IEnumerable<Meld> melds, Tile pair)
     {
-        return melds.All(ContainsTerminalOnly) && ContainsTerminalOnly(pair);
+        return melds.Any(m => m.IsSequence) && melds.All(ContainsTerminalOnly) && ContainsTerminalOnly(pair);
     }
 
     private static bool ContainsTerminalOrHonor(Meld meld)
@@ -323,7 +325,7 @@ public sealed class YakuDetector
             .Any(group => group.Select(m => m.Tiles[0].Suit).Distinct().Count() == 3);
     }
 
-    private static int CountConcealedTriplets(Hand hand, IEnumerable<Meld> triplets)
+    private static int CountConcealedTriplets(Hand hand, IEnumerable<Meld> triplets, WaitType wait)
     {
         var winningTile = hand.WinningTile.HasValue ? TileHelpers.Normalize(hand.WinningTile.Value) : (Tile?)null;
         var concealed = 0;
@@ -335,7 +337,8 @@ public sealed class YakuDetector
                 continue;
             }
 
-            if (hand.WinMethod == WinMethod.Ron && winningTile.HasValue && triplet.Tiles.Any(t => TileHelpers.SameKind(t, winningTile.Value)))
+            if (hand.WinMethod == WinMethod.Ron && wait == WaitType.Shanpon && !triplet.IsKan
+                && winningTile.HasValue && triplet.Tiles.Any(t => TileHelpers.SameKind(t, winningTile.Value)))
             {
                 continue;
             }
@@ -453,7 +456,7 @@ internal static class HandDecomposer
         ArgumentNullException.ThrowIfNull(hand);
 
         var tiles = hand.ClosedTiles.Select(TileHelpers.Normalize).OrderBy(t => t).ToList();
-        var totalTiles = tiles.Count + hand.CalledMelds.Sum(m => m.Tiles.Length);
+        var totalTiles = tiles.Count + 3 * hand.CalledMelds.Count;
         if (totalTiles != 14)
         {
             yield break;
@@ -488,7 +491,8 @@ internal static class HandDecomposer
             foreach (var closedMelds in SearchMelds(counts, neededClosedMelds, []))
             {
                 var allMelds = closedMelds.Concat(hand.CalledMelds).ToList();
-                yield return new HandDecomposition(allMelds, pair, DetermineWaitType(hand, closedMelds, pair));
+                foreach (var wait in DetermineWaitTypes(hand, closedMelds, pair).Distinct())
+                    yield return new HandDecomposition(allMelds, pair, wait);
             }
 
             counts[i] += 2;
@@ -544,17 +548,18 @@ internal static class HandDecomposer
         }
     }
 
-    private static WaitType DetermineWaitType(Hand hand, IReadOnlyList<Meld> melds, Tile pair)
+    private static IEnumerable<WaitType> DetermineWaitTypes(Hand hand, IReadOnlyList<Meld> melds, Tile pair)
     {
         if (!hand.WinningTile.HasValue)
         {
-            return WaitType.Ryanmen;
+            yield return WaitType.Ryanmen;
+            yield break;
         }
 
         var winningTile = TileHelpers.Normalize(hand.WinningTile.Value);
         if (TileHelpers.SameKind(pair, winningTile))
         {
-            return WaitType.Tanki;
+            yield return WaitType.Tanki;
         }
 
         foreach (var meld in melds)
@@ -566,7 +571,7 @@ internal static class HandDecomposer
 
             if (meld.IsTriplet)
             {
-                return WaitType.Shanpon;
+                yield return WaitType.Shanpon;
             }
 
             if (meld.IsSequence)
@@ -574,24 +579,24 @@ internal static class HandDecomposer
                 var numbers = meld.Tiles.Select(t => t.Number).OrderBy(n => n).ToArray();
                 if (numbers[1] == winningTile.Number)
                 {
-                    return WaitType.Kanchan;
+                    yield return WaitType.Kanchan;
                 }
 
-                if (numbers[0] == 1 && winningTile.Number == 3)
+                else if (numbers[0] == 1 && winningTile.Number == 3)
                 {
-                    return WaitType.Penchan;
+                    yield return WaitType.Penchan;
                 }
 
-                if (numbers[2] == 9 && winningTile.Number == 7)
+                else if (numbers[2] == 9 && winningTile.Number == 7)
                 {
-                    return WaitType.Penchan;
+                    yield return WaitType.Penchan;
                 }
 
-                return WaitType.Ryanmen;
+                else
+                    yield return WaitType.Ryanmen;
             }
         }
 
-        return WaitType.Ryanmen;
     }
 
     private static Meld CloneMeld(Meld meld)

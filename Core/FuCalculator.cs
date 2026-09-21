@@ -24,7 +24,10 @@ public static class FuCalculator
 
         var melds = decomposition.Where(m => m.Type != MeldType.Pair).ToList();
         var pairFu = CalculatePairFu(hand, normalizedPair, doubleWindPairFu);
-        var meldFu = melds.Sum(meld => meld.FuValue(meld.IsOpen));
+        // A ron-completed triplet is open for fu, while the hand remains menzen.
+        var meldFu = melds.Sum(meld => meld.FuValue(meld.IsOpen ||
+            hand.WinMethod == WinMethod.Ron && wait == WaitType.Shanpon && meld.Type == MeldType.Pon
+            && hand.WinningTile is { } win && TileHelpers.SameKind(meld.Tiles[0], win)));
         var waitFu = wait is WaitType.Kanchan or WaitType.Penchan or WaitType.Tanki ? 2 : 0;
         var isPinfuTsumo = hand.WinMethod == WinMethod.Tsumo
             && !hand.IsOpen

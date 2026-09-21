@@ -9,14 +9,15 @@ namespace MahjongHater.Tests.Policy;
 public class DiscardAndStanceTests
 {
     [Fact]
-    public void Discard_policy_preserves_analyzer_metrics_and_score_scale()
+    public void Discard_policy_preserves_analyzer_metrics_and_legacy_score_scale()
     {
+        var legacy = new PolicyWeights { DefenseModel = DefenseModel.Legacy };
         var state = Seat(Snap("123m456m789m4467p1z"), riichi: true);
         var hand = new Hand();
         hand.ClosedTiles.AddRange(state.Hand);
         var engine = new HandAnalyzer().Analyze(hand);
-        var model = Model(state);
-        var candidates = new HeuristicDiscardPolicy().Rank(state, model, default);
+        var model = Model(state, legacy);
+        var candidates = new HeuristicDiscardPolicy(weights: legacy).Rank(state, model, default);
         foreach (var candidate in candidates)
         {
             var source = Assert.Single(engine.Ranked, o => o.DiscardTile == candidate.Tile);
@@ -28,6 +29,38 @@ public class DiscardAndStanceTests
             Assert.InRange(candidate.DealInRisk, 0, 1);
         }
         Assert.Equal(0, candidates[0].ShantenAfter);
+    }
+
+    [Fact]
+    public void V2_scores_candidates_in_points_per_hand()
+    {
+        var state = Seat(Snap("123m456m789m4467p1z"), riichi: true);
+        var model = Model(state);
+        var candidates = new HeuristicDiscardPolicy().Rank(state, model, default);
+        foreach (var candidate in candidates)
+        {
+            Assert.InRange(candidate.WinProbability, 0, 1);
+            Assert.True(candidate.ValuePoints >= 0);
+            var expected = candidate.WinProbability * candidate.ValuePoints
+                           - PolicyWeights.Default.PushExposureTurns * model.ExpectedDealInCost(candidate.Tile);
+            Assert.Equal(expected, candidate.ExpectedValue, 6);
+        }
+
+        // Point-EV ranking is opt-in; by default the analyzer score orders a shanten level.
+        var byEv = new HeuristicDiscardPolicy(weights: PolicyWeights.Default with { RankByPointEv = true }).Rank(state, model, default);
+        foreach (var candidate in byEv)
+            Assert.Equal(candidate.ExpectedValue, candidate.Score, 6);
+
+        // The tenpai keep (discard 1z, wait 5-8p: riichi, pinfu, ittsu as dealer) is priced
+        // from the scoring engine plus the ippatsu/ura expectation.
+        var tenpai = candidates.Single(c => c.Tile.Equals(Tile.Parse("1z")));
+        Assert.Equal(0, tenpai.ShantenAfter);
+        Assert.InRange(tenpai.ValuePoints, 5800, 12000);
+        Assert.True(tenpai.MinPoints >= 5800);
+        Assert.True(tenpai.WinProbability > 0.3);
+        var nonDealer = new HeuristicDiscardPolicy().Rank(state with { DealerSeat = 1 }, Model(state with { DealerSeat = 1 }), default)
+            .Single(c => c.Tile.Equals(Tile.Parse("1z")));
+        Assert.True(nonDealer.ValuePoints < tenpai.ValuePoints);
     }
 
     [Fact]
@@ -166,7 +199,11 @@ public class DiscardAndStanceTests
         var state = Seat(Snap(), riichi: true);
         Assert.False(new RiichiPolicy(new PolicyWeights { RiichiMinUkeire = 1 })
             .ShouldDeclare(state, Model(state), Candidate(shanten: 0, ukeire: 3), out var reason));
-        Assert.Contains("opponent", reason.Display);
+        Assert.Contains("riichi", reason.Display);
+        // A good wait chases regardless of value; a bad wait chases with 5 200 or more.
+        Assert.True(new RiichiPolicy().ShouldDeclare(state, Model(state), Candidate(shanten: 0, ukeire: 8), out _));
+        Assert.True(new RiichiPolicy().ShouldDeclare(state, Model(state), Candidate(shanten: 0, ukeire: 3) with { ValuePoints = 5200 }, out _));
+        Assert.False(new RiichiPolicy().ShouldDeclare(state with { DealerSeat = 1 }, Model(state), Candidate(shanten: 0, ukeire: 3) with { ValuePoints = 5200 }, out _));
     }
 
     [Fact]

@@ -18,6 +18,19 @@ public class DecisionPolicyTests
         Assert.Equal(ActionKind.Discard, result.Kind);
         Assert.Equal(Tile.Parse("1z"), result.Tile);
         Assert.Equal(result.Tile, result.Candidates[0].Tile);
+        Assert.Contains(result.Steps, s => s.Stage == "push/fold" && s.Display.Contains("Budget"));
+        Assert.Contains(result.Steps, s => s.Stage == "discard" && (s.Display.StartsWith("Turn") || s.Display.StartsWith("Fold")));
+    }
+
+    [Fact]
+    public void Legacy_fold_selects_safest_candidate_even_if_it_worsens_shanten()
+    {
+        var legacy = new PolicyWeights { DefenseModel = DefenseModel.Legacy };
+        var state = Seat(Snap(), riichi: true);
+        var policy = new DecisionPolicy(weights: legacy, discards: new FixedDiscards(
+            Candidate("3m", shanten: 2, risk: 0.4), Candidate("1z", shanten: 3, risk: 0, score: -100)));
+        var result = policy.Choose(state, default);
+        Assert.Equal(Tile.Parse("1z"), result.Tile);
         Assert.Contains(result.Steps, s => s.Stage == "push/fold" && s.Display.Contains("Fold"));
     }
 
