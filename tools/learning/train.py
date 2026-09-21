@@ -516,13 +516,18 @@ def train(args):
     random.seed(args.seed)
     manifest, layout, splits = load_dataset(args.dataset)
     architecture = f"cnn{args.channels}-res{args.blocks}-dense{args.hidden}-{layout.features_version}"
-    identity = hashlib.sha256(json.dumps({"dataset": manifest, "seed": args.seed, "batch": args.batch, "lr": args.lr,
-                                         "architecture": architecture}, sort_keys=True).encode()).hexdigest()
+    identity_fields = {"dataset": manifest, "seed": args.seed, "batch": args.batch, "lr": args.lr, "architecture": architecture}
+    if args.schedule != "constant":
+        identity_fields["schedule"] = f"{args.schedule}-{args.epochs}"   # the decay horizon is part of the run
+    identity = hashlib.sha256(json.dumps(identity_fields, sort_keys=True).encode()).hexdigest()
     if args.output.exists() and not args.resume:
         raise ValueError("Output exists; use a new directory or --resume")
     args.output.mkdir(parents=True, exist_ok=True)
     model = Network(layout, args.channels, args.hidden, args.blocks).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    # Cosine decay to 5 % of the base rate over the planned epochs: the usual +0.5-1 pt of
+    # imitation accuracy at the end of a run over a constant rate.
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=args.lr * .05) if args.schedule == "cosine" else None
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
     start, best_loss, history = 0, math.inf, []
     checkpoint = args.output / "checkpoint.pt"
@@ -533,6 +538,8 @@ def train(args):
             raise ValueError("Resume configuration or dataset identity differs")
         model.load_state_dict(saved["model"])
         optimizer.load_state_dict(saved["optimizer"])
+        if scheduler is not None and saved.get("scheduler") is not None:
+            scheduler.load_state_dict(saved["scheduler"])
         torch.set_rng_state(saved["rng"])
         start, best_loss, history = saved["epoch"], saved["best_loss"], saved["history"]
     use_windows = args.loader == "windows" or args.loader == "auto" and device.type == "cuda"
@@ -577,6 +584,9 @@ def train(args):
             entry["rss_mb"], entry["peak_rss_mb"] = round(current), round(peak)
             if device.type == "cuda":
                 entry["gpu_peak_mb"] = round(torch.cuda.max_memory_allocated() / 2 ** 20)
+        entry["lr"] = optimizer.param_groups[0]["lr"]
+        if scheduler is not None:
+            scheduler.step()
         history.append(entry)
         print(json.dumps(entry), flush=True)
         if validation_loss < best_loss:
@@ -584,6 +594,7 @@ def train(args):
             torch.save(model.state_dict(), args.output / "best.pt.tmp")
             os.replace(args.output / "best.pt.tmp", args.output / "best.pt")
         torch.save({"identity": identity, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict() if scheduler is not None else None,
                     "epoch": epoch + 1, "best_loss": best_loss, "history": history, "rng": torch.get_rng_state()}, args.output / "checkpoint.pt.tmp")
         os.replace(args.output / "checkpoint.pt.tmp", checkpoint)
     model.load_state_dict(torch.load(args.output / "best.pt", map_location=device, weights_only=True))
@@ -644,4 +655,5 @@ if __name__ == "__main__":
     parser.add_argument("--prefetch", type=int, default=6, help="CPU training: batches prepared ahead on the loader thread")
     parser.add_argument("--window-rows", type=int, default=0, help="CUDA training: rows per device-resident window (0 = ~a third of free GPU memory)")
     parser.add_argument("--loader", default="auto", choices=["auto", "windows", "prefetch"], help="auto = device windows on CUDA, prefetch thread on CPU")
+    parser.add_argument("--schedule", default="cosine", choices=["cosine", "constant"], help="learning-rate schedule over --epochs")
     train(parser.parse_args())

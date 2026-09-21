@@ -67,7 +67,9 @@ is 256 MB) and costs ≈ 10 ms per position in the plugin's C# inference (a deci
 once, plus three score counterfactuals for the placement stakes). `-Blocks 10 -Channels 192`
 (≈ 8 M parameters, ≈ 16 ms) is the next step up if the run looks capacity-limited (train
 and validation loss still falling together at the end); `-LearningRate 0.002` is reasonable
-at batch 4096.
+at batch 4096. The learning rate follows a cosine decay to 5 % over the planned epochs
+(`--schedule constant` in `train.py` turns it off), so `-Epochs` is part of the run's
+identity: a resume must keep it.
 
 How the data reaches the GPU: `train.py` streams the training split through device memory.
 A reader thread fills a pinned window (`-WindowRows`, default ≈ a third of free GPU memory,
