@@ -18,6 +18,10 @@ Remove-Item -LiteralPath (Join-Path $destination 'Precompute.pdb') -ErrorAction 
 
 & (Join-Path $destination 'Precompute.exe') sim-config (Join-Path $destination 'generation.json')
 if ($LASTEXITCODE -ne 0) { throw 'Default configuration generation failed.' }
+# Same profile for Quick Match (tonpuusen) imports: only the match length differs.
+$hanchan = Get-Content -LiteralPath (Join-Path $destination 'generation.json') -Raw
+if ($hanchan -notmatch '"HandsInMatch": 8') { throw 'Unexpected generation.json layout.' }
+Set-Content -LiteralPath (Join-Path $destination 'generation-4.json') -Value ($hanchan -replace '"HandsInMatch": 8', '"HandsInMatch": 4') -Encoding UTF8
 foreach ($file in 'Setup-Training.ps1', 'Run-Training.ps1', 'check_env.py', 'requirements.txt') {
     Copy-Item -LiteralPath (Join-Path $repo "tools/training/$file") -Destination $destination
 }

@@ -106,11 +106,41 @@ public sealed class PushFoldPolicy : IPushFoldPolicy
             notes.Add("two riichi");
         }
 
+        // Placement stakes when a model can say what winning or dealing in does to our final
+        // placement: scale the point-based budget by (placement gain / placement loss) relative
+        // to (hand value / threat value). Early in a match both differences are small and
+        // proportional to points, so the factor stays near 1; in the last hands it becomes
+        // "leading: fold", "4th: push" with the actual scores, for any hand of the match.
+        var scored = state.Seats.Any(s => s.Score != 0);
+        var stakesApplied = false;
+        if (scored && w.PlacementStakesWeight > 0 && opponents is IPlacementModel placement)
+        {
+            var threatPoints = Math.Max(1000, opponents.Value(primary));
+            var winDeltas = new int[4]; winDeltas[0] = (int)value; winDeltas[primary] = -(int)value;
+            var lossDeltas = new int[4]; lossDeltas[0] = -(int)threatPoints; lossDeltas[primary] = (int)threatPoints;
+            var pWin = placement.Placement(state, winDeltas);
+            var pDraw = placement.Placement(state, new int[4]);
+            var pLoss = placement.Placement(state, lossDeltas);
+            if (pWin is not null && pDraw is not null && pLoss is not null)
+            {
+                double Utility(double[] p) => p.Zip(w.PlacementUtility, (a, b) => a * b).Sum();
+                var gain = Utility(pWin) - Utility(pDraw);
+                var loss = Utility(pDraw) - Utility(pLoss);
+                var pointsRatio = value / threatPoints;
+                var factor = loss <= 1e-6 ? w.PlacementStakesMax
+                    : gain <= 1e-6 ? w.PlacementStakesMin
+                    : Math.Clamp(gain / loss / pointsRatio, w.PlacementStakesMin, w.PlacementStakesMax);
+                factor = Math.Pow(factor, w.PlacementStakesWeight);
+                budget *= factor;
+                stakesApplied = true;
+                notes.Add($"placement stakes ×{factor:0.00} (win {gain:+0.00;-0.00}, deal-in {-loss:+0.00;-0.00})");
+            }
+        }
+
         // Placement in the last hand: first place folds more (the regulars override even a
         // bot's "push tenpai" here, docs/research/wwyd_sweep.md), a comfortable lead more still;
-        // 3rd/4th pushes more.
-        var scored = state.Seats.Any(s => s.Score != 0);
-        if (scored && state.IsAllLast)
+        // 3rd/4th pushes more. The fixed factors stand in when no placement model answered.
+        if (scored && state.IsAllLast && !stakesApplied)
         {
             var us = state.Us.Score;
             var lead = us - state.Seats.Where(s => s.Seat != 0).Max(s => s.Score);

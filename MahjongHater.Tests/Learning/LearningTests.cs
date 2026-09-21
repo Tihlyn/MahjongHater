@@ -250,6 +250,30 @@ public sealed class LearningTests
     }
 
     [Fact]
+    public void Placement_head_is_optional_and_answers_score_counterfactuals()
+    {
+        var plain = new LearnedModel(SyntheticArtifact(2, 3));
+        Assert.False(plain.HasPlacementHead);
+        Assert.Null(plain.Placement(Snap("123m456m4578p447s1z")));
+        var artifact = SyntheticArtifact(2, 3, placement: true);
+        var model = new LearnedModel(artifact);
+        Assert.True(model.HasPlacementHead);
+        Assert.Equal(model.Outputs + 4, model.Predict(Snap("123m456m4578p447s1z")).Length);
+        var state = Snap("123m456m4578p447s1z") with { Seats = StateSnapshot.Empty.Seats.Select(s => s with { Score = 25000 }).ToArray() };
+        var now = model.Placement(state)!;
+        Assert.Equal(1, now.Sum(), 6);
+        Assert.All(now, p => Assert.InRange(p, 0, 1));
+        var win = model.Placement(state, [12000, -12000, 0, 0])!;
+        Assert.NotEqual(now, win);
+        Assert.Throws<ArgumentException>(() => model.Placement(state, [1, 2]));
+        // The counterfactual must not evict the snapshot's own prediction.
+        Assert.Equal(model.Predict(state), model.Predict(state));
+        var opponents = new LearnedOpponentModel(model);
+        opponents.Update(state);
+        Assert.NotNull(((IPlacementModel)opponents).Placement(state, new int[4]));
+    }
+
+    [Fact]
     public void Learned_call_policy_answers_claim_windows_and_defers_elsewhere()
     {
         var model = new LearnedModel(SyntheticArtifact(2, 3));
@@ -322,7 +346,7 @@ public sealed class LearningTests
 
     // A structurally valid artifact with small random weights (not a trained model):
     // schema 2 (stem + one residual block, v2 planes) or the legacy schema-1 shape.
-    private static LearnedArtifact SyntheticArtifact(int channels, int hidden, bool legacy = false)
+    private static LearnedArtifact SyntheticArtifact(int channels, int hidden, bool legacy = false, bool placement = false)
     {
         var random = new Random(3);
         NeuralLayer Layer(int inputs, int outputs, int kernel) => new(inputs, outputs, kernel,
@@ -334,7 +358,7 @@ public sealed class LearningTests
                 Layer(hidden, 2 * LearningFeatures.LegacyActions + LearnedModel.OpponentOutputs, 1),
                 new ProbabilityCalibration(1, 0), new ProbabilityCalibration(1, 0), 1f, false, "synthetic");
         return new LearnedArtifact(2, LearningFeatures.Version, "synthetic", Rules, null, null, Layer(channels * 34, hidden, 1),
-            Layer(hidden, 2 * LearningFeatures.Actions + LearnedModel.OpponentOutputs, 1),
+            Layer(hidden, 2 * LearningFeatures.Actions + LearnedModel.OpponentOutputs + (placement ? 4 : 0), 1),
             new ProbabilityCalibration(1, 0), new ProbabilityCalibration(1, 0), 1f, false, "synthetic")
         { Stem = Layer(LearningFeatures.Channels, channels, 3), Blocks = [new ResidualBlock(Layer(channels, channels, 3), Layer(channels, channels, 3))] };
     }

@@ -36,11 +36,23 @@ public sealed record CalibrationCell(int Count, int Positives, double Brier, dou
     public double BaseRate => this.Count == 0 ? 0 : (double)this.Positives / this.Count;
 }
 
+// Final-placement prediction on turn decisions: the learned head against the "current rank
+// by score" baseline, overall and in the last hand.
+public sealed record PlacementCell(int Count, int LearnedTop1, double LearnedLogLoss, int RankTop1)
+{
+    public double LearnedAccuracy => this.Count == 0 ? 0 : (double)this.LearnedTop1 / this.Count;
+    public double RankAccuracy => this.Count == 0 ? 0 : (double)this.RankTop1 / this.Count;
+    public double LearnedNll => this.Count == 0 ? 0 : this.LearnedLogLoss / this.Count;
+}
+
 public sealed record EvaluationReport(
     string Corpus, string Split, int Games, int Decisions, int Skipped, string? Model,
     Dictionary<string, Dictionary<string, AgreementCell>> Agreement,     // policy -> category -> cell
     Dictionary<string, Dictionary<string, CalibrationCell>> Calibration, // estimator -> view -> cell
-    Dictionary<string, double> Seconds);
+    Dictionary<string, double> Seconds)
+{
+    public Dictionary<string, PlacementCell>? Placement { get; init; }   // view -> cell (model with a placement head)
+}
 
 public static class LearningEvaluation
 {
@@ -71,7 +83,7 @@ public static class LearningEvaluation
             foreach (var decision in game.Decisions)
             {
                 ct.ThrowIfCancellationRequested();
-                worker.Evaluate(decision);
+                worker.Evaluate(decision, game.Match.Placement[decision.Seat]);
             }
             var n = Interlocked.Increment(ref done);
             if (progress is not null && (n % 25 == 0 || n == games.Length))
@@ -115,6 +127,14 @@ public static class LearningEvaluation
             var first = report.Agreement.Values.First()[category];
             lines.Add($"{category,-34}{first.HumanDealInRate,11:P2} " + string.Join(string.Empty, report.Agreement.Keys.Select(p =>
                 $"{report.Agreement[p][category].PolicyDealInRate,11:P2} ")));
+        }
+
+        if (report.Placement is { Count: > 0 })
+        {
+            lines.Add(string.Empty);
+            lines.Add($"{"final placement (learned top-1 / NLL / by current rank / n)",-46}");
+            foreach (var (view, cell) in report.Placement)
+                lines.Add($"{"placement " + view,-46}{cell.LearnedAccuracy,8:P1}{cell.LearnedNll,9:F4}{cell.RankAccuracy,9:P1}{cell.Count,9}");
         }
 
         lines.Add(string.Empty);
@@ -174,7 +194,7 @@ public static class LearningEvaluation
             this.Local = new Totals(names, model is not null);
         }
 
-        public void Evaluate(ReplayDecision d)
+        public void Evaluate(ReplayDecision d, int finalPlacement = -1)
         {
             var state = d.Observation.Snapshot;
             if (d.ObservedAction.Kind is SimActionKind.Pass or SimActionKind.Chi or SimActionKind.Pon or SimActionKind.OpenKan && state.CallTile is not null)
@@ -222,6 +242,21 @@ public static class LearningEvaluation
             }
 
             this.Calibrate(state, targets);
+            this.Placement(state, finalPlacement);
+        }
+
+        // Learned placement head against the rank-by-score baseline (both predict 1st..4th).
+        private void Placement(StateSnapshot state, int finalPlacement)
+        {
+            if (finalPlacement is < 1 or > 4 || this.model is null || !this.model.HasPlacementHead || !state.Seats.Any(s => s.Score != 0)) return;
+            var p = this.model.Placement(state);
+            if (p is null) return;
+            var learned = Array.IndexOf(p, p.Max()) + 1;
+            var rank = 1 + state.Seats.Count(s => s.Seat != 0 && s.Score > state.Us.Score);
+            var logLoss = -Math.Log(Math.Max(p[finalPlacement - 1], 1e-9));
+            this.Local.Placement("all", learned == finalPlacement, logLoss, rank == finalPlacement);
+            if (state.IsAllLast) this.Local.Placement("all-last", learned == finalPlacement, logLoss, rank == finalPlacement);
+            else if (state.HandNumber >= 3 && state.RoundWind == Wind.South) this.Local.Placement("south-3+", learned == finalPlacement, logLoss, rank == finalPlacement);
         }
 
         // A claim window: the human passed or called. Agreement = same decision (pass, or the
@@ -315,9 +350,19 @@ public static class LearningEvaluation
     {
         private readonly Dictionary<string, Dictionary<string, Cell>> agreement = new();
         private readonly Dictionary<string, Dictionary<string, Calib>> calibration = new();
+        private readonly Dictionary<string, Placed> placement = new();
         private readonly object gate = new();
         public int Decisions;
         public int Skipped;
+
+        public void Placement(string view, bool learnedHit, double logLoss, bool rankHit)
+        {
+            if (!this.placement.TryGetValue(view, out var cell)) this.placement[view] = cell = new Placed();
+            cell.Count++;
+            if (learnedHit) cell.LearnedTop1++;
+            cell.LogLoss += logLoss;
+            if (rankHit) cell.RankTop1++;
+        }
 
         public Totals(List<string> policies, bool hasModel)
         {
@@ -355,6 +400,11 @@ public static class LearningEvaluation
                         if (!this.agreement[policy].TryGetValue(category, out var mine)) this.agreement[policy][category] = mine = new Cell();
                         mine.Merge(cell);
                     }
+                foreach (var (view, cell) in other.placement)
+                {
+                    if (!this.placement.TryGetValue(view, out var mine)) this.placement[view] = mine = new Placed();
+                    mine.Count += cell.Count; mine.LearnedTop1 += cell.LearnedTop1; mine.LogLoss += cell.LogLoss; mine.RankTop1 += cell.RankTop1;
+                }
                 foreach (var (estimator, views) in other.calibration)
                     foreach (var (view, calib) in views)
                     {
@@ -373,7 +423,17 @@ public static class LearningEvaluation
                 .ToDictionary(c => c, c => kv.Value[c].ToRecord()));
             var calibration = this.calibration.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToDictionary(kv => kv.Key, kv => kv.Value.OrderBy(v => v.Key, StringComparer.Ordinal)
                 .ToDictionary(v => v.Key, v => v.Value.ToRecord()));
-            return new EvaluationReport(corpus, split, games, this.Decisions, this.Skipped, model, agreement, calibration, new Dictionary<string, double> { ["total"] = seconds });
+            return new EvaluationReport(corpus, split, games, this.Decisions, this.Skipped, model, agreement, calibration, new Dictionary<string, double> { ["total"] = seconds })
+            {
+                Placement = this.placement.Count == 0 ? null : new[] { "all", "south-3+", "all-last" }.Where(this.placement.ContainsKey)
+                    .ToDictionary(v => v, v => new PlacementCell(this.placement[v].Count, this.placement[v].LearnedTop1, this.placement[v].LogLoss, this.placement[v].RankTop1)),
+            };
+        }
+
+        private sealed class Placed
+        {
+            public int Count, LearnedTop1, RankTop1;
+            public double LogLoss;
         }
 
         private sealed class Cell

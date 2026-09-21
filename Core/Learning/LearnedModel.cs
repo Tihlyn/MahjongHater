@@ -23,7 +23,8 @@ public sealed record LearnedArtifact(int Schema, string Features, string Corpus,
 }
 
 // Small CPU CNN; no native inference runtime or training dependency in the plugin.
-// Output: policy[A], tenpai[3], conditional ron[102], points[102], search Q[A].
+// Output: policy[A], tenpai[3], conditional ron[102], points[102], search Q[A],
+// optionally final placement[4] (logits over 1st..4th for the acting seat).
 public sealed class LearnedModel
 {
     private readonly LearnedArtifact artifact;
@@ -46,6 +47,10 @@ public sealed class LearnedModel
     public int PointsOffset => this.Actions + 105;
 
     public int SearchOffset => this.Actions + 207;
+
+    public int PlacementOffset => 2 * this.Actions + OpponentOutputs;
+
+    public bool HasPlacementHead { get; }
 
     public SimulationRules Rules => this.artifact.Rules;
 
@@ -90,8 +95,9 @@ public sealed class LearnedModel
                 throw new InvalidDataException("Unsupported learned model schema.");
         }
 
+        this.HasPlacementHead = artifact.Output.Outputs == outputs + 4;
         if (first.Inputs != channels || artifact.Dense.Kernel != 1 || artifact.Output.Inputs != artifact.Dense.Outputs
-            || artifact.Output.Outputs != outputs || artifact.Output.Kernel != 1
+            || artifact.Output.Outputs != outputs && !this.HasPlacementHead || artifact.Output.Kernel != 1
             || !float.IsFinite(artifact.ValueScale) || artifact.ValueScale is < .1f or > 10f)
             throw new InvalidDataException("Incompatible learned model schema or dimensions.");
         var layers = new List<NeuralLayer> { first, artifact.Dense, artifact.Output };
@@ -148,7 +154,10 @@ public sealed class LearnedModel
         var m = this.memo.Value;
         if (m?.Output is not null && input.AsSpan().SequenceEqual(m.Input)) return (float[])m.Output.Clone();
         var output = this.Run(input, ct);
-        this.memo.Value = m is { Output: null } && input.AsSpan().SequenceEqual(m.Input) ? m with { Output = output } : new Memo(null, (float[])input.Clone(), output);
+        if (m is { Output: null } && input.AsSpan().SequenceEqual(m.Input)) this.memo.Value = m with { Output = output };
+        else if (m?.State is null) this.memo.Value = new Memo(null, (float[])input.Clone(), output);
+        // else: a counterfactual input (e.g. Placement with score deltas) must not evict the
+        // snapshot's own prediction, which the next consumer of this decision will ask for.
         return (float[])output.Clone();
     }
 
@@ -168,6 +177,30 @@ public sealed class LearnedModel
         var output = Apply(dense, this.artifact.Output, 1, false, ct);
         if (output.Any(v => !float.IsFinite(v))) throw new InvalidDataException("Nonfinite neural prediction.");
         return output;
+    }
+
+    // P(final placement 1st..4th) for seat 0 if every seat's score moved by `scoreDeltas`
+    // (relative seats, points); null without a placement head. Only the score planes are
+    // re-encoded, so the counterfactual keeps the rest of the position.
+    public double[]? Placement(StateSnapshot state, int[]? scoreDeltas = null, CancellationToken ct = default)
+    {
+        if (!this.HasPlacementHead || !this.Supports(state)) return null;
+        var input = this.Encode(state);
+        if (scoreDeltas is not null)
+        {
+            if (scoreDeltas.Length != 4) throw new ArgumentException("Four relative-seat deltas expected.");
+            for (var seat = 0; seat < 4; seat++)
+                Array.Fill(input, (state.Seats[seat].Score + scoreDeltas[seat]) / 50000f, (32 + seat) * 34, 34);
+        }
+        var output = this.Predict(input, ct);
+        var logits = output.AsSpan(this.PlacementOffset, 4);
+        var max = float.NegativeInfinity;
+        foreach (var l in logits) max = Math.Max(max, l);
+        var p = new double[4];
+        var sum = 0d;
+        for (var i = 0; i < 4; i++) { p[i] = Math.Exp(logits[i] - max); sum += p[i]; }
+        for (var i = 0; i < 4; i++) p[i] /= sum;
+        return p;
     }
 
     public double Tenpai(float logit) => Calibrate(logit, this.artifact.TenpaiCalibration);

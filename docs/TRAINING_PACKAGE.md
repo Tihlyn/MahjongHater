@@ -14,8 +14,16 @@ What the model learns (feature version `public-tiles-v2`, artifact schema 2):
   player faced (path D, the weakest component of the current plugin: the heuristic calls on
   24 % of windows, humans on 16 %).
 - **Opponent heads**: tenpai per seat, conditional winning tiles, hand value.
+- **Final placement** (path F): P(1st..4th) for the acting seat from the public state and
+  scores; the plugin's push/fold budget uses it as placement stakes (what a win or a deal-in
+  does to our placement) instead of the fixed all-last factors.
 - Network: 3×1 conv stem → N residual blocks → dense → heads (path C); float16 dataset so the
   full archive set fits on disk (path B).
+
+Two match lengths: the archives hold hanchan (Full Match) and tonpuusen (Quick Match) games
+and the plugin only loads a model trained on the configured length, so run the pipeline
+once per length (`-HandsInMatch 8`, the default, and `-HandsInMatch 4 -RunName quick`).
+Quick Match games are ~10 % of the archives (n28: 690 of 3 181).
 
 ## Requirements on the compute box
 
@@ -68,12 +76,14 @@ Useful variations:
 .\Run-Training.ps1 -Stage train,check,eval -RunName res6 -Resume    # continue an interrupted run
 .\Run-Training.ps1 -MaxGames 12000                                  # half the disk (~40 GB)
 .\Run-Training.ps1 -Device cpu -Batch 256                           # no usable GPU (10× slower)
+.\Run-Training.ps1 -HandsInMatch 4 -RunName quick -MaxGames 100000  # Quick Match model (all tonpuusen games)
 ```
 
 ## What to send back
 
 - `work\model-<run>\learned_policy.json` — the model. It loads in the plugin from the
-  plugin config directory as `learned_policy.json` (Config → "learned policy").
+  plugin config directory as `learned_policy.json` (Config → "learned policy"); the plugin
+  checks the match length, so keep the hanchan and Quick Match models apart.
 - `work\model-<run>\metrics.json` — training curves and test metrics (policy top-1,
   reaction top-1, tenpai/ron calibration, value MAE).
 - `work\eval\<run>-test.json` and `work\logs\eval-*.log` — the harness comparison.
@@ -86,9 +96,12 @@ The corpus and dataset stay on the box; they are reproducible from the archives.
 `metrics.json → test.policy_top1` is discard/riichi imitation accuracy on held-out games
 (references: 65–69 % for the earlier two-layer net on 0.5–3 M rows, 68.8 % for the CNN
 Suphx cites, 76.7 % Suphx supervised). `test.reaction_top1` is the claim-window accuracy
-(heuristic: 80 %; Suphx chow/pong 92–95 %). The eval log's `reaction` block shows the
-learned-guarded call rate against the human rate; the `deal-in rate of the chosen tile`
-block is the defense metric (lower than human is good, as long as agreement holds up).
+(heuristic: 80 %; Suphx chow/pong 92–95 %). `test.placement_top1` should beat
+`test.placement_top1_by_current_rank` (the "you finish where you are now" baseline). The eval
+log's `reaction` block shows the learned-guarded call rate against the human rate; the
+`deal-in rate of the chosen tile` block is the defense metric (lower than human is good, as
+long as agreement holds up); the `final placement` block repeats the placement comparison
+on held-out games, overall, in South 3+ and in the last hand.
 
 Nothing here is a dan estimate. Promotion to the default policy needs matched-seed simulator
 A/B (`docs/SIMULATOR.md`) or live matches.
@@ -100,6 +113,6 @@ A/B (`docs/SIMULATOR.md`) or live matches.
 | `Precompute.exe` | replay import, dataset export, parity check, evaluation harness, simulator (self-contained .NET) |
 | `train.py` | PyTorch trainer (CPU or CUDA), exports the schema-2 artifact |
 | `Setup-Training.ps1`, `Run-Training.ps1`, `requirements.txt` | environment and pipeline |
-| `generation.json` | rule profile (Doman: kuitan on, 8 hands) used by the importer |
+| `generation.json`, `generation-4.json` | rule profiles (Doman: kuitan on; 8 or 4 hands) used by the importer |
 | `REPLAY_IMPORT.md`, `EVALUATION.md` | corpus format and harness documentation |
 | `PACKAGE.json` | repository commit the package was built from |

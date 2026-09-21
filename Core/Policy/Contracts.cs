@@ -122,6 +122,14 @@ public interface IOpponentModel
     int LiveSuji(int seat) => -1;
 }
 
+// Final-placement distribution for us (1st..4th) if every relative seat's score moved by
+// `scoreDeltas` (points); null when no estimate is available. Lets push/fold weigh
+// placement stakes instead of raw points (docs/research/STRENGTH_COMPARISON.md, path F).
+public interface IPlacementModel
+{
+    double[]? Placement(StateSnapshot state, int[] scoreDeltas);
+}
+
 // Which danger/push-fold implementation runs; Legacy is the v1.3 behaviour for A/B runs.
 public enum DefenseModel
 {
@@ -269,6 +277,13 @@ public sealed record PolicyWeights
     // Learned call decisions: decline a heuristic call when the network's pass probability
     // reaches this (LearnedCallPolicy).
     public double LearnedCallPassThreshold { get; init; } = 0.5;
+    // Placement stakes (IPlacementModel): utility of finishing 1st..4th, and how strongly the
+    // budget follows the stakes ratio (0 = ignore, 1 = fully). The factor is clamped to
+    // [PlacementStakesMin, PlacementStakesMax].
+    public double[] PlacementUtility { get; init; } = [1, 0.4, -0.4, -1];
+    public double PlacementStakesWeight { get; init; } = 1;
+    public double PlacementStakesMin { get; init; } = 0.33;
+    public double PlacementStakesMax { get; init; } = 3;
 
     public static PolicyWeights Default { get; } = new();
 }

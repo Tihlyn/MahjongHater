@@ -4,7 +4,8 @@ assisted by offline Q labels.
 Inputs are exported by `Precompute learn-data`; the C# encoder is the sole feature
 implementation and the row layout comes from the dataset manifest (schema 1 = public-tiles-v1,
 74 actions; schema 2 = public-tiles-v2 with look-ahead planes and 82 actions including
-pass / pon / open kan / chi shapes / own-turn kans). Hidden hands are targets only.
+pass / pon / open kan / chi shapes / own-turn kans; schema 3 adds the acting seat's final
+placement, trained as a fourth head). Hidden hands are targets only.
 
 Network: 3×1 conv stem → N residual blocks (conv-relu-conv + skip) → dense → heads, the
 Suphx/NAGA shape at a size this project can train. --blocks 0 reproduces the earlier
@@ -40,20 +41,22 @@ class Layout:
     """Row/output layout for one feature version (from the dataset manifest)."""
 
     def __init__(self, manifest):
-        if manifest["Schema"] not in (1, 2) or manifest["Features"] not in ("public-tiles-v1", "public-tiles-v2"):
+        if manifest["Schema"] not in (1, 2, 3) or manifest["Features"] not in ("public-tiles-v1", "public-tiles-v2"):
             raise ValueError("Incompatible learning dataset schema")
         self.schema = manifest["Schema"]
         self.features_version = manifest["Features"]
         self.channels = manifest["Channels"]
         self.actions = manifest["Actions"]
         self.features = self.channels * WIDTH
-        self.row = self.features + self.actions + 1 + OPPONENTS + self.actions
+        self.placement = self.schema >= 3
+        self.row = self.features + self.actions + 1 + OPPONENTS + self.actions + (1 if self.placement else 0)
         if manifest["RowFloats"] != self.row:
             raise ValueError("Dataset row size does not match its declared layout")
         self.dtype = "<f2" if manifest.get("Dtype", "float32") == "float16" else "<f4"
         self.item = 2 if self.dtype == "<f2" else 4
         self.extension = manifest.get("Extension", ".f32")
-        self.outputs = 2 * self.actions + OPPONENTS
+        self.outputs = 2 * self.actions + OPPONENTS + (4 if self.placement else 0)
+        self.placement_offset = 2 * self.actions + OPPONENTS
         self.tenpai = self.actions
         self.ron = self.actions + 3
         self.points = self.actions + 105
@@ -85,8 +88,12 @@ def unpack(rows, layout):
     x = rows[:, :layout.features]
     legal = rows[:, layout.features:layout.features + layout.actions] > 0
     human = rows[:, layout.features + layout.actions].long()
-    targets = rows[:, layout.features + layout.actions + 1:layout.features + layout.actions + 1 + OPPONENTS]
-    return x, legal, human, targets, rows[:, -layout.actions:]
+    offset = layout.features + layout.actions + 1
+    targets = rows[:, offset:offset + OPPONENTS]
+    q = rows[:, offset + OPPONENTS:offset + OPPONENTS + layout.actions]
+    # Placement 1..4 -> class 0..3, -1 = unknown (search rows).
+    placement = rows[:, -1].long() - 1 if layout.placement else torch.full((len(rows),), -1, dtype=torch.long)
+    return x, legal, human, targets, q, placement
 
 
 def masked_loss(prediction, target, kind):
@@ -100,16 +107,20 @@ def masked_loss(prediction, target, kind):
     return F.mse_loss(prediction[mask].float(), target[mask].float())
 
 
-def objective(output, legal, human, targets, q, layout):
+def objective(output, legal, human, targets, q, placement, layout):
     output = output.float()
     labeled = human >= 0
     a = layout.actions
     policy = (F.cross_entropy(output[labeled, :a].masked_fill(~legal[labeled], -1e9), human[labeled])
               if labeled.any() else output.sum() * 0)
+    known = placement >= 0
+    placed = (F.cross_entropy(output[known, layout.placement_offset:layout.placement_offset + 4], placement[known])
+              if layout.placement and known.any() else output.sum() * 0)
     return (policy + .5 * masked_loss(output[:, layout.tenpai:layout.tenpai + 3], targets[:, :3], "binary")
             + .5 * masked_loss(output[:, layout.ron:layout.ron + 102], targets[:, 3:105], "binary")
             + masked_loss(output[:, layout.points:layout.points + 102], targets[:, 105:], "value")
-            + .2 * masked_loss(output[:, layout.q:], q, "q"))
+            + .2 * masked_loss(output[:, layout.q:layout.q + a], q, "q")
+            + .3 * placed)
 
 
 class Split:
@@ -281,9 +292,11 @@ def evaluate(model, split, batch, device, tenpai_cal, wait_cal, value_scale=1.):
     tenpai_raw, tenpai_rules, ron_raw, ron_safety = BinaryMetrics(), BinaryMetrics(), BinaryMetrics(), BinaryMetrics()
     value_count = q_count = 0
     value_abs = q_square = 0.
+    placement_count = placement_top1 = rank_top1 = 0
+    placement_nll = 0.
     pass_index = 74 if layout.actions > 74 else -1
     for rows, output in stream(model, split, batch, device):
-        x, legal, human, targets, q = unpack(rows, layout)
+        x, legal, human, targets, q, placement = unpack(rows, layout)
         labeled = human >= 0
         if labeled.any():
             logits = output[labeled, :layout.actions].masked_fill(~legal[labeled], -1e9)
@@ -308,7 +321,17 @@ def evaluate(model, split, batch, device, tenpai_cal, wait_cal, value_scale=1.):
         value_abs += float((points[value_mask] - targets[:, 105:][value_mask]).abs().sum())
         valid_q = torch.isfinite(q)
         q_count += int(valid_q.sum())
-        q_square += float(((output[:, layout.q:][valid_q] - q[valid_q]) ** 2).sum())
+        q_square += float(((output[:, layout.q:layout.q + layout.actions][valid_q] - q[valid_q]) ** 2).sum())
+        known = placement >= 0
+        if layout.placement and known.any():
+            logits = output[known, layout.placement_offset:layout.placement_offset + 4]
+            placement_count += int(known.sum())
+            placement_top1 += int((logits.argmax(1) == placement[known]).sum())
+            placement_nll += float(F.cross_entropy(logits, placement[known], reduction="sum"))
+            # Baseline: current rank by score (planes 32-35 hold score / 50000 per relative seat).
+            scores = x.reshape(-1, layout.channels, WIDTH)[known, 32:36, 0]
+            rank = (scores[:, 1:] > scores[:, :1]).sum(1)
+            rank_top1 += int((rank == placement[known]).sum())
     total = decisions + reaction_decisions
     return {"human_decisions": total, "turn_decisions": decisions, "reaction_decisions": reaction_decisions,
             "policy_top1": top1 / decisions if decisions else None,
@@ -319,7 +342,11 @@ def evaluate(model, split, batch, device, tenpai_cal, wait_cal, value_scale=1.):
             "conditional_ron_raw": ron_raw.report(), "conditional_ron_calibrated_with_safety": ron_safety.report(),
             "value_positive_count": value_count,
             "value_mae_points": value_abs / value_count * 32000 if value_count else None,
-            "search_q_rmse_points": math.sqrt(q_square / q_count) * 32000 if q_count else None}
+            "search_q_rmse_points": math.sqrt(q_square / q_count) * 32000 if q_count else None,
+            "placement_count": placement_count,
+            "placement_top1": placement_top1 / placement_count if placement_count else None,
+            "placement_nll": placement_nll / placement_count if placement_count else None,
+            "placement_top1_by_current_rank": rank_top1 / placement_count if placement_count else None}
 
 
 def validation_pass(model, split, batch, device):
@@ -331,8 +358,8 @@ def validation_pass(model, split, batch, device):
     value_target_sum = value_pred_sum = 0.
     value_count = 0
     for rows, output in stream(model, split, batch, device):
-        x, legal, human, targets, q = unpack(rows, layout)
-        total += float(objective(output, legal, human, targets, q, layout)) * len(rows)
+        x, legal, human, targets, q, placement = unpack(rows, layout)
+        total += float(objective(output, legal, human, targets, q, placement, layout)) * len(rows)
         riichi, safe = rule_masks(x, layout)
         tenpai_logits.append(output[:, layout.tenpai:layout.tenpai + 3].clone())
         tenpai_targets.append(targets[:, :3].masked_fill(riichi, -1))
@@ -405,12 +432,12 @@ def train(args):
         rng = np.random.default_rng(args.seed + epoch)
         total_loss, seen = 0., 0
         for rows in splits["train"].shuffled_batches(args.batch, args.buffer_rows, rng):
-            x, legal, human, targets, q = unpack(rows, layout)
-            x, legal, human, targets, q = (t.to(device, non_blocking=True) for t in (x, legal, human, targets, q))
+            x, legal, human, targets, q, placement = unpack(rows, layout)
+            x, legal, human, targets, q, placement = (t.to(device, non_blocking=True) for t in (x, legal, human, targets, q, placement))
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type=device.type, enabled=device.type == "cuda"):
                 output = model(x)
-            loss = objective(output, legal, human, targets, q, layout)
+            loss = objective(output, legal, human, targets, q, placement, layout)
             if not torch.isfinite(loss):
                 raise FloatingPointError("Nonfinite training loss")
             scaler.scale(loss).backward()
@@ -448,7 +475,7 @@ def train(args):
     common = {"Features": manifest["Features"], "Corpus": manifest["Corpus"], "Rules": manifest["Rules"],
               "Dense": layer(model.dense), "Output": layer(model.output),
               "TenpaiCalibration": tenpai_cal, "WaitCalibration": wait_cal, "ValueScale": value_scale,
-              "HasSearchLabels": manifest["SearchRows"] > 0, "Status": "experimental-unvalidated"}
+              "HasSearchLabels": manifest["SearchRows"] > 0, "HasPlacementHead": layout.placement, "Status": "experimental-unvalidated"}
     # Always the schema-2 artifact (stem + blocks); LearnedModel accepts it for either
     # feature version, so a v1 dataset still trains and loads.
     artifact = {"Schema": 2, "Stem": layer(model.stem),
@@ -471,6 +498,7 @@ def train(args):
     atomic_json(args.output / "parity.json", vectors)
     print(json.dumps({"model": str(args.output / "learned_policy.json"), "test_policy_top1": report["test"]["policy_top1"],
                       "test_reaction_top1": report["test"]["reaction_top1"],
+                      "test_placement_top1": report["test"]["placement_top1"],
                       "test_tenpai_brier": report["test"]["tenpai_calibrated_with_rules"]["brier"]}), flush=True)
 
 

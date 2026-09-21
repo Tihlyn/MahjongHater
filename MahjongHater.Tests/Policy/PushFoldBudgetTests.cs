@@ -199,4 +199,48 @@ public class PushFoldBudgetTests
         Assert.Contains("1z", honors);                                         // the pair banks a second turn
         Assert.Equal(Tile.Parse("5s"), ordered[^1].Tile);                      // raw middle tile last
     }
+
+    // A placement model that answers with a fixed distribution per score delta sign:
+    // "leader": winning changes nothing, dealing in costs first place; "chaser": the reverse.
+    private sealed class StakesModel(OpponentModel inner, bool leader) : IOpponentModel, IPlacementModel
+    {
+        public void Update(StateSnapshot state) => inner.Update(state);
+        public double TenpaiProbability(int seat) => inner.TenpaiProbability(seat);
+        public double Danger(Tile tile, int seat) => inner.Danger(tile, seat);
+        public double ExpectedDealInCost(Tile tile) => inner.ExpectedDealInCost(tile);
+        public DangerEstimate Explain(Tile tile, int seat) => inner.Explain(tile, seat);
+        public int PrimaryThreat() => inner.PrimaryThreat();
+        public double Value(int seat) => inner.Value(seat);
+        public int LiveSuji(int seat) => inner.LiveSuji(seat);
+        public double[]? Placement(StateSnapshot state, int[] scoreDeltas) => (Math.Sign(scoreDeltas[0]), leader) switch
+        {
+            (0, true) or (1, true) => [0.9, 0.1, 0, 0],          // leader: a win keeps first place, nothing gained
+            (-1, true) => [0.3, 0.6, 0.1, 0],                    // a deal-in likely loses it
+            (0, false) or (-1, false) => [0, 0, 0.2, 0.8],       // chaser: already last, nothing to lose
+            _ => [0, 0.3, 0.6, 0.1],                              // a win climbs
+        };
+    }
+
+    [Fact]
+    public void Placement_stakes_scale_the_budget_and_replace_the_fixed_all_last_factors()
+    {
+        var board = Board("123m456m4578p447s1z", turn: 8);
+        var seats = board.Seats.Select(s => s with { Score = s.Seat == 0 ? 40000 : 20000 }).ToArray();
+        var state = board with { Seats = seats };
+        var plain = new PushFoldPolicy().Decide(state, Model(state), [Tenpai(8, 2000)]);
+        var leader = new PushFoldPolicy().Decide(state, new StakesModel(Model(state), leader: true), [Tenpai(8, 2000)]);
+        var chaser = new PushFoldPolicy().Decide(state, new StakesModel(Model(state), leader: false), [Tenpai(8, 2000)]);
+        Assert.Equal(W.BudgetTenPercent, plain.MaxDanger, 6);
+        Assert.Equal(plain.MaxDanger * W.PlacementStakesMin, leader.MaxDanger, 6);   // nothing to gain: fold
+        Assert.Equal(Math.Min(1, plain.MaxDanger * W.PlacementStakesMax), chaser.MaxDanger, 6);   // nothing to lose: push
+        Assert.Contains("placement stakes", leader.Reason.Display);
+        // With stakes answered, the transcribed all-last rank factors are not applied on top.
+        var allLast = state with { RoundWind = Wind.South, HandNumber = 4, DealerSeat = 3 };
+        Assert.True(allLast.IsAllLast);
+        var leaderAllLast = new PushFoldPolicy().Decide(allLast, new StakesModel(Model(allLast), leader: true), [Tenpai(8, 2000)]);
+        Assert.DoesNotContain("leading all-last", leaderAllLast.Reason.Display);
+        // Weight 0 disables the stakes entirely.
+        var off = new PushFoldPolicy(W with { PlacementStakesWeight = 0 }).Decide(state, new StakesModel(Model(state), leader: true), [Tenpai(8, 2000)]);
+        Assert.Equal(plain.MaxDanger, off.MaxDanger, 6);
+    }
 }

@@ -10,8 +10,8 @@ namespace MahjongHater.Core.Learning;
 
 // Fixed little-endian rows (float32, or float16 for large exports: every input value is
 // a small fraction or a count and the targets are 0/1/-1, small ratios or NaN).
-// features | legal mask | human action (-1 absent) | opponent targets | Q labels.
-// Missing opponent/Q targets are -1 / NaN respectively, never manufactured zeros.
+// features | legal mask | human action (-1 absent) | opponent targets | Q labels | final placement.
+// Missing opponent/Q/placement targets are -1 / NaN / -1 respectively, never manufactured zeros.
 public static class LearningDataset
 {
     // Not SimulationFiles.Json: its IgnoreReadOnlyProperties (needed for StateSnapshot's
@@ -20,9 +20,9 @@ public static class LearningDataset
     private static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true };
 
     public const int Opponents = 207;
-    public const int Schema = 2;
-    // features | legal mask | human action | opponent targets | search Q, all v2 sizes.
-    public const int RowFloats = LearningFeatures.Count + LearningFeatures.Actions + 1 + Opponents + LearningFeatures.Actions;
+    public const int Schema = 3;
+    // features | legal mask | human action | opponent targets | search Q | placement (1-4), all v2 sizes.
+    public const int RowFloats = LearningFeatures.Count + LearningFeatures.Actions + 1 + Opponents + LearningFeatures.Actions + 1;
 
     // `maxGames` takes a uniform, split-independent subset (ordered by a hash slice the
     // split function does not use) so a large corpus can be exported at dense size.
@@ -43,7 +43,7 @@ public static class LearningDataset
         var writers = counts.Keys.ToDictionary(k => k, k => new BinaryWriter(new BufferedStream(File.Create(Path.Combine(temp, k + extension)), 1 << 20)));
         using var provenance = new StreamWriter(Path.Combine(temp, "rows.jsonl"));
         // null = skipped (the legal set has an action outside the space or the human action is not in it).
-        static float[]? Encode(StateSnapshot state, SimAction[] legal, int human, OpponentTrainingTarget[] targets, ActionStatistics[]? search)
+        static float[]? Encode(StateSnapshot state, SimAction[] legal, int human, OpponentTrainingTarget[] targets, ActionStatistics[]? search, int placement)
         {
             // Physical variants of one action (red vs plain five in a chi) share an index.
             var actionIds = legal.Select(LearningFeatures.ActionIndex).Distinct().ToArray();
@@ -73,6 +73,8 @@ public static class LearningDataset
             Array.Fill(row, float.NaN, offset, LearningFeatures.Actions);
             if (search is not null)
                 foreach (var a in search.Where(a => a.Visits >= 8 && LearningFeatures.ActionIndex(a.Action) >= 0)) row[offset + LearningFeatures.ActionIndex(a.Action)] = (float)(a.MeanScore / 32000);
+            // The acting seat's final placement in the source match (source rules), -1 unknown.
+            row[^1] = placement is >= 1 and <= 4 ? placement : -1;
             return row;
         }
         void Write(string split, string game, float[]? row, bool human)
@@ -100,7 +102,7 @@ public static class LearningDataset
                 Parallel.For(0, rows.Length, options, j =>
                 {
                     var d = game.Decisions[j];
-                    rows[j] = Encode(d.Observation.Snapshot, d.LegalActions, LearningFeatures.ActionIndex(d.ObservedAction), d.OpponentTargets, null);
+                    rows[j] = Encode(d.Observation.Snapshot, d.LegalActions, LearningFeatures.ActionIndex(d.ObservedAction), d.OpponentTargets, null, game.Match.Placement[d.Seat]);
                 });
                 return (game, rows);
             }, ct);
@@ -131,7 +133,7 @@ public static class LearningDataset
                     // Search must not expose held-out replay outcomes to training.
                     if (manifest.CorpusSha256 is not null && ReplayCorpus.Split(game) != "train") continue;
                     foreach (var r in job.Records)
-                        Write("train", game, Encode(SnapshotJson.Deserialize(r.Snapshot), r.Actions.Select(a => a.Action).ToArray(), -1, [], r.Actions), false);
+                        Write("train", game, Encode(SnapshotJson.Deserialize(r.Snapshot), r.Actions.Select(a => a.Action).ToArray(), -1, [], r.Actions, -1), false);
                 }
             }
         }

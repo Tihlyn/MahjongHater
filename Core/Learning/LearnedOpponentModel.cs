@@ -6,7 +6,7 @@ namespace MahjongHater.Core.Learning;
 // `useLearnedDanger = false` keeps the measured danger tables and takes only the tenpai head
 // from the network: on Phoenix replays the tables discriminate ron tiles slightly better
 // while the learned tenpai head is better calibrated (docs/research/EVALUATION_RUNS.md).
-public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? weights = null, bool useLearnedDanger = true) : IOpponentModel
+public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? weights = null, bool useLearnedDanger = true) : IOpponentModel, IPlacementModel
 {
     private readonly OpponentModel fallback = new(weights);
     private readonly TileDangerModel ranks = new(weights: weights);
@@ -48,6 +48,8 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
     public double Value(int seat) => Volatile.Read(ref this.view)?.Value[Seat(seat)] ?? this.fallback.Value(seat);
     public int PrimaryThreat() => Volatile.Read(ref this.view)?.Primary ?? this.fallback.PrimaryThreat();
     public int LiveSuji(int seat) => this.fallback.LiveSuji(seat);
+    public double[]? Placement(StateSnapshot state, int[] scoreDeltas) =>
+        !state.LayoutHealthy || state.Seats.Any(s => !s.DiscardsVerified) ? null : network.Placement(state, scoreDeltas);
     public DangerEstimate Explain(Tile tile, int seat)
     {
         if (Volatile.Read(ref this.view) is not { } current) return this.fallback.Explain(tile, seat);

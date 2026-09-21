@@ -13,6 +13,7 @@
   .\Run-Training.ps1                       # everything, default archives n1-n30, 24 000 games, res-net on the GPU
   .\Run-Training.ps1 -Stage fetch,import   # only download and build the corpus
   .\Run-Training.ps1 -Stage train,check,eval -Blocks 8 -Channels 128 -Epochs 30 -RunName res8
+  .\Run-Training.ps1 -HandsInMatch 4 -RunName quick   # a Quick Match (East-only) model from the tonpuusen games
 #>
 param(
     [string[]]$Stage = @('all'),
@@ -21,6 +22,9 @@ param(
     [int[]]$Archives = (1..30),
     # Acting-player minimum rank (16 = 7 dan). Lower ranks add games of weaker players.
     [int]$MinimumRank = 16,
+    # 8 = hanchan (Full Match), 4 = tonpuusen (Quick Match). The archives hold both; a model
+    # only serves the length it was trained on (the plugin checks), so train one per length.
+    [ValidateSet(4, 8)][int]$HandsInMatch = 8,
     # Games exported to the dense dataset (uniform hash sample). ~600 rows per game, 5.6 KB per row
     # in float16: 24 000 games ~ 80 GB. The export stage refuses to start without the disk space.
     [int]$MaxGames = 24000,
@@ -49,8 +53,10 @@ $python = Join-Path $root '.venv/Scripts/python.exe'
 if (-not (Test-Path -LiteralPath $exe)) { throw 'Run this script from the portable package produced by tools/publish_training.ps1.' }
 $work = [IO.Path]::GetFullPath($WorkDirectory)
 $raw = Join-Path $work 'raw'
-$corpus = Join-Path $work 'corpus'
-$dataset = Join-Path $work "dataset-$MaxGames-$Dtype"
+$length = if ($HandsInMatch -eq 8) { '' } else { "-$HandsInMatch" }
+$rules = Join-Path $root $(if ($HandsInMatch -eq 8) { 'generation.json' } else { "generation-$HandsInMatch.json" })
+$corpus = Join-Path $work "corpus$length"
+$dataset = Join-Path $work "dataset-$MaxGames-$Dtype$length"
 $model = Join-Path $work "model-$RunName"
 $logs = Join-Path $work 'logs'
 $evalDir = Join-Path $work 'eval'
@@ -99,7 +105,7 @@ if ($stages -contains 'fetch') {
 if ($stages -contains 'import') {
     if (Test-Path -LiteralPath $corpus) { Write-Host "import: corpus exists at $corpus (delete it to re-import)" }
     else {
-        Invoke-Logged 'import' { & $exe replay-import (Join-Path $root 'generation.json') $raw $corpus $MinimumRank $Workers }
+        Invoke-Logged 'import' { & $exe replay-import $rules $raw $corpus $MinimumRank $Workers }
     }
 }
 
