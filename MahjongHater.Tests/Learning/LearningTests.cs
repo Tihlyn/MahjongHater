@@ -139,6 +139,31 @@ public sealed class LearningTests
     }
 
     [Fact]
+    public void Learned_discard_ordering_keeps_analyzer_metrics_and_sums_to_one()
+    {
+        var model = new LearnedModel(SyntheticArtifact(2, 3));
+        var state = Snap("123m456m4578p447s1z", LegalAction.Discard | LegalAction.Riichi);
+        var opponents = Model(state);
+        var heuristic = new HeuristicDiscardPolicy().Rank(state, opponents, CancellationToken.None);
+        var learned = new LearnedDiscardPolicy(model).Rank(state, opponents, CancellationToken.None);
+        Assert.Equal(heuristic.Count, learned.Count);
+        Assert.Equal(1, learned.Sum(c => c.Score), 6);
+        foreach (var c in learned)
+        {
+            var h = heuristic.Single(x => x.Tile.Equals(c.Tile));
+            Assert.Equal(h.ShantenAfter, c.ShantenAfter);
+            Assert.Equal(h.Ukeire, c.Ukeire);
+            Assert.Contains("imitation", c.Note);
+        }
+        Assert.True(learned[0].Score >= learned[^1].Score);
+        // Outside the network's action space the heuristic ordering is returned untouched.
+        var open = state with { OurMelds = [Meld.MakePon(Tile.Parse("5z"), true)], Hand = TestTiles.Parse("123m456m4578p1z") };
+        var openOpponents = Model(open);
+        Assert.Equal(new HeuristicDiscardPolicy().Rank(open, openOpponents, CancellationToken.None).Select(c => c.Tile),
+            new LearnedDiscardPolicy(model).Rank(open, openOpponents, CancellationToken.None).Select(c => c.Tile));
+    }
+
+    [Fact]
     public void Learned_opponent_model_zeroes_known_safe_tiles_and_falls_back_when_unsupported()
     {
         var model = new LearnedModel(SyntheticArtifact(2, 3));
@@ -176,7 +201,7 @@ public sealed class LearningTests
         var report = LearningEvaluation.Run(corpus, model, PolicyWeights.Default, new EvaluationOptions { Split = "all", Threads = 2 });
         Assert.Equal(corpus.Count, report.Games);
         Assert.True(report.Decisions > 0);
-        foreach (var name in new[] { LearningEvaluation.Heuristic, LearningEvaluation.HeuristicEv, LearningEvaluation.Legacy, LearningEvaluation.Learned, LearningEvaluation.Hybrid, LearningEvaluation.HybridTenpai })
+        foreach (var name in new[] { LearningEvaluation.Heuristic, LearningEvaluation.HeuristicEv, LearningEvaluation.Legacy, LearningEvaluation.Learned, LearningEvaluation.Hybrid, LearningEvaluation.HybridTenpai, LearningEvaluation.Guarded })
         {
             var all = report.Agreement[name]["all"];
             Assert.Equal(report.Decisions, all.Decisions);

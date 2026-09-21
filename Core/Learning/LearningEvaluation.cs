@@ -50,6 +50,7 @@ public static class LearningEvaluation
     public const string Learned = "learned";
     public const string Hybrid = "hybrid";
     public const string HybridTenpai = "hybrid-tenpai";   // learned tenpai head, table danger
+    public const string Guarded = "learned-guarded";       // imitation ordering under the danger budget
 
     public static EvaluationReport Run(ReplayCorpus corpus, LearnedModel? model, PolicyWeights weights, EvaluationOptions options,
         Action<string>? progress = null, CancellationToken ct = default)
@@ -59,7 +60,7 @@ public static class LearningEvaluation
             .Take(options.MaxGames).ToArray();
         var policies = new List<string> { Heuristic, HeuristicEv };
         if (options.IncludeLegacy) policies.Add(Legacy);
-        if (model is not null) { policies.Add(Learned); policies.Add(Hybrid); policies.Add(HybridTenpai); }
+        if (model is not null) { policies.Add(Learned); policies.Add(Hybrid); policies.Add(HybridTenpai); policies.Add(Guarded); }
         var totals = new Totals(policies, model is not null);
         var started = DateTime.UtcNow;
         var done = 0;
@@ -158,6 +159,8 @@ public static class LearningEvaluation
                     Learned => new LearnedPolicy(new DecisionPolicy(opponents: new LearnedOpponentModel(model!, weights), weights: weights), model!, weights),
                     Hybrid => new DecisionPolicy(opponents: new LearnedOpponentModel(model!, weights), weights: weights),
                     HybridTenpai => new DecisionPolicy(opponents: new LearnedOpponentModel(model!, weights, useLearnedDanger: false), weights: weights),
+                    Guarded => new DecisionPolicy(opponents: new LearnedOpponentModel(model!, weights, useLearnedDanger: false),
+                        discards: new LearnedDiscardPolicy(model!, weights), weights: weights),
                     _ => throw new ArgumentException(name),
                 };
             this.Local = new Totals(names, model is not null);
