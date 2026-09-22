@@ -75,6 +75,16 @@ public sealed record HandResult(
         this.Population,
         this.Model);
 
+    // One row from the last in-play snapshot of the hand plus how the hand ended. `policy` is
+    // what was deciding ("learned-guarded" / "V2" / "Legacy"), so live A/B arms can be told
+    // apart (tools/ab_summary.py, tools/candidate_bars.py bar3).
+    public static HandResult FromRoundEnd(StateSnapshot last, int winnerSeat, bool winByRon, int ronVictimSeat,
+        bool? ourTenpaiAtDraw, int scoreDelta, string population, string policy, DateTime utc) =>
+        new(utc, last.RoundWind.ToString(), last.HandNumber,
+            Math.Max(last.Us.Discards.Count, last.Us.DiscardCount),
+            Classify(winnerSeat, winByRon, ronVictimSeat, ourTenpaiAtDraw), scoreDelta, last.OurRiichi,
+            last.Seats.Count(s => s.Seat != 0 && s.Riichi), population, policy);
+
     public static string Classify(int winnerSeat, bool winByRon, int ronVictimSeat, bool? ourTenpaiAtDraw)
     {
         if (winnerSeat == 0)
