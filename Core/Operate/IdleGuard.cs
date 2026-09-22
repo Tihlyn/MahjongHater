@@ -14,30 +14,39 @@ namespace MahjongHater.Core.Operate;
 //     every application, so a nudge never lands while someone is typing or clicking),
 //   * one nudge per interval, and never two within MinimumInterval.
 //
-// The nudge itself is a one-pixel relative mouse move and its exact reverse, sent only when
-// the game window has focus; nothing can be clicked, dragged or bound to it. When the game
-// is in the background the fallback posts a key-up/key-down pair for F13 (unbound in the
-// default keybinds) to the game window alone, so no other application can receive it —
-// whether the client counts a posted message as activity is not something the plugin can
-// verify, hence `LastNudgeReachedTheGame`.
+// The nudge is a real keystroke on a high function key (F19 by default). Synthetic mouse
+// movement does NOT reset this client's timer — measured in play, not assumed — and F13+ is
+// outside both the default keybinds and any key the game acts on, so the keystroke cannot
+// trigger an action. It is sent with SendInput only while the game window has focus, since
+// SendInput goes to whatever is focused; in the background it is posted to the game window
+// alone, which no other application can receive but which the client may or may not count
+// as activity, hence `LastNudgeReachedTheGame`.
 public sealed class IdleGuard
 {
     public static readonly TimeSpan DefaultInterval = TimeSpan.FromSeconds(150);
     public static readonly TimeSpan MinimumInterval = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan MaximumInterval = TimeSpan.FromMinutes(4);
 
-    private const int InputMouse = 0, MouseEventMove = 0x0001;
+    // Virtual keys F13-F24. Above F18 is what an idle FFXIV client has been observed to
+    // accept while ignoring synthetic mouse movement; nothing in the game binds them.
+    public const int FirstKey = 0x7C;          // F13
+    public const int DefaultKey = 0x82;        // F19
+    public const int LastKey = 0x87;           // F24
+
+    private const int InputKeyboard = 1;
+    private const uint KeyEventKeyUp = 0x0002;
+    private const uint MapVkToScanCode = 0;
     private const uint WmKeyDown = 0x0100, WmKeyUp = 0x0101;
-    private const int VkF13 = 0x7C;
 
     private readonly Action<string> log;
     private readonly Func<TimeSpan?> systemIdle;
-    private readonly Func<bool> nudge;
+    private readonly Func<int, bool> nudge;
     private DateTime lastNudgeUtc = DateTime.MinValue;
+    private int key = DefaultKey;
 
     // The two seams are the platform: how long the machine has been idle, and sending the
-    // input. Tests drive the gating with their own pair.
-    public IdleGuard(Action<string> log, Func<TimeSpan?>? systemIdle = null, Func<bool>? nudge = null)
+    // keystroke. Tests drive the gating with their own pair.
+    public IdleGuard(Action<string> log, Func<TimeSpan?>? systemIdle = null, Func<int, bool>? nudge = null)
     {
         this.log = log;
         this.systemIdle = systemIdle ?? SystemIdle;
@@ -47,6 +56,14 @@ public sealed class IdleGuard
     public bool Enabled { get; set; } = true;
 
     public TimeSpan Interval { get; set; } = DefaultInterval;
+
+    // Which function key the nudge presses; clamped to F13-F24 so it can never be a key the
+    // game acts on.
+    public int Key
+    {
+        get => this.key;
+        set => this.key = ClampKey(value);
+    }
 
     public int NudgesThisSession { get; private set; }
 
@@ -83,12 +100,12 @@ public sealed class IdleGuard
 
         this.lastNudgeUtc = nowUtc;
         this.NudgesThisSession++;
-        this.LastNudgeReachedTheGame = this.nudge();
+        this.LastNudgeReachedTheGame = this.nudge(this.Key);
         this.Status = this.LastNudgeReachedTheGame
-            ? $"Nudged {this.NudgesThisSession}× (last {nowUtc:HH:mm:ss} UTC)"
-            : $"Nudged {this.NudgesThisSession}× — game in the background, posted to its window only";
-        this.log($"[IdleGuard] anti-idle nudge #{this.NudgesThisSession} after {systemIdle.Value.TotalSeconds:F0} s idle "
-                 + (this.LastNudgeReachedTheGame ? "(mouse, game focused)" : "(key posted to the background game window)"));
+            ? $"Nudged {this.NudgesThisSession}× with {KeyName(this.Key)} (last {nowUtc:HH:mm:ss} UTC)"
+            : $"Nudged {this.NudgesThisSession}× — game in the background, {KeyName(this.Key)} posted to its window only";
+        this.log($"[IdleGuard] anti-idle nudge #{this.NudgesThisSession} ({KeyName(this.Key)}) after {systemIdle.Value.TotalSeconds:F0} s idle "
+                 + (this.LastNudgeReachedTheGame ? "(sent to the focused game window)" : "(posted to the background game window)"));
     }
 
     public void Reset()
@@ -100,28 +117,34 @@ public sealed class IdleGuard
     public static TimeSpan Clamp(TimeSpan interval) =>
         interval < MinimumInterval ? MinimumInterval : interval > MaximumInterval ? MaximumInterval : interval;
 
-    // True when the input went to the focused game window; false when it was posted to the
-    // game window in the background.
-    private static bool SendNudge()
+    public static int ClampKey(int key) => key is >= FirstKey and <= LastKey ? key : DefaultKey;
+
+    public static string KeyName(int key) => $"F{key - FirstKey + 13}";
+
+    // True when the keystroke went to the focused game window; false when it was posted to
+    // the game window in the background (or could not be sent at all).
+    private static bool SendNudge(int key)
     {
         var window = Process.GetCurrentProcess().MainWindowHandle;
         try
         {
             if (window != nint.Zero && GetForegroundWindow() == window)
             {
-                // Relative by one pixel and back: the pointer ends where it started.
-                Span<Input> moves =
+                // Virtual key and its scan code together, so both message-based and raw input
+                // readers see a complete press.
+                var scan = (ushort)MapVirtualKeyW((uint)key, MapVkToScanCode);
+                Span<Input> press =
                 [
-                    new() { Type = InputMouse, Data = new InputData { Mouse = new MouseInput { Dx = 1, Dy = 0, Flags = MouseEventMove } } },
-                    new() { Type = InputMouse, Data = new InputData { Mouse = new MouseInput { Dx = -1, Dy = 0, Flags = MouseEventMove } } },
+                    new() { Type = InputKeyboard, Data = new InputData { Keyboard = new KeyboardInput { Vk = (ushort)key, Scan = scan } } },
+                    new() { Type = InputKeyboard, Data = new InputData { Keyboard = new KeyboardInput { Vk = (ushort)key, Scan = scan, Flags = KeyEventKeyUp } } },
                 ];
-                return SendInput((uint)moves.Length, ref MemoryMarshal.GetReference(moves), Marshal.SizeOf<Input>()) == moves.Length;
+                return SendInput((uint)press.Length, ref MemoryMarshal.GetReference(press), Marshal.SizeOf<Input>()) == press.Length;
             }
 
             if (window != nint.Zero)
             {
-                PostMessageW(window, WmKeyDown, VkF13, 0);
-                PostMessageW(window, WmKeyUp, VkF13, 0);
+                PostMessageW(window, WmKeyDown, key, 0);
+                PostMessageW(window, WmKeyUp, key, 0);
             }
 
             return false;
@@ -150,6 +173,18 @@ public sealed class IdleGuard
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct KeyboardInput
+    {
+        public ushort Vk;
+        public ushort Scan;
+        public uint Flags;
+        public uint Time;
+        public nint ExtraInfo;
+    }
+
+    // Unused, and required: SendInput rejects a cbSize that is not the real INPUT size, and
+    // the union is sized by its mouse member.
+    [StructLayout(LayoutKind.Sequential)]
     private struct MouseInput
     {
         public int Dx;
@@ -163,6 +198,9 @@ public sealed class IdleGuard
     [StructLayout(LayoutKind.Explicit)]
     private struct InputData
     {
+        [FieldOffset(0)]
+        public KeyboardInput Keyboard;
+
         [FieldOffset(0)]
         public MouseInput Mouse;
     }
@@ -182,6 +220,9 @@ public sealed class IdleGuard
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll", SetLastError = true, EntryPoint = "MapVirtualKeyW")]
+    private static extern uint MapVirtualKeyW(uint code, uint mapType);
 
     [DllImport("user32.dll", SetLastError = true, EntryPoint = "PostMessageW")]
     private static extern bool PostMessageW(nint window, uint message, nint wParam, nint lParam);

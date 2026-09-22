@@ -48,6 +48,9 @@ public sealed class Configuration : IPluginConfiguration
 
     public int AntiIdleSeconds { get; set; } = 150;
 
+    // Virtual key of the nudge, F13-F24 (0x7C-0x87); F19 by default.
+    public int AntiIdleKey { get; set; } = 0x82;
+
     public uint RequeueDuty { get; set; } = 766;   // Novice Mahjong (Quick Ranked Match)
 
     public static Configuration Load(IDalamudPluginInterface pluginInterface)
@@ -72,6 +75,8 @@ public sealed class Configuration : IPluginConfiguration
     private void ClampValues()
     {
         this.DoubleWindPairFu = this.DoubleWindPairFu is 2 or 4 ? this.DoubleWindPairFu : 4;
+        this.AntiIdleKey = Core.Operate.IdleGuard.ClampKey(this.AntiIdleKey);
+        this.AntiIdleSeconds = (int)Core.Operate.IdleGuard.Clamp(TimeSpan.FromSeconds(this.AntiIdleSeconds)).TotalSeconds;
     }
 }
 

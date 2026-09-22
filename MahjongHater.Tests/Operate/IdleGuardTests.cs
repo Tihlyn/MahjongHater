@@ -15,9 +15,11 @@ public class IdleGuardTests
 
         public int Nudges { get; private set; }
 
+        public int LastKey { get; private set; }
+
         public IdleGuard Guard { get; }
 
-        public Harness() => this.Guard = new IdleGuard(_ => { }, () => this.Idle, () => { this.Nudges++; return true; });
+        public Harness() => this.Guard = new IdleGuard(_ => { }, () => this.Idle, key => { this.Nudges++; this.LastKey = key; return true; });
 
         public void Tick(bool autoPlay = true, bool inMatch = true, double afterSeconds = 0) =>
             this.Guard.Tick(autoPlay, inMatch, T0.AddSeconds(afterSeconds));
@@ -73,6 +75,26 @@ public class IdleGuardTests
         Assert.Equal(TimeSpan.FromSeconds(90), IdleGuard.Clamp(TimeSpan.FromSeconds(90)));
         Assert.True(IdleGuard.MaximumInterval < TimeSpan.FromMinutes(5), "the duty ejects at about five minutes");
         Assert.Equal(IdleGuard.DefaultInterval, new IdleGuard(_ => { }).Interval);
+    }
+
+    [Fact]
+    public void Presses_a_function_key_the_game_cannot_act_on()
+    {
+        var h = new Harness();
+        h.Tick();
+        Assert.Equal(IdleGuard.DefaultKey, h.LastKey);
+        Assert.Equal("F19", IdleGuard.KeyName(h.LastKey));
+        Assert.InRange(h.LastKey, IdleGuard.FirstKey, IdleGuard.LastKey);
+        // Synthetic mouse movement does not reset this client's timer, so the nudge is a key.
+        Assert.Contains("F19", h.Guard.Status);
+
+        // Anything outside F13-F24 falls back to the default rather than pressing it.
+        h.Guard.Key = 0x0D;   // Enter
+        Assert.Equal(IdleGuard.DefaultKey, h.Guard.Key);
+        h.Guard.Key = 0x85;   // F22
+        h.Tick(afterSeconds: 300);
+        Assert.Equal(0x85, h.LastKey);
+        Assert.Equal("F22", IdleGuard.KeyName(h.LastKey));
     }
 
     [Fact]

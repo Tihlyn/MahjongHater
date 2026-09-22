@@ -120,6 +120,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             Enabled = this.Configuration.AntiIdle,
             Interval = TimeSpan.FromSeconds(this.Configuration.AntiIdleSeconds),
+            Key = this.Configuration.AntiIdleKey,
         };
         this.Queuer = new MatchQueuer(gameGui, clientState, msg => pluginLog.Information(msg))
         {

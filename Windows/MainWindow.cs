@@ -280,9 +280,10 @@ public sealed class MainWindow : Window
             }
 
             if (ImGui.IsItemHovered())
-                Widgets.Tooltip("While auto play runs a match, sends one harmless input every "
+                Widgets.Tooltip($"While auto play runs a match, presses {IdleGuard.KeyName(guard.Key)} every "
                     + $"{IdleGuard.Clamp(guard.Interval).TotalSeconds:F0} s — but only after the machine has been idle that long, "
-                    + "so it never interferes while you are using it. The auto player's own clicks are addon events, which the duty timer does not see.");
+                    + "so it never interferes while you are using it. F13-F24 are unbound in game and synthetic mouse movement does not "
+                    + "reset the timer. The auto player's own clicks are addon events, which the duty timer does not see either.");
             this.DrawDutyPicker(queuer);
         }
     }
