@@ -26,6 +26,7 @@ public sealed class MainWindow : Window
     private string tableText = string.Empty;
     private (int Score, int Wins, int Losses)? sessionKey;
     private (Wind Seat, Wind Round, int Wall)? tableKey;
+    private Tab tab = Tab.Play;
 
     public MainWindow(Plugin plugin, Configuration configuration, EmjStateReader reader)
         : base("Mahjong Hater", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse)
@@ -62,42 +63,110 @@ public sealed class MainWindow : Window
         this.IsOpen = this.configuration.ShowOverlay;
         Theme.Surface();
         this.DrawHeader();
+        this.DrawTabs();
         var state = this.reader.Current;
-        this.DrawSession(state);
-        this.DrawAutoPlay();
 
-        if (state is { Phase: not GamePhase.NotInGame })
-        {
-            this.DrawTable(state);
-            ActionChoice? choice = null;
-            if (state.Hand.Count > 0 || state.Legal != LegalAction.None)
-                choice = this.DrawDecision(state);
-            else
-                DrawWaiting("Waiting for tiles", "Seated at the table. Waiting for hand tile data...");
+        // The in-game tile highlight is drawn on the game window, not in a tab: keep it up
+        // while the diagnostics tab is open.
+        var publication = this.plugin.AnalysisService.Latest;
+        if (state is { Phase: not GamePhase.NotInGame } && publication is { Status: AnalysisStatus.Ready, Choice.IsDiscard: true }
+            && publication.Choice.Tile is { } highlightTile && publication.Fingerprint == AnalysisService.ComputeFingerprint(state))
+            this.DrawBestDiscardHighlight(state, highlightTile);
 
-            // Call options remain visible even while analysis is pending or failed.
-            if (state.Phase is GamePhase.CallPrompt or GamePhase.SelfDeclare && state.CallOptions.Count > 0)
-            {
-                using (Widgets.Card())
-                {
-                    Widgets.Label("AVAILABLE CALLS");
-                    for (var i = 0; i < state.CallOptions.Count; i++)
-                        Widgets.Wrapped(state.CallOptions[i]);
-                }
-            }
-
-            if (choice is not null)
-            {
-                this.DrawCandidates(choice);
-                DrawSteps(choice);
-            }
-        }
+        if (this.tab == Tab.Play)
+            this.DrawPlay(state, publication);
         else
-        {
-            DrawWaiting("Ready when you are", "Not currently seated at a Doman Mahjong table.");
-        }
+            this.DrawDiagnostics(state);
 
         this.configuration.ShowOverlay = this.IsOpen;
+    }
+
+    private void DrawTabs()
+    {
+        var half = (Widgets.ContentWidth - Theme.Px(Theme.Gap)) / 2f;
+        if (Widgets.Pill("Play##tab", this.tab == Tab.Play, half))
+            this.tab = Tab.Play;
+        ImGui.SameLine();
+        var stalls = this.plugin.AutoPlayer.StallsThisSession;
+        if (Widgets.Pill(stalls > 0 ? $"Diagnostics ({stalls})##tab" : "Diagnostics##tab", this.tab == Tab.Diagnostics, half))
+            this.tab = Tab.Diagnostics;
+        if (ImGui.IsItemHovered())
+            Widgets.Tooltip("Table tracking, tracker notes and the auto-play counters.");
+    }
+
+    private void DrawPlay(StateSnapshot? state, AnalysisPublication? publication)
+    {
+        this.DrawSession(state);
+        this.DrawAutoPlay();
+        if (state is not { Phase: not GamePhase.NotInGame })
+        {
+            DrawWaiting("Ready when you are", "Not currently seated at a Doman Mahjong table.");
+            return;
+        }
+
+        // The table card moved to the diagnostics tab; this warning did not, because it says
+        // the recommendation below may be built on a stale hand read.
+        if (!state.LayoutHealthy)
+        {
+            using (Widgets.Card())
+            {
+                Widgets.Badge("Layout check failed", warning: true);
+                Widgets.Wrapped("Hand read may be stale. See the diagnostics tab.");
+            }
+        }
+
+        ActionChoice? choice = null;
+        if (state.Hand.Count > 0 || state.Legal != LegalAction.None)
+            choice = this.DrawDecision(state, publication);
+        else
+            DrawWaiting("Waiting for tiles", "Seated at the table. Waiting for hand tile data...");
+
+        // Call options remain visible even while analysis is pending or failed.
+        if (state.Phase is GamePhase.CallPrompt or GamePhase.SelfDeclare && state.CallOptions.Count > 0)
+        {
+            using (Widgets.Card())
+            {
+                Widgets.Label("AVAILABLE CALLS");
+                for (var i = 0; i < state.CallOptions.Count; i++)
+                    Widgets.Wrapped(state.CallOptions[i]);
+            }
+        }
+
+        if (choice is not null)
+        {
+            this.DrawCandidates(choice);
+            DrawSteps(choice);
+        }
+    }
+
+    // Everything that is read after the fact rather than during a decision: what the reader
+    // makes of the table, the tracker's notes, and the unattended-run counters.
+    private void DrawDiagnostics(StateSnapshot? state)
+    {
+        if (state is { Phase: not GamePhase.NotInGame })
+            this.DrawTable(state);
+        else
+            DrawWaiting("No table", "Table tracking appears here once you are seated.");
+
+        var player = this.plugin.AutoPlayer;
+        var queuer = this.plugin.Queuer;
+        using (Widgets.Card())
+        {
+            Widgets.Label("AUTO PLAY COUNTERS");
+            Widgets.Wrapped($"{player.DecisionsExecuted} decisions · {player.StallsThisSession} stalls · {player.RecoveriesThisSession} recoveries · {queuer.MatchesQueued} queued", false);
+            if (player.StallsThisSession > 0)
+            {
+                Widgets.Wrapped($"Stall log: {this.plugin.StallLogPath}");
+                if (ImGui.IsItemHovered())
+                    Widgets.Tooltip("Each stall appends the snapshot, the decision, the prompt rows, slot clickability and the tracker's recent events.");
+            }
+
+            var journal = player.Journal;
+            if (journal.Count == 0)
+                Widgets.Wrapped("No auto-play actions yet this session.");
+            for (var i = Math.Max(0, journal.Count - 8); i < journal.Count; i++)
+                Widgets.Wrapped(journal[i]);
+        }
     }
 
     public override void OnClose()
@@ -197,18 +266,6 @@ public sealed class MainWindow : Window
 
             Widgets.Wrapped(queuer.Status);
             this.DrawDutyPicker(queuer);
-
-            Widgets.Wrapped($"{player.DecisionsExecuted} decisions · {player.StallsThisSession} stalls · {player.RecoveriesThisSession} recoveries · {queuer.MatchesQueued} queued", false);
-            if (player.StallsThisSession > 0)
-            {
-                Widgets.Wrapped($"Stall log: {this.plugin.StallLogPath}");
-                if (ImGui.IsItemHovered())
-                    Widgets.Tooltip("Each stall appends the snapshot, the decision, the prompt rows, slot clickability and the tracker's recent events.");
-            }
-
-            var journal = player.Journal;
-            for (var i = Math.Max(0, journal.Count - 3); i < journal.Count; i++)
-                Widgets.Wrapped(journal[i]);
         }
     }
 
@@ -285,11 +342,10 @@ public sealed class MainWindow : Window
         }
     }
 
-    private ActionChoice? DrawDecision(StateSnapshot state)
+    private ActionChoice? DrawDecision(StateSnapshot state, AnalysisPublication? publication)
     {
-        // Read a single immutable publication; the render thread never runs policy.
+        // One immutable publication, read by Draw; the render thread never runs policy.
         var service = this.plugin.AnalysisService;
-        var publication = service.Latest;
         if (publication is null)
         {
             DrawWaiting(service.IsStalled ? "Analysis stalled" : "Analyzing hand...",
@@ -324,9 +380,6 @@ public sealed class MainWindow : Window
             this.DrawHandSummary(choice.Hand);
         }
 
-        // Never highlight a tile computed for a hand that has since changed.
-        if (isFresh && choice.IsDiscard && choice.Tile is { } highlightTile)
-            this.DrawBestDiscardHighlight(state, highlightTile);
         return choice;
     }
 
@@ -494,6 +547,8 @@ public sealed class MainWindow : Window
         var botRight = topLeft + new Vector2(Theme.GameTileWidth * s, Theme.GameTileHeight * s);
         Theme.DiscardGlow(ImGui.GetForegroundDrawList(), topLeft, botRight);
     }
+
+    private enum Tab { Play, Diagnostics }
 
     private readonly record struct CandidateText(string Summary, string Risk, string Details);
 
