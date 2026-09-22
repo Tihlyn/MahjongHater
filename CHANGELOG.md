@@ -4,6 +4,24 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+### Added
+
+- `/mhater focus` reports why the mahjong table may not be taking clicks, to be run while it
+  is refusing them: which units hold focus, the table's own visibility, collision and flags,
+  every gating unit that is open - marked when it is open but invisible - and whether
+  Dalamud's ImGui layer is taking the mouse before the game sees it. Every line is a read.
+- While a table is open, the same picture is logged as one `[Input]` line whenever it
+  changes, so a unit that appears in front of the table and never leaves shows up in the
+  session log without anyone having to notice it at the time.
+
+### Fixed
+
+- The Duty Finder is no longer left open by the requeue path. Its window stage inherited the
+  direct queue request's clock, so it could abandon the window milliseconds after opening it
+  (13 ms, on 2026-09-22) and open another on the next attempt - three opens and one close in
+  one session. The stage now starts its own clock, and the finder is closed both when an
+  attempt gives up and when registration succeeds by any route.
+
 ## [2.2.0.0] - 2026-09-22
 
 ### Changed
