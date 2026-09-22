@@ -56,6 +56,11 @@ are in `docs/research/EVALUATION_RUNS.md`.
 
 ## Use
 
+The main window shows your score, Doman Mahjong **rank** and **rating**. The game only
+exposes rank and rating in the Gold Saucer Info window, so open **Gold Saucer → Doman
+Mahjong** once and the plugin remembers what it read.
+
+
 - `/mhater` toggles the overlay; `/mhater config` opens the settings. The overlay also opens from
   the plugin installer's main/config buttons.
 - Sit down at any Doman Mahjong table (NPC or Duty Finder). The overlay shows "Ready when you are"

@@ -21,10 +21,8 @@ public sealed class MainWindow : Window
     private CandidateText[] candidateText = [];
     private string handText = string.Empty;
     private string scoreText = "0";
-    private string recordText = "0 W / 0 L";
-    private string winRateText = "0.0%";
     private string tableText = string.Empty;
-    private (int Score, int Wins, int Losses)? sessionKey;
+    private (int Score, string Rank, string Rating)? sessionKey;
     private (Wind Seat, Wind Round, int Wall)? tableKey;
     private Tab tab = Tab.Play;
 
@@ -166,6 +164,9 @@ public sealed class MainWindow : Window
                     ? "The heuristics are deciding. Fix the above and reload the plugin; the Dalamud log has the full message."
                     : "Turn on Learned policy in the settings and reload the plugin to use the model shipped with it.");
             }
+
+            var precomputed = this.plugin.PrecomputedPolicy;
+            Widgets.Wrapped($"Precomputed tables: {(precomputed.Loaded ? "loaded" : "not in use")} — {precomputed.Detail}");
         }
 
         var player = this.plugin.AutoPlayer;
@@ -174,10 +175,10 @@ public sealed class MainWindow : Window
         {
             Widgets.Label("AUTO PLAY COUNTERS");
             var guard = this.plugin.IdleGuard;
-            Widgets.Wrapped($"{player.DecisionsExecuted} decisions · {player.StallsThisSession} stalls · {player.RecoveriesThisSession} recoveries · {queuer.MatchesQueued} queued · {guard.NudgesThisSession} nudges", false);
-            Widgets.Wrapped($"Anti-idle: {guard.Status}");
-            if (guard.NudgesThisSession > 0 && !guard.LastNudgeReachedTheGame)
-                Widgets.Badge("Last nudge went to a background window", warning: true);
+            Widgets.Wrapped($"{player.DecisionsExecuted} decisions · {player.StallsThisSession} stalls · {player.RecoveriesThisSession} recoveries · {queuer.MatchesQueued} queued", false);
+            Widgets.Wrapped($"Idle timer: {guard.Status}");
+            if (guard.HighestSeenSeconds > 120)
+                Widgets.Badge($"An idle timer reached {guard.HighestSeenSeconds:F0} s", warning: true);
             if (player.StallsThisSession > 0)
             {
                 Widgets.Wrapped($"Stall log: {this.plugin.StallLogPath}");
@@ -233,17 +234,17 @@ public sealed class MainWindow : Window
             Widgets.Tooltip("Hide overlay");
     }
 
+    // Rank and rating come from the Gold Saucer Info window, the only place the game shows
+    // them (docs/research/EMJ_STRUCT_SURVEY.md); the plugin caches what it last saw there.
     private void DrawSession(StateSnapshot? state)
     {
-        var wins = this.reader.Tracker.WinsThisSession;
-        var losses = this.reader.Tracker.LossesThisSession;
-        var key = (state?.Us.Score ?? 0, wins, losses);
+        var rank = this.configuration.MahjongRank;
+        var rating = this.configuration.MahjongRating;
+        var key = (state?.Us.Score ?? 0, rank, rating);
         if (this.sessionKey != key)
         {
             this.sessionKey = key;
             this.scoreText = $"{key.Item1:N0}";
-            this.recordText = $"{wins} W / {losses} L";
-            this.winRateText = $"{(wins + losses == 0 ? 0d : (double)wins / (wins + losses)):P1}";
         }
 
         using (Widgets.Card())
@@ -253,10 +254,16 @@ public sealed class MainWindow : Window
             DrawMetric("SCORE", this.scoreText, column);
             ImGui.SameLine();
             ImGui.SetCursorScreenPos(origin + new Vector2(column, 0f));
-            DrawMetric("SESSION W / L", this.recordText, column);
+            DrawMetric("RANK", rank.Length > 0 ? rank : "—", column);
+            if (ImGui.IsItemHovered())
+                Widgets.Tooltip(rank.Length > 0
+                    ? "Read from the Gold Saucer Info window; reopen it after a match to refresh."
+                    : "Open Gold Saucer Info → Doman Mahjong once and the rank is remembered here.");
             ImGui.SameLine();
             ImGui.SetCursorScreenPos(origin + new Vector2(column * 2f, 0f));
-            DrawMetric("WIN RATE", this.winRateText, column);
+            DrawMetric("RATING", rating.Length > 0 ? rating : "—", column);
+            if (ImGui.IsItemHovered() && this.configuration.MahjongHighestRating.Length > 0)
+                Widgets.Tooltip($"Highest rating: {this.configuration.MahjongHighestRating}");
         }
     }
 
@@ -291,7 +298,7 @@ public sealed class MainWindow : Window
             Widgets.Wrapped(queuer.Status);
 
             var guard = this.plugin.IdleGuard;
-            if (Widgets.ToggleRow("Anti-idle nudge (duties eject after ~5 min)", "##antiidle", guard.Enabled))
+            if (Widgets.ToggleRow("Hold the duty idle timer (ejection after ~5 min)", "##antiidle", guard.Enabled))
             {
                 guard.Enabled = !guard.Enabled;
                 guard.Reset();
@@ -300,10 +307,10 @@ public sealed class MainWindow : Window
             }
 
             if (ImGui.IsItemHovered())
-                Widgets.Tooltip($"While auto play runs a match, presses {IdleGuard.KeyName(guard.Key)} every "
-                    + $"{IdleGuard.Clamp(guard.Interval).TotalSeconds:F0} s — but only after the machine has been idle that long, "
-                    + "so it never interferes while you are using it. F13-F24 are unbound in game and synthetic mouse movement does not "
-                    + "reset the timer. The auto player's own clicks are addon events, which the duty timer does not see either.");
+                Widgets.Tooltip("While auto play runs a match, keeps the client's own idle timers at zero "
+                    + "(UIModule.InputTimerModule), the same way real input does. Synthetic input does not reset them, "
+                    + "and the auto player's clicks are addon events the timers never see. Outside an unattended match "
+                    + "the normal AFK behaviour is untouched.");
             this.DrawDutyPicker(queuer);
         }
     }

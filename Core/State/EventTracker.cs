@@ -39,6 +39,9 @@ public sealed class EventTracker
     private int lastOpponentDiscardSeat = -1;
     private DateTime lastOpponentDiscardUtc = DateTime.MinValue;
 
+    private static readonly TimeSpan LabelWindowGrace = TimeSpan.FromMilliseconds(400);
+
+    private DateTime lastTickUtc;
     private bool callWindowActive;
     private List<string> callOptions = [];
     // Type-25 chi-shape chooser: the sequences offered, in the game's button order.
@@ -47,6 +50,7 @@ public sealed class EventTracker
     private int callFromSeat = -1;
     private string lastPromptSignature = string.Empty;
     private bool callWindowFromLabels;
+    private DateTime labelWindowOpenedUtc;
     // Options of the window the actuator already answered: the game echoes the selection
     // as a type-19 with the same labels (verified live 2026-09-19), which must not re-open it.
     private string? answeredSignature;
@@ -263,14 +267,42 @@ public sealed class EventTracker
             }
 
             case 19: // call window (or another seat's Pon!/Chi! banner — same event)
-            case 23: // call options (mirrors 19's [6..8])
+            case 23: // call options (mirrors 19's rows)
             {
-                var opts = new List<string>(3);
-                for (var i = 6; i <= 8; i++)
+                // The options live in the INTEGER lane: [2] is the first row, [3] the second,
+                // 0 = none, and on a type-23 [1] is the row count including Pass. Codes are
+                // locale-independent and carry no "Pass"/banner convention; across the
+                // 2026-09-22 session they agreed with the row strings on all 257 option
+                // frames ([1] matched the row count on all 137 type-23 frames).
+                // The strings stay as a cross-check because a type-19 also carries unrelated
+                // integer payloads — one live frame read [1]=13 [2]=0 [3]=1 [4]=2 … [8]=6,
+                // a plain 0..6 ramp that must never be read as "Tsumo offered".
+                var opts = new List<string>(2);
+                foreach (var i in new[] { 2, 3 })
+                    if (f.IsInt(i) && OptionOfCode(f.Int(i)) is { } name && !opts.Contains(name))
+                        opts.Add(name);
+                var rows = new List<string>(2);
+                for (var i = 7; i <= 8; i++)      // [6] is the banner slot ("Ron!", "Discard")
                 {
-                    var s = f.Str(i);
-                    if (!string.IsNullOrEmpty(s) && !s.Equals("Pass", StringComparison.OrdinalIgnoreCase))
-                        opts.Add(s);
+                    var s = f.Str(i)?.TrimEnd('!');
+                    if (!string.IsNullOrEmpty(s) && IsOption(s))
+                        rows.Add(s);
+                }
+
+                var rowsMatch = rows.Count == opts.Count && rows.All(opts.Contains);
+                var countMatches = type == 23 && f.IsInt(1) && f.Int(1) == opts.Count + 1;
+                if (opts.Count > 0 && !rowsMatch && !countMatches)
+                {
+                    this.Note($"type-{type} ignored: codes [{string.Join(",", opts)}] do not match rows [{string.Join(",", rows)}]");
+                    break;
+                }
+
+                if (opts.Count == 0 && rows.Count > 0)
+                {
+                    // Never seen live; if the integer lane ever changes meaning, the visible
+                    // rows still carry the window rather than silently losing it.
+                    this.Note($"type-{type}: no option codes, falling back to the rows [{string.Join(",", rows)}]");
+                    opts = rows;
                 }
 
                 // Doras: Layout 1 exposes up to six at [16..21]; Layout 2 ([14]>0) only [16].
@@ -399,6 +431,16 @@ public sealed class EventTracker
     public void OnTick(DecodedStruct s, IReadOnlyList<string> promptLabels, DateTime? now = null)
     {
         var utc = now ?? DateTime.UtcNow;
+        this.lastTickUtc = utc;
+
+        // The panel keeps its texts after a prompt closes, so a label-edge window is a guess
+        // until an event confirms it. Every genuine window in the 2026-09-22 session had its
+        // type-19/23 within 5 ms (all nine self-declares that were answered came from the
+        // event, none from the labels), while the unconfirmed ones were residue of a window
+        // answered seconds earlier — including two that read a finished hand's "Ron" and one
+        // that offered riichi on a 1-shanten hand. Unconfirmed guesses therefore expire.
+        if (this.callWindowActive && this.callWindowFromLabels && utc - this.labelWindowOpenedUtc > LabelWindowGrace)
+            this.ClearCallWindow("label-only window unconfirmed by an event");
         var closed = s.ClosedTiles;
         var closedAll = s.HandInVisualOrder();
         var melds = this.seatMelds[0];
@@ -558,12 +600,28 @@ public sealed class EventTracker
 
         this.callWindowActive = true;
         this.callWindowFromLabels = source == "label edge";
+        if (this.callWindowFromLabels)
+            this.labelWindowOpenedUtc = this.lastTickUtc;
         this.callOptions = options;
         this.CallIsClaim = isClaim;
         this.callTile = isClaim ? candidate : null;
         this.callFromSeat = isClaim && offered is not null ? this.lastOpponentDiscardSeat : -1;
         this.Note($"call window ({source}): [{string.Join(",", options)}] tile={this.callTile?.ToString() ?? "-"} claim={isClaim}");
     }
+
+    // Option codes of a type-19/23 row (live 2026-09-22; see the decode above).
+    private static string? OptionOfCode(int code) => code switch
+    {
+        1 => "Tsumo",
+        2 => "Ron",
+        3 => "Riichi",
+        4 => "Kan",
+        5 => "Pon",
+        6 => "Chi",
+        _ => null,
+    };
+
+    private static bool IsOption(string s) => s is "Chi" or "Pon" or "Kan" or "Ron" or "Riichi" or "Tsumo";
 
     private void ClearCallWindow(string why)
     {

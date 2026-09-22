@@ -36,6 +36,14 @@ public sealed class Configuration : IPluginConfiguration
     // Tag written into the calibration CSVs so human and NPC opponents are fitted apart.
     public string CalibrationPopulation { get; set; } = "human";
 
+    // Last Doman Mahjong rank and rating seen in the Gold Saucer Info window; the game
+    // exposes them nowhere else, so they are cached to survive leaving that window.
+    public string MahjongRank { get; set; } = string.Empty;
+
+    public string MahjongRating { get; set; } = string.Empty;
+
+    public string MahjongHighestRating { get; set; } = string.Empty;
+
     // Auto play / requeue (dev tooling for unattended matches; both live in the main
     // window). Persisted so a hot reload mid-session picks up where it left off.
     public bool AutoPlay { get; set; }
@@ -46,10 +54,8 @@ public sealed class Configuration : IPluginConfiguration
     // auto player's ATK events do not count as input (Core/Operate/IdleGuard.cs).
     public bool AntiIdle { get; set; } = true;
 
-    public int AntiIdleSeconds { get; set; } = 150;
-
-    // Virtual key of the nudge, F13-F24 (0x7C-0x87); F19 by default.
-    public int AntiIdleKey { get; set; } = 0x82;
+    // No interval or key any more: the guard writes the game's own idle timers
+     // (Core/Operate/IdleGuard.cs), so there is nothing to tune.
 
     public uint RequeueDuty { get; set; } = 766;   // Novice Mahjong (Quick Ranked Match)
 
@@ -75,8 +81,6 @@ public sealed class Configuration : IPluginConfiguration
     private void ClampValues()
     {
         this.DoubleWindPairFu = this.DoubleWindPairFu is 2 or 4 ? this.DoubleWindPairFu : 4;
-        this.AntiIdleKey = Core.Operate.IdleGuard.ClampKey(this.AntiIdleKey);
-        this.AntiIdleSeconds = (int)Core.Operate.IdleGuard.Clamp(TimeSpan.FromSeconds(this.AntiIdleSeconds)).TotalSeconds;
     }
 }
 

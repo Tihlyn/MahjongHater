@@ -158,6 +158,18 @@ public sealed class AutoPlayer
             return;
         }
 
+        // The game only offers riichi on a tenpai hand. When it offers and we answer with a
+        // plain discard, our hand read and the game disagree — twice on 2026-09-22, both times
+        // with our analysis calling the hand 1-shanten. Record the hand so the disagreement can
+        // be reproduced instead of guessed at (docs/research/LIVE_ISSUES_2026_09_22.md §4).
+        if (state.Can(LegalAction.Riichi) && choice.Kind == ActionKind.Discard)
+        {
+            var melds = state.OurMelds.Count == 0 ? "closed" : $"{state.OurMelds.Count} meld(s)";
+            this.logWarning($"[AutoPlay] The game offered riichi and the policy discarded: hand=[{string.Join(" ", state.Hand)}]"
+                            + $" drawn={state.DrawnTile?.ToString() ?? "-"} ({melds}); decision: {choice.Summary}");
+            this.Record($"riichi offered, discarded instead: {choice.Tile?.ToString() ?? "-"} — {choice.Summary}");
+        }
+
         if (!IsActionable(choice, state))
         {
             this.pendingFingerprint = null;
@@ -189,6 +201,15 @@ public sealed class AutoPlayer
 
             this.attempts++;
             this.Record($"retry {this.attempts}/{MaxAttempts}: {choice.Kind} {choice.Tile?.ToString() ?? string.Empty} — state unchanged for {(now - this.actedAtUtc).TotalSeconds:F0} s");
+            // A click that changed nothing is the one sign that the activation chain alone is
+            // not enough for this addon; take the hover path (hover and release, then click)
+            // for the rest of the session rather than stalling the match.
+            if (EmjOperator.Style == EmjOperator.ClickStyle.Activation)
+            {
+                EmjOperator.Style = EmjOperator.ClickStyle.HoverCycle;
+                this.Record("click style → HoverCycle (MouseOver+MouseOut before the activation)");
+                this.logWarning("[AutoPlay] A click did not register; switching to the hover click style for this session.");
+            }
         }
         else
         {

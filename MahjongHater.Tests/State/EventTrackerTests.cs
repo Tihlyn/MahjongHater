@@ -12,8 +12,27 @@ public class EventTrackerTests
         => AtkFrame.OfInts(8, seat, StructFixture.IconOf(Tile.Parse(tile), 76041));
 
     // Type-19 frame: [6]=Chi slot, [7]=Pon slot, [8]=Ron slot ("Pass" = unavailable).
-    private static AtkFrame CallWindow(string chi, string pon, string ron)
-        => AtkFrame.OfInts([19, .. new int[21]]).WithString(6, chi).WithString(7, pon).WithString(8, ron);
+    // A type-23 options frame: row count (including Pass) then the two row codes.
+    private static AtkFrame CallCodes(int rowCount, int first, int second)
+        => AtkFrame.OfInts([23, rowCount, first, second, .. new int[18]]);
+
+    // A real options frame as the game sends it: codes in [2]/[3], the banner in [6] and the
+    // row labels in [7]/[8] (a two-row window is the offer plus Pass).
+    private static AtkFrame CallWindow(params string[] options)
+    {
+        var codes = options.Select(Code).ToArray();
+        var frame = CallCodes(options.Length + 1, codes.ElementAtOrDefault(0), codes.ElementAtOrDefault(1))
+            .WithString(6, options[0] + "!");
+        for (var i = 0; i < options.Length && i < 2; i++)
+            frame = frame.WithString(7 + i, options[i]);
+        return options.Length < 2 ? frame.WithString(8, "Pass") : frame;
+    }
+
+    private static int Code(string option) => option switch
+    {
+        "Tsumo" => 1, "Ron" => 2, "Riichi" => 3, "Kan" => 4, "Pon" => 5, "Chi" => 6,
+        _ => throw new ArgumentOutOfRangeException(nameof(option), option, "not an option"),
+    };
 
     [Fact]
     public void Type8_books_discards_per_seat()
@@ -34,7 +53,7 @@ public class EventTrackerTests
         var t = new EventTracker();
         t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), [], T0);
         t.OnRefresh(Discard(1, "2z"), T0);
-        t.OnRefresh(CallWindow("Pass", "Pon", "Pass"), T0);
+        t.OnRefresh(CallWindow("Pon"), T0);
         Assert.True(t.CallWindowActive);
         Assert.Equal(["Pon"], t.CallOptions);
         Assert.Equal(Tile.Parse("2z"), t.CallTile);
@@ -45,6 +64,69 @@ public class EventTrackerTests
         Assert.Equal(42, t.EventWallRemaining);
     }
 
+    // Options come from the integer lane: [2]/[3] are the row codes (1=Tsumo 2=Ron 3=Riichi
+    // 4=Kan 5=Pon 6=Chi) and on a type-23 [1] is the row count including Pass. The row strings
+    // are only a cross-check, because a type-19 also carries unrelated integer payloads.
+    [Fact]
+    public void Options_come_from_the_codes_not_the_button_text()
+    {
+        var t = new EventTracker();
+        t.OnTick(StructFixture.Decoded("123m456p789s11z22z", null), [], T0);
+        t.OnRefresh(Discard(1, "2z"), T0);
+        // [1]=3 rows (Ron, Pon, Pass), codes Ron + Pon, with the banner in [6].
+        t.OnRefresh(CallCodes(3, 2, 5).WithString(6, "Ron!").WithString(7, "Ron").WithString(8, "Pon"), T0);
+        Assert.True(t.CallWindowActive);
+        Assert.Equal(["Ron", "Pon"], t.CallOptions);
+        Assert.True(t.CallIsClaim);
+    }
+
+    [Fact]
+    public void An_integer_payload_that_is_not_an_option_frame_is_ignored()
+    {
+        var t = new EventTracker();
+        t.OnTick(StructFixture.Decoded("123m456p789s11z22z", null), [], T0);
+        t.OnRefresh(Discard(1, "2z"), T0);
+        t.OnRefresh(CallCodes(2, 2, 0).WithString(7, "Ron").WithString(8, "Pass"), T0);
+        Assert.Equal(["Ron"], t.CallOptions);
+
+        // Live 2026-09-22: a type-19 carrying [1]=13 [2]=0 [3]=1 [4]=2 … an index ramp, whose
+        // [3]=1 would otherwise read as "Tsumo offered".
+        t.OnRefresh(AtkFrame.OfInts([19, 13, 0, 1, 2, 3, 4, 5, 6]), T0);
+        Assert.Equal(["Ron"], t.CallOptions);
+    }
+
+    // The panel keeps its texts after a prompt closes: a window only the labels opened is a
+    // guess, and every genuine one in the 2026-09-22 session had its event within 5 ms.
+    [Fact]
+    public void A_label_only_window_expires_unless_an_event_confirms_it()
+    {
+        var t = new EventTracker();
+        var hand = StructFixture.Decoded("123m456p789s1122z", "3z");
+        t.OnTick(hand, ["Riichi", "Pass"], T0);
+        Assert.True(t.CallWindowActive);
+        Assert.True(t.CallWindowFromLabels);
+
+        t.OnTick(hand, ["Riichi", "Pass"], T0.AddMilliseconds(200));   // still within the grace
+        Assert.True(t.CallWindowActive);
+
+        t.OnTick(hand, ["Riichi", "Pass"], T0.AddSeconds(1));          // no event ever arrived
+        Assert.False(t.CallWindowActive);
+    }
+
+    [Fact]
+    public void An_event_confirms_a_label_window_and_it_stays()
+    {
+        var t = new EventTracker();
+        var hand = StructFixture.Decoded("123m456p789s1122z", "3z");
+        t.OnTick(hand, ["Riichi", "Pass"], T0);
+        t.OnRefresh(CallWindow("Riichi"), T0);
+        Assert.False(t.CallWindowFromLabels);
+
+        t.OnTick(hand, ["Riichi", "Pass"], T0.AddSeconds(30));
+        Assert.True(t.CallWindowActive);
+        Assert.Equal(["Riichi"], t.CallOptions);
+    }
+
     [Fact]
     public void Call_window_for_an_uncallable_tile_is_not_ours()
     {
@@ -52,7 +134,7 @@ public class EventTrackerTests
         // No souzu at all: an 8s can be neither pon'd, chi'd nor ron'd.
         t.OnTick(StructFixture.Decoded("333m456m89m567p7p7z", null), [], T0);
         t.OnRefresh(Discard(2, "8s"), T0);
-        t.OnRefresh(CallWindow("Chi", "Pass", "Pass"), T0);
+        t.OnRefresh(CallWindow("Chi"), T0);
         Assert.False(t.CallWindowActive);
     }
 
@@ -62,11 +144,11 @@ public class EventTrackerTests
         var t = new EventTracker();
         t.OnTick(StructFixture.Decoded("45m111p222p333s7z9s", null), [], T0);
         t.OnRefresh(Discard(1, "3m"), T0); // shimocha: chi impossible
-        t.OnRefresh(CallWindow("Chi", "Pass", "Pass"), T0);
+        t.OnRefresh(CallWindow("Chi"), T0);
         Assert.False(t.CallWindowActive);
 
         t.OnRefresh(Discard(3, "3m"), T0); // kamicha: chi legal
-        t.OnRefresh(CallWindow("Chi", "Pass", "Pass"), T0);
+        t.OnRefresh(CallWindow("Chi"), T0);
         Assert.True(t.CallWindowActive);
         Assert.True(t.CallIsClaim);
     }
@@ -123,7 +205,7 @@ public class EventTrackerTests
         var t = new EventTracker();
         t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), [], T0);
         t.OnRefresh(Discard(1, "2z"), T0);
-        t.OnRefresh(CallWindow("Pass", "Pon", "Pass"), T0);
+        t.OnRefresh(CallWindow("Pon"), T0);
         // Post-call: 11 closed, claimed tile parked in slot 13.
         t.OnTick(StructFixture.PostPon, [], T0);
         var meld = Assert.Single(t.Melds);
@@ -205,20 +287,20 @@ public class EventTrackerTests
         var t = new EventTracker();
         var hand = StructFixture.Decoded("34m788m111p789p99s", "5m");
         t.OnTick(hand, [], T0);
-        t.OnRefresh(CallWindow("Riichi!", "Riichi", "Pass"), T0);
+        t.OnRefresh(CallWindow("Riichi"), T0);
         Assert.True(t.CallWindowActive);
         Assert.Equal(["Riichi"], t.CallOptions); // banner deduped
 
         t.MarkCallAnswered(isWin: false);
         Assert.False(t.CallWindowActive);
-        t.OnRefresh(CallWindow("Riichi!", "Riichi", "Pass"), T0); // echo
+        t.OnRefresh(CallWindow("Riichi"), T0); // echo
         Assert.False(t.CallWindowActive);
         t.OnTick(hand, ["Riichi", "Pass"], T0);                     // panel texts persist
         Assert.False(t.CallWindowActive);
 
         t.OnRefresh(Discard(0, "8m"), T0);                          // our riichi discard
         t.OnRefresh(Discard(1, "1p"), T0);                          // we hold three 1p
-        t.OnRefresh(CallWindow("Pass", "Pon", "Pass"), T0);         // a genuinely new window
+        t.OnRefresh(CallWindow("Pon"), T0);         // a genuinely new window
         Assert.True(t.CallWindowActive);
     }
 
@@ -227,7 +309,7 @@ public class EventTrackerTests
     {
         var t = new EventTracker();
         t.OnTick(StructFixture.Decoded("44m77m3p55p556s6699s", "3p"), [], T0);
-        t.OnRefresh(CallWindow("Tsumo!", "Tsumo", "Riichi"), T0);
+        t.OnRefresh(CallWindow("Tsumo", "Riichi"), T0);
         t.MarkCallAnswered(isWin: true);
         Assert.True(t.WinDeclared);
         t.OnRefresh(AtkFrame.OfInts([32, .. new int[21]]).WithString(2, "East 2 East Wind"), T0);
@@ -241,7 +323,7 @@ public class EventTrackerTests
     {
         var t = new EventTracker();
         t.OnTick(StructFixture.Decoded("44m77m3p55p556s6699s", "3p"), [], T0);
-        t.OnRefresh(CallWindow("Tsumo!", "Tsumo", "Riichi"), T0);
+        t.OnRefresh(CallWindow("Tsumo", "Riichi"), T0);
         t.MarkCallAnswered(isWin: true);
         Assert.True(t.WinDeclared);
         t.OnRefresh(Discard(2, "9m"), T0);
@@ -254,7 +336,7 @@ public class EventTrackerTests
         var t = new EventTracker();
         t.OnTick(StructFixture.Decoded("233m2345p0p23456s", null), [], T0);
         t.OnRefresh(Discard(3, "4s"), T0);
-        t.OnRefresh(CallWindow("Chi", "Pass", "Pass"), T0);
+        t.OnRefresh(CallWindow("Chi"), T0);
         t.MarkCallAnswered(isWin: false);                          // "Chi" row clicked
         Assert.False(t.CallWindowActive);
 
@@ -299,7 +381,7 @@ public class EventTrackerTests
         var hand = StructFixture.Decoded("233m2345p0p23456s", null);
         t.OnTick(hand, [], T0);
         t.OnRefresh(Discard(3, "4s"), T0);
-        t.OnRefresh(CallWindow("Chi", "Pass", "Pass"), T0);
+        t.OnRefresh(CallWindow("Chi"), T0);
         Assert.True(t.CallWindowActive);
 
         // The player clicks "Chi"; the game answers with the state-25 chooser.
@@ -331,7 +413,7 @@ public class EventTrackerTests
         var t = new EventTracker();
         t.OnTick(StructFixture.Decoded("233m2345p0p23456s", null), [], T0);
         t.OnRefresh(Discard(3, "4s"), T0);
-        t.OnRefresh(CallWindow("Chi", "Pass", "Pass"), T0);
+        t.OnRefresh(CallWindow("Chi"), T0);
         int I(string tile) => StructFixture.IconOf(Tile.Parse(tile), 76041);
         t.OnReceiveEvent(74, AtkFrame.OfInts([0, .. new int[7], 76041, I("4s"), I("5s"), I("6s")]));
         Assert.False(t.CallWindowActive);

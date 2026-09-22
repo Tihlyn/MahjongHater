@@ -3,117 +3,81 @@ using Xunit;
 
 namespace MahjongHater.Tests.Operate;
 
-// The nudge itself is one P/Invoke; what needs covering is when it is allowed to happen,
-// because a nudge at the wrong moment lands in whatever the user is doing.
+// Writing the timers is one struct access; what needs covering is when the guard is allowed
+// to touch them at all, since outside an unattended match the normal AFK behaviour must stand.
 public class IdleGuardTests
 {
     private static readonly DateTime T0 = new(2026, 9, 22, 12, 0, 0, DateTimeKind.Utc);
 
     private sealed class Harness
     {
-        public TimeSpan? Idle { get; set; } = TimeSpan.FromMinutes(10);
+        public IdleGuard.Timers? Seen { get; set; } = new(42f, 130f, 42f);
 
-        public int Nudges { get; private set; }
-
-        public int LastKey { get; private set; }
+        public int Clears { get; private set; }
 
         public IdleGuard Guard { get; }
 
-        public Harness() => this.Guard = new IdleGuard(_ => { }, () => this.Idle, key => { this.Nudges++; this.LastKey = key; return true; });
+        public Harness() => this.Guard = new IdleGuard(_ => { }, () => { this.Clears++; return this.Seen; });
 
         public void Tick(bool autoPlay = true, bool inMatch = true, double afterSeconds = 0) =>
             this.Guard.Tick(autoPlay, inMatch, T0.AddSeconds(afterSeconds));
     }
 
     [Fact]
-    public void Nudges_only_while_an_unattended_match_is_running()
+    public void Clears_the_timers_only_while_an_unattended_match_is_running()
     {
         var h = new Harness();
         h.Tick(autoPlay: false, inMatch: true);
         h.Tick(autoPlay: true, inMatch: false);
         h.Guard.Enabled = false;
         h.Tick();
-        Assert.Equal(0, h.Nudges);
+        Assert.Equal(0, h.Clears);
+        Assert.Equal("Off", h.Guard.Status);
 
         h.Guard.Enabled = true;
         h.Tick();
-        Assert.Equal(1, h.Nudges);
-        Assert.Equal(1, h.Guard.NudgesThisSession);
-        Assert.Equal(T0, h.Guard.LastNudgeUtc);
+        Assert.Equal(1, h.Clears);
+        Assert.Equal(1, h.Guard.ClearsThisSession);
     }
 
     [Fact]
-    public void Never_nudges_while_the_machine_is_in_use()
-    {
-        var h = new Harness { Idle = TimeSpan.FromSeconds(5) };
-        h.Tick();
-        Assert.Equal(0, h.Nudges);
-        Assert.Contains("Armed", h.Guard.Status);
-
-        h.Idle = h.Guard.Interval;
-        h.Tick(afterSeconds: 60);
-        Assert.Equal(1, h.Nudges);
-    }
-
-    [Fact]
-    public void One_nudge_per_interval_at_most()
+    public void Every_tick_clears_because_the_timer_climbs_every_frame()
     {
         var h = new Harness();
-        h.Tick();
-        h.Tick(afterSeconds: 5);
-        h.Tick(afterSeconds: 20);
-        Assert.Equal(1, h.Nudges);
-        h.Tick(afterSeconds: IdleGuard.MinimumInterval.TotalSeconds + 1);
-        Assert.Equal(2, h.Nudges);
+        for (var i = 0; i < 5; i++)
+            h.Tick(afterSeconds: i);
+        Assert.Equal(5, h.Clears);
+        Assert.Equal(5, h.Guard.ClearsThisSession);
     }
 
     [Fact]
-    public void Interval_stays_inside_the_ejection_window()
+    public void Reports_the_highest_timer_it_had_to_clear()
     {
-        Assert.Equal(IdleGuard.MinimumInterval, IdleGuard.Clamp(TimeSpan.Zero));
-        Assert.Equal(IdleGuard.MaximumInterval, IdleGuard.Clamp(TimeSpan.FromHours(1)));
-        Assert.Equal(TimeSpan.FromSeconds(90), IdleGuard.Clamp(TimeSpan.FromSeconds(90)));
-        Assert.True(IdleGuard.MaximumInterval < TimeSpan.FromMinutes(5), "the duty ejects at about five minutes");
-        Assert.Equal(IdleGuard.DefaultInterval, new IdleGuard(_ => { }).Interval);
+        var h = new Harness { Seen = new IdleGuard.Timers(10f, 20f, 5f) };
+        h.Tick();
+        Assert.Equal(20f, h.Guard.HighestSeenSeconds);
+
+        h.Seen = new IdleGuard.Timers(1f, 2f, 3f);       // a lower reading does not lower the mark
+        h.Tick(afterSeconds: 1);
+        Assert.Equal(20f, h.Guard.HighestSeenSeconds);
+        Assert.Contains("20 s", h.Guard.Status);
     }
 
     [Fact]
-    public void Presses_a_function_key_the_game_cannot_act_on()
+    public void Without_the_timer_module_it_does_nothing()
     {
-        var h = new Harness();
+        var h = new Harness { Seen = null };
         h.Tick();
-        Assert.Equal(IdleGuard.DefaultKey, h.LastKey);
-        Assert.Equal("F19", IdleGuard.KeyName(h.LastKey));
-        Assert.InRange(h.LastKey, IdleGuard.FirstKey, IdleGuard.LastKey);
-        // Synthetic mouse movement does not reset this client's timer, so the nudge is a key.
-        Assert.Contains("F19", h.Guard.Status);
-
-        // Anything outside F13-F24 falls back to the default rather than pressing it.
-        h.Guard.Key = 0x0D;   // Enter
-        Assert.Equal(IdleGuard.DefaultKey, h.Guard.Key);
-        h.Guard.Key = 0x85;   // F22
-        h.Tick(afterSeconds: 300);
-        Assert.Equal(0x85, h.LastKey);
-        Assert.Equal("F22", IdleGuard.KeyName(h.LastKey));
-    }
-
-    [Fact]
-    public void Without_a_readable_idle_time_it_does_nothing()
-    {
-        var h = new Harness { Idle = null };
-        h.Tick();
-        Assert.Equal(0, h.Nudges);
+        Assert.Equal(0, h.Guard.ClearsThisSession);
         Assert.Contains("Unavailable", h.Guard.Status);
     }
 
     [Fact]
-    public void Reset_clears_the_cooldown_so_a_new_match_can_be_nudged()
+    public void Reset_returns_to_the_idle_status()
     {
         var h = new Harness();
         h.Tick();
         h.Guard.Reset();
-        Assert.Null(h.Guard.LastNudgeUtc);
-        h.Tick(afterSeconds: 1);
-        Assert.Equal(2, h.Nudges);
+        Assert.Contains("Idle", h.Guard.Status);
     }
 }

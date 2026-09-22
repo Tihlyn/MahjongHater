@@ -17,8 +17,9 @@ def read_version(props):
     if len(versions) != 1 or not versions[0].text:
         raise ValueError("Expected exactly one <Version> in Directory.Build.props")
     version = versions[0].text.strip()
-    if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version):
-        raise ValueError("Version must be a stable major.minor.patch version")
+    # major.minor.patch, optionally with the .NET assembly's fourth component (2.0.2.1).
+    if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(\.(0|[1-9]\d*))?", version):
+        raise ValueError("Version must be major.minor.patch, optionally with a fourth component")
     if any(int(part) > 65534 for part in version.split(".")):
         raise ValueError("Version components must fit a .NET assembly version (0..65534)")
     return version
@@ -26,7 +27,7 @@ def read_version(props):
 
 def make_entry(manifest, version, timestamp):
     entry = dict(manifest)
-    assembly_version = f"{version}.0"
+    assembly_version = version if version.count(".") == 3 else f"{version}.0"
     if entry.get("AssemblyVersion", assembly_version) != assembly_version:
         raise ValueError("Manifest AssemblyVersion does not match <Version>; rebuild first")
     if entry.get("InternalName") != "MahjongHater":

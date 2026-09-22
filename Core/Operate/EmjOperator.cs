@@ -10,10 +10,29 @@ namespace MahjongHater.Core.Operate;
 // per click — ButtonClick > ListItemClick > MouseClick > MouseDown+MouseUp — to avoid
 // the double-fire a full down/up/click volley causes on component buttons.
 //
+// HOVER IS NEVER LEFT SET. Until 2026-09-22 every click was preceded by the node's
+// MouseOver and nothing ever sent MouseOut, so the agent kept treating a hand slot as
+// hovered after the tile had left the hand; the game then crashed refreshing that slot's
+// tooltip string inside AgentEmj.Update (three crashes in 376 clicks,
+// docs/research/LIVE_ISSUES_2026_09_22.md). So the default is Activation: no hover at all.
+// If a click turns out not to register, the caller escalates to HoverCycle, which sends
+// MouseOver and MouseOut back to back BEFORE the activation, while the node is still
+// valid — nothing is ever fired at a node after the activation that invalidated it.
+//
 // Framework-thread only. Everything here was verified live in the 2026-07/09 sessions
 // (docs/EMJ_ADDON_REFERENCE.md, "Operating the addon").
 internal static unsafe class EmjOperator
 {
+    public enum ClickStyle
+    {
+        Activation,   // the activation chain alone (default: cannot leave hover state behind)
+        HoverCycle,   // MouseOver + MouseOut first, both while the node is still valid
+    }
+
+    // Session-sticky: AutoPlayer raises it to HoverCycle when a click does not take effect,
+    // and says so in its journal. Framework thread only, like everything else here.
+    public static ClickStyle Style { get; set; } = ClickStyle.Activation;
+
     private delegate void NodeVisitor(AtkResNode* node, nint ownerComponent);
 
     // Simulates a click on a node, searching its subtree per event type (a slot's
@@ -24,9 +43,20 @@ internal static unsafe class EmjOperator
     {
         var fired = new List<string>(3);
 
-        var over = FindChainEventInSubtree(addon, node, AtkEventType.MouseOver, out var overHolder);
-        if (over != null)
-            FireChain(addon, (AtkResNode*)overHolder, over, fired);
+        if (Style == ClickStyle.HoverCycle)
+        {
+            var over = FindChainEventInSubtree(addon, node, AtkEventType.MouseOver, out var overHolder);
+            if (over != null)
+            {
+                FireChain(addon, (AtkResNode*)overHolder, over, fired);
+                // Released immediately, before the activation can invalidate the node.
+                var out_ = FindChainEventInSubtree(addon, node, AtkEventType.MouseOut, out var outHolder);
+                if (out_ != null)
+                    FireChain(addon, (AtkResNode*)outHolder, out_, fired);
+                else
+                    FireSynthetic(addon, (AtkResNode*)overHolder, AtkEventType.MouseOut, (int)over->Param, fired);
+            }
+        }
 
         var activation = FindChainEventInSubtree(addon, node, AtkEventType.ButtonClick, out var holder);
         if (activation == null)
