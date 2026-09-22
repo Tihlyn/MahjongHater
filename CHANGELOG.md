@@ -4,6 +4,16 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+## [2.0.1] - 2026-09-22
+
+### Added
+
+- Both trained models ship inside the plugin (gzipped, 37 MB each); the learned policy works
+  after ticking one setting, with no download. A model in the plugin config folder still
+  overrides the shipped one, and `.json.gz` is read directly.
+- Diagnostics tab shows whether a learned model is loaded, which file it came from, and why
+  it is not in use when it is not.
+
 ## [2.0.0] - 2026-09-22
 
 ### Added
