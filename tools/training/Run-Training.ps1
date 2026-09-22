@@ -118,9 +118,12 @@ if ($stages -contains 'export') {
     if (Test-Path -LiteralPath $dataset) { Write-Host "export: dataset exists at $dataset" }
     else {
         $bytesPerRow = 1633 * $(if ($Dtype -eq 'float16') { 2 } else { 4 })
-        $needed = [long]$MaxGames * 600 * $bytesPerRow
+        # The corpus may hold fewer games than -MaxGames (Quick Match: ~10 000): size by what exists.
+        $available = (Get-ChildItem (Join-Path $corpus 'games') -File).Count
+        $games = [Math]::Min($MaxGames, $available)
+        $needed = [long]$games * 600 * $bytesPerRow
         $free = (Get-PSDrive -Name ([IO.Path]::GetPathRoot($work)).Substring(0, 1)).Free
-        Write-Host ("export: ~{0:N1} GB expected for {1} games ({2}), {3:N0} GB free" -f @(($needed / 1GB), $MaxGames, $Dtype, ($free / 1GB)))
+        Write-Host ("export: ~{0:N1} GB expected for {1} games ({2}; corpus holds {3}), {4:N0} GB free" -f @(($needed / 1GB), $games, $Dtype, $available, ($free / 1GB)))
         if ($free -lt $needed * 1.15) { throw "Not enough disk space for the export; lower -MaxGames (each 1 000 games ~ $([Math]::Round(600 * $bytesPerRow / 1GB * 1000, 1)) GB) or free space." }
         Invoke-Logged 'export' { & $exe learn-data $corpus $dataset - $MaxGames $Dtype $Workers compact }
     }
