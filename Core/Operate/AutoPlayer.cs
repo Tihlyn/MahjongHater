@@ -47,6 +47,14 @@ public sealed class AutoPlayer
     private string? pendingFingerprint;
     private DateTime actAfterUtc;
 
+    // The last thing we actually delivered to the game, and the snapshot it was aimed at.
+    // Dispatch is not acceptance: this is what lets the journal say "sent and ignored"
+    // instead of reporting a click as a success (docs/research/STALL_2026_09_22.md).
+    private sealed record PendingDispatch(string What, long Sequence, DateTime SentUtc, bool NodeActivation);
+
+    private PendingDispatch? pending;
+    private double? lastAckMs;
+
     private long lastSequence = -1;
     private DateTime lastChangeUtc;
     private DateTime lastRecapClickUtc;
@@ -70,6 +78,12 @@ public sealed class AutoPlayer
 
     public bool Enabled { get; set; }
 
+    // Opt-in: let an unacknowledged NODE activation switch the session to the hover click
+    // style. Off by default - the hover cycle is the suspect behind the three
+    // AgentEmj.Update crashes, and the audit wants a matched manual-input trace before it
+    // comes back (docs/research/CALL_WINDOW_AUDIT_2026_09_22.md).
+    public bool AllowHoverEscalation { get; set; }
+
     // One line for the overlay: what the player is doing right now.
     public string Status { get; private set; } = "Off";
 
@@ -89,6 +103,10 @@ public sealed class AutoPlayer
     public bool InMatch { get; private set; }
 
     public IReadOnlyList<string> Journal => this.journal.ToList();
+
+    // Dispatch and acceptance as separate outcomes, for Diagnostics: "sent" never means
+    // the game took it (docs/research/STALL_2026_09_22.md).
+    public string LastDispatchStatus { get; private set; } = "nothing dispatched yet";
 
     public void Tick(StateSnapshot? state)
     {
@@ -113,6 +131,14 @@ public sealed class AutoPlayer
         {
             if (this.stalled)
                 this.Record($"stall ended after {(now - this.stallSinceUtc).TotalSeconds:F0} s (seq {this.lastSequence} → {state.Sequence})");
+            // The game moved after our dispatch: that, and only that, is acceptance.
+            if (this.pending is { } acked && acked.Sequence == this.lastSequence)
+            {
+                this.lastAckMs = (now - acked.SentUtc).TotalMilliseconds;
+                this.LastDispatchStatus = $"{acked.What} accepted after {this.lastAckMs:F0} ms";
+                this.pending = null;
+            }
+
             this.lastSequence = state.Sequence;
             this.lastChangeUtc = now;
             this.stalled = false;
@@ -170,6 +196,28 @@ public sealed class AutoPlayer
             this.Record($"riichi offered, discarded instead: {choice.Tile?.ToString() ?? "-"} — {choice.Summary}");
         }
 
+        // The game offered a win our own read cannot explain. The offer is taken anyway
+        // (DecisionPolicy), but the hand is recorded so the read can be repaired: on
+        // 2026-09-22 exactly this situation was answered with Pass and the hand ran out as a
+        // draw (docs/research/WIN_OFFERS_2026_09_22.md).
+        if (choice.Steps.FirstOrDefault(s => s.Stage == DecisionPolicy.WinReadDisagrees) is { } disagreement)
+        {
+            this.logWarning($"[AutoPlay] {disagreement.Display}");
+            this.Record($"win read disagrees: {choice.Kind} offered on a hand we score as no win");
+        }
+
+        // A win the game offered must never end as anything else. If the policy ever answers
+        // an offered Tsumo/Ron with something else, that is the expensive failure and it says
+        // so here rather than passing quietly.
+        if ((state.Can(LegalAction.Ron) || state.Can(LegalAction.Tsumo))
+            && choice.Kind is not (ActionKind.Ron or ActionKind.Tsumo))
+        {
+            this.logWarning($"[AutoPlay] The game offered {(state.Can(LegalAction.Ron) ? "Ron" : "Tsumo")} and the policy answered {choice.Kind}: "
+                            + $"hand=[{string.Join(" ", state.Hand)}] melds={state.OurMelds.Count} riichi={state.OurRiichi} "
+                            + $"tile={state.CallTile?.ToString() ?? state.DrawnTile?.ToString() ?? "-"}; decision: {choice.Summary}");
+            this.Record($"WIN OFFER NOT TAKEN: {choice.Kind} — {choice.Summary}");
+        }
+
         if (!IsActionable(choice, state))
         {
             this.pendingFingerprint = null;
@@ -200,16 +248,12 @@ public sealed class AutoPlayer
             }
 
             this.attempts++;
-            this.Record($"retry {this.attempts}/{MaxAttempts}: {choice.Kind} {choice.Tile?.ToString() ?? string.Empty} — state unchanged for {(now - this.actedAtUtc).TotalSeconds:F0} s");
-            // A click that changed nothing is the one sign that the activation chain alone is
-            // not enough for this addon; take the hover path (hover and release, then click)
-            // for the rest of the session rather than stalling the match.
-            if (EmjOperator.Style == EmjOperator.ClickStyle.Activation)
-            {
-                EmjOperator.Style = EmjOperator.ClickStyle.HoverCycle;
-                this.Record("click style → HoverCycle (MouseOver+MouseOut before the activation)");
-                this.logWarning("[AutoPlay] A click did not register; switching to the hover click style for this session.");
-            }
+            var unacknowledged = this.pending is { } sent && sent.Sequence == state.Sequence;
+            this.Record($"retry {this.attempts}/{MaxAttempts}: {choice.Kind} {choice.Tile?.ToString() ?? string.Empty} — "
+                        + (unacknowledged
+                            ? $"'{this.pending!.What}' was dispatched {(now - this.pending.SentUtc).TotalSeconds:F0} s ago and the game has not acknowledged it"
+                            : $"nothing was dispatched for {(now - this.actedAtUtc).TotalSeconds:F0} s"));
+            this.MaybeEscalate(unacknowledged);
         }
         else
         {
@@ -237,11 +281,17 @@ public sealed class AutoPlayer
         this.actedAtUtc = now;
         var downgraded = labelOnly && choice.Kind == ActionKind.Riichi;
         var result = downgraded ? this.actuator.Discard(choice) : this.actuator.Execute(state, choice);
-        this.Status = $"{(result.Ok ? "Did" : "FAILED")} {choice.Kind} {choice.Tile?.ToString() ?? string.Empty}";
+        // "Sent" is the honest word: acceptance shows up later, as a snapshot change.
+        this.Status = $"{(result.Ok ? "Sent" : "REFUSED")} {choice.Kind} {choice.Tile?.ToString() ?? string.Empty}";
         var line = $"seq {state.Sequence} {state.Phase} → {choice.Kind}{(downgraded ? " (label-only window: discard without riichi)" : string.Empty)} {choice.Tile?.ToString() ?? string.Empty}" +
                    (choice.Call is { } meld ? $" [{string.Join(" ", meld.Tiles)}]" : string.Empty) +
-                   $" | {choice.Summary} | {(result.Ok ? "ok" : "FAILED")}: {result.Detail}";
+                   $" | {choice.Summary} | {(result.Ok ? "sent" : "REFUSED")}: {result.Detail}";
         this.Record(line);
+        this.LastDispatchStatus = result.Ok
+            ? $"{choice.Kind} {choice.Tile?.ToString() ?? string.Empty} dispatched, waiting for the game".Replace("  ", " ")
+            : $"{choice.Kind} refused: {result.Detail}";
+        if (result.Ok)
+            this.pending = new PendingDispatch($"{choice.Kind} {choice.Tile?.ToString() ?? string.Empty}".Trim(), state.Sequence, now, result.NodeActivation);
         if (result.Detail.StartsWith("RECOVERY", StringComparison.Ordinal))
         {
             this.RecoveriesThisSession++;
@@ -251,6 +301,22 @@ public sealed class AutoPlayer
         {
             this.logWarning($"[AutoPlay] {line}");
         }
+    }
+
+    // The click STYLE is only in question when an activation we really delivered was then
+    // ignored by the game. A rejected dispatch means the target was wrong (hidden, stale,
+    // missing) - hover cannot help with that - and a list row never went through hover at
+    // all, so neither is a reason to change how clicks are sent. Opt-in either way.
+    private void MaybeEscalate(bool unacknowledged)
+    {
+        if (!this.AllowHoverEscalation || !unacknowledged
+            || this.pending is not { NodeActivation: true }
+            || EmjOperator.Style != EmjOperator.ClickStyle.Activation)
+            return;
+
+        EmjOperator.Style = EmjOperator.ClickStyle.HoverCycle;
+        this.Record("click style → HoverCycle (matched MouseOver+MouseOut before the activation); reset at the next match");
+        this.logWarning("[AutoPlay] An activation was dispatched and ignored; switching to the hover click style for this match.");
     }
 
     // Actionable = the game is waiting for this decision. A Pass outside a prompt or a
@@ -302,7 +368,10 @@ public sealed class AutoPlayer
         {
             case 0 when since >= RecoverPassAfter:
                 this.recoveryStep = 1;
-                this.Recover("pass", this.actuator.ClickLabel("Pass"));
+                // AnswerCall refuses unless an event-confirmed window is open on a visible
+                // list whose rows still carry it - the 18:27:48 recovery answered "Pass" to
+                // a list the dump had already logged hidden, with a finished hand's labels.
+                this.Recover("pass", this.actuator.AnswerCall("Pass", isWin: false));
                 break;
             case 1 when since >= RecoverDiscardAfter:
                 this.recoveryStep = 2;
@@ -321,9 +390,14 @@ public sealed class AutoPlayer
     }
 
     // The draw slot first (tsumogiri is always legal on our turn), then any slot the
-    // game will take a click on.
+    // game will take a click on. A registered activation is NOT proof that a discard is
+    // legal: during the 18:27 stall all 13 slots passed that check while the snapshot said
+    // legal=None on another player's turn, and recovery discarded anyway.
     private OperateResult RecoverDiscard(StateSnapshot state)
     {
+        if (!state.Can(LegalAction.Discard))
+            return OperateResult.Fail($"no discard is legal right now (phase={state.Phase}, legal={state.Legal})");
+
         if (state.DrawnTile is { } drawn)
         {
             var r = this.actuator.DiscardTile(drawn);
@@ -344,7 +418,7 @@ public sealed class AutoPlayer
     private void Recover(string step, OperateResult result)
     {
         this.lastRecoveryUtc = DateTime.UtcNow;
-        var line = $"stall recovery '{step}': {(result.Ok ? "ok" : "no effect")} — {result.Detail}";
+        var line = $"stall recovery '{step}': {(result.Ok ? "sent" : "refused")} — {result.Detail}";
         this.Record(line);
         this.logWarning($"[AutoPlay] {line}");
         if (result.Ok)
@@ -422,6 +496,12 @@ public sealed class AutoPlayer
     {
         this.pendingFingerprint = null;
         this.actedFingerprint = null;
+        this.pending = null;
+        this.lastAckMs = null;
+        // A style raised for one stubborn click must not outlive the match: there was no
+        // assignment back to Activation anywhere, so one escalation held until the assembly
+        // was reloaded (docs/research/CALL_WINDOW_AUDIT_2026_09_22.md).
+        EmjOperator.Style = EmjOperator.ClickStyle.Activation;
         this.attempts = 0;
         this.lastSequence = -1;
         this.lastChangeUtc = DateTime.UtcNow;

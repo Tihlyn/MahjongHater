@@ -40,34 +40,61 @@ public sealed class ScoringEngine
             return result;
         }
 
-        var basePoints = fu * (1 << (2 + totalHan));
-        if (totalHan >= 13)
-        {
-            ApplyLimit(result, hand.WinMethod, isDealer, 8000, "Kazoe Yakuman");
-        }
-        else if (totalHan is >= 11 and <= 12)
-        {
-            ApplyLimit(result, hand.WinMethod, isDealer, 6000, "Sanbaiman");
-        }
-        else if (totalHan is >= 8 and <= 10)
-        {
-            ApplyLimit(result, hand.WinMethod, isDealer, 4000, "Baiman");
-        }
-        else if (totalHan is >= 6 and <= 7)
-        {
-            ApplyLimit(result, hand.WinMethod, isDealer, 3000, "Haneman");
-        }
-        else if (totalHan == 5 || (totalHan == 4 && fu >= 40) || (totalHan == 3 && fu >= 70))
-        {
-            ApplyLimit(result, hand.WinMethod, isDealer, 2000, "Mangan");
-        }
-        else
+        var basePoints = BasePointsFor(fu, totalHan, out var limitName);
+        if (limitName is null)
         {
             result.BasePoints = basePoints;
             ApplyPayments(result, hand.WinMethod, isDealer, basePoints);
         }
+        else
+        {
+            ApplyLimit(result, hand.WinMethod, isDealer, basePoints, limitName);
+        }
 
         return result;
+    }
+
+    // The base-point table, shared by the scorer and by the live check against the game's own
+    // win screen. Doman follows the standard limits: mangan at 5 han, or 4 han 40 fu, or
+    // 3 han 70 fu. Round-up ("kiriage") mangan at 4 han 30 fu / 3 han 60 fu is NOT applied -
+    // no such hand has been observed yet, and the 23 win screens of 2026-09-22 all matched
+    // this table exactly (docs/research/RULES_CROSSCHECK_2026_09_22.md).
+    public static int BasePointsFor(int fu, int totalHan, out string? limitName)
+    {
+        limitName = totalHan switch
+        {
+            >= 13 => "Kazoe Yakuman",
+            >= 11 => "Sanbaiman",
+            >= 8 => "Baiman",
+            >= 6 => "Haneman",
+            5 => "Mangan",
+            4 when fu >= 40 => "Mangan",
+            3 when fu >= 70 => "Mangan",
+            _ => null,
+        };
+        return limitName switch
+        {
+            "Kazoe Yakuman" => 8000,
+            "Sanbaiman" => 6000,
+            "Baiman" => 4000,
+            "Haneman" => 3000,
+            "Mangan" => 2000,
+            _ => fu * (1 << (2 + totalHan)),
+        };
+    }
+
+    // What the table says the winner collects in total, for a hand the GAME has already
+    // scored. Used to check our rules against the win screen every hand, which is the only
+    // way a rule difference (a limit boundary, a rounding rule) shows up as evidence rather
+    // than as a slow bias in every hand value we estimate.
+    public static int TotalPaymentFor(int fu, int han, bool isDealer, bool tsumo)
+    {
+        var basePoints = BasePointsFor(fu, han, out _);
+        if (!tsumo)
+            return RoundUpHundred(basePoints * (isDealer ? 6 : 4));
+        return isDealer
+            ? RoundUpHundred(basePoints * 2) * 3
+            : RoundUpHundred(basePoints * 2) + (RoundUpHundred(basePoints) * 2);
     }
 
     private static void ApplyLimit(ScoreResult result, WinMethod winMethod, bool isDealer, int basePoints, string limitName)
@@ -116,14 +143,7 @@ public sealed class ScoringEngine
 
     private static void AssertReferenceRon(int han, int fu, int expectedRon)
     {
-        var totalHan = han;
-        var basePoints = fu * (1 << (2 + totalHan));
-        if (totalHan == 5 || (totalHan == 4 && fu >= 40) || (totalHan == 3 && fu >= 70))
-        {
-            basePoints = 2000;
-        }
-
-        var payment = RoundUpHundred(basePoints * 4);
+        var payment = TotalPaymentFor(fu, han, isDealer: false, tsumo: false);
         if (payment != expectedRon)
         {
             throw new InvalidOperationException($"Reference score validation failed for {han} han {fu} fu.");

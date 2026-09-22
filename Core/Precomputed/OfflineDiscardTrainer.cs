@@ -15,6 +15,41 @@ public sealed class OfflineDiscardTrainer
 
     public OfflineDiscardTrainer(PolicyWeights? weights = null) => this.weights = weights ?? PolicyWeights.Default;
 
+    // Why this snapshot cannot be trained, or null when it can. Train itself still REFUSES
+    // such a row - a corpus is never silently narrowed underneath its caller - but a corpus
+    // recorded from live play always holds a few states the tracking got wrong (8 of 79 in
+    // the 2026-09-22 session, each with a fifth visible copy of a tile), so the CLI filters
+    // and reports with this before training instead of aborting on the first one.
+    public static string? Unusable(StateSnapshot state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (!DiscardActionSpace.Supports(state))
+            return "not a healthy, verified closed-hand draw with only discard legal";
+        var unseen = InitialUnseen();
+        foreach (var tile in state.Hand.Concat(state.SeenForAnalyzer()).Concat(state.DoraIndicators))
+        {
+            if (--unseen[Physical(tile)] < 0)
+                return $"more visible copies of {tile} than the tile set permits";
+        }
+
+        var remaining = unseen.Sum();
+        return state.WallRemaining is < 1 or > 70 || state.WallRemaining > remaining
+            ? $"wall {state.WallRemaining} does not fit the {remaining} unseen tiles"
+            : null;
+    }
+
+    // 37 physical types: ordinary 34 kinds plus the three red fives. Prototype assumes one
+    // red five in each suit, matching the current game.
+    private static int[] InitialUnseen()
+    {
+        var unseen = Enumerable.Repeat(4, 34).Concat(new[] { 1, 1, 1 }).ToArray();
+        foreach (var kind in new[] { 4, 13, 22 })
+            unseen[kind]--;
+        return unseen;
+    }
+
+    private static int Physical(Tile tile) => tile.IsRedFive ? 34 + (int)tile.Suit : TileHelpers.ToIndex(tile);
+
     public PolicyArtifact Train(IEnumerable<StateSnapshot> situations, TrainingOptions options, CancellationToken ct = default)
     {
         if (options.Iterations < 112 || options.Horizon is < 1 or > 16
@@ -60,16 +95,11 @@ public sealed class OfflineDiscardTrainer
             this.options = options;
             this.ct = ct;
             this.random = new Random(options.Seed);
-            // 37 physical types: ordinary 34 kinds plus the three red fives.
-            // Prototype assumes one red five in each suit, matching the current game.
-            this.initialUnseen = Enumerable.Repeat(4, 34).Concat(new[] { 1, 1, 1 }).ToArray();
-            foreach (var kind in new[] { 4, 13, 22 })
-                this.initialUnseen[kind]--;
+            if (Unusable(root) is { } why)
+                throw new ArgumentException($"Snapshot cannot be trained: {why}.", nameof(root));
+            this.initialUnseen = InitialUnseen();
             foreach (var tile in root.Hand.Concat(root.SeenForAnalyzer()).Concat(root.DoraIndicators))
-                if (--this.initialUnseen[Physical(tile)] < 0)
-                    throw new ArgumentException("Snapshot contains more visible copies than the tile set permits.");
-            if (root.WallRemaining is < 1 or > 70 || root.WallRemaining > this.initialUnseen.Sum())
-                throw new ArgumentException("Invalid remaining wall.");
+                this.initialUnseen[Physical(tile)]--;
         }
 
         public StoredDiscard[] Run()
@@ -214,7 +244,6 @@ public sealed class OfflineDiscardTrainer
             throw new InvalidOperationException("Unseen tile counts are inconsistent.");
         }
 
-        private static int Physical(Tile tile) => tile.IsRedFive ? 34 + (int)tile.Suit : TileHelpers.ToIndex(tile);
         private static int[] Availability(int[] unseen)
         {
             var counts = unseen.Take(34).ToArray();

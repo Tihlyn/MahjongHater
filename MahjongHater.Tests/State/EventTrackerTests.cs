@@ -28,6 +28,18 @@ public class EventTrackerTests
         return options.Length < 2 ? frame.WithString(8, "Pass") : frame;
     }
 
+    // A bare type-19 carrying the same payload with NO row count: the event the game also
+    // uses for another seat's Pon!/Chi! banner. Nothing in it says a local list is on screen.
+    private static AtkFrame CallBanner(params string[] options)
+    {
+        var codes = options.Select(Code).ToArray();
+        var frame = AtkFrame.OfInts([19, 0, codes.ElementAtOrDefault(0), codes.ElementAtOrDefault(1), .. new int[18]])
+            .WithString(6, options[0] + "!");
+        for (var i = 0; i < options.Length && i < 2; i++)
+            frame = frame.WithString(7 + i, options[i]);
+        return options.Length < 2 ? frame.WithString(8, "Pass") : frame;
+    }
+
     private static int Code(string option) => option switch
     {
         "Tsumo" => 1, "Ron" => 2, "Riichi" => 3, "Kan" => 4, "Pon" => 5, "Chi" => 6,
@@ -134,8 +146,24 @@ public class EventTrackerTests
         // No souzu at all: an 8s can be neither pon'd, chi'd nor ron'd.
         t.OnTick(StructFixture.Decoded("333m456m89m567p7p7z", null), [], T0);
         t.OnRefresh(Discard(2, "8s"), T0);
-        t.OnRefresh(CallWindow("Chi"), T0);
+        t.OnRefresh(CallBanner("Chi"), T0);
         Assert.False(t.CallWindowActive);
+    }
+
+    // ...but a type-23 whose row count matches its options is the game saying a local list is
+    // on screen. That outranks our hand read: dropping it would throw away a real prompt over
+    // a bug in the read, which is how a Ron on our own declared wait was passed
+    // (docs/research/WIN_OFFERS_2026_09_22.md).
+    [Fact]
+    public void A_corroborated_row_list_opens_even_when_our_read_cannot_explain_it()
+    {
+        var t = new EventTracker();
+        t.OnTick(StructFixture.Decoded("333m456m89m567p7p7z", null), [], T0);
+        t.OnRefresh(Discard(2, "8s"), T0);
+        t.OnRefresh(CallWindow("Pon"), T0);
+        Assert.True(t.CallWindowActive);
+        Assert.Equal(["Pon"], t.CallOptions);
+        Assert.Contains(t.RecentNotes(20), n => n.Contains("the read is wrong"));
     }
 
     [Fact]
@@ -144,7 +172,7 @@ public class EventTrackerTests
         var t = new EventTracker();
         t.OnTick(StructFixture.Decoded("45m111p222p333s7z9s", null), [], T0);
         t.OnRefresh(Discard(1, "3m"), T0); // shimocha: chi impossible
-        t.OnRefresh(CallWindow("Chi"), T0);
+        t.OnRefresh(CallBanner("Chi"), T0);
         Assert.False(t.CallWindowActive);
 
         t.OnRefresh(Discard(3, "3m"), T0); // kamicha: chi legal
@@ -291,7 +319,7 @@ public class EventTrackerTests
         Assert.True(t.CallWindowActive);
         Assert.Equal(["Riichi"], t.CallOptions); // banner deduped
 
-        t.MarkCallAnswered(isWin: false);
+        t.MarkCallAnswered(isWin: false, t.CallWindowGeneration);
         Assert.False(t.CallWindowActive);
         t.OnRefresh(CallWindow("Riichi"), T0); // echo
         Assert.False(t.CallWindowActive);
@@ -310,7 +338,7 @@ public class EventTrackerTests
         var t = new EventTracker();
         t.OnTick(StructFixture.Decoded("44m77m3p55p556s6699s", "3p"), [], T0);
         t.OnRefresh(CallWindow("Tsumo", "Riichi"), T0);
-        t.MarkCallAnswered(isWin: true);
+        t.MarkCallAnswered(isWin: true, t.CallWindowGeneration);
         Assert.True(t.WinDeclared);
         t.OnRefresh(AtkFrame.OfInts([32, .. new int[21]]).WithString(2, "East 2 East Wind"), T0);
         Assert.False(t.WinDeclared);
@@ -324,7 +352,7 @@ public class EventTrackerTests
         var t = new EventTracker();
         t.OnTick(StructFixture.Decoded("44m77m3p55p556s6699s", "3p"), [], T0);
         t.OnRefresh(CallWindow("Tsumo", "Riichi"), T0);
-        t.MarkCallAnswered(isWin: true);
+        t.MarkCallAnswered(isWin: true, t.CallWindowGeneration);
         Assert.True(t.WinDeclared);
         t.OnRefresh(Discard(2, "9m"), T0);
         Assert.False(t.WinDeclared);
@@ -337,7 +365,7 @@ public class EventTrackerTests
         t.OnTick(StructFixture.Decoded("233m2345p0p23456s", null), [], T0);
         t.OnRefresh(Discard(3, "4s"), T0);
         t.OnRefresh(CallWindow("Chi"), T0);
-        t.MarkCallAnswered(isWin: false);                          // "Chi" row clicked
+        t.MarkCallAnswered(isWin: false, t.CallWindowGeneration);                          // "Chi" row clicked
         Assert.False(t.CallWindowActive);
 
         int I(string tile) => StructFixture.IconOf(Tile.Parse(tile), 76041);
@@ -349,6 +377,64 @@ public class EventTrackerTests
         Assert.Equal(Tile.Parse("4s"), t.CallTile);
         Assert.Equal(3, t.CallFromSeat);
         Assert.Equal(3, t.CallShapes.Count);
+    }
+
+    // The reverse of the test above, and the ordering the audit asked for: a Chi row can
+    // raise its type-25 shape chooser synchronously, INSIDE the ReceiveEvent our dispatch
+    // is still in. The answer names the window it was aimed at, so it must not clear the
+    // chooser that is now on screen (docs/research/CALL_WINDOW_AUDIT_2026_09_22.md).
+    [Fact]
+    public void Answer_aimed_at_a_superseded_window_leaves_the_new_one_open()
+    {
+        var t = new EventTracker();
+        t.OnTick(StructFixture.Decoded("233m2345p0p23456s", null), [], T0);
+        t.OnRefresh(Discard(3, "4s"), T0);
+        t.OnRefresh(CallWindow("Chi"), T0);
+        var answered = t.CallWindowGeneration;           // captured before the click, as the actuator does
+
+        int I(string tile) => StructFixture.IconOf(Tile.Parse(tile), 76041);
+        t.OnRefresh(AtkFrame.OfInts(25, 6, 0, 3,
+            I("2s"), I("3s"), I("4s"), 76041,
+            I("3s"), I("4s"), I("5s"), 76041,
+            I("4s"), I("5s"), I("6s"), 76041).WithString(2, "Chi"), T0);
+        Assert.NotEqual(answered, t.CallWindowGeneration);
+
+        t.MarkCallAnswered(isWin: false, answered);
+        Assert.True(t.CallWindowActive);
+        Assert.Equal(3, t.CallShapes.Count);
+        Assert.Contains(t.RecentNotes(20), n => n.Contains($"answer for call window #{answered} ignored"));
+    }
+
+    // A win answered against the wrong window must not set WinDeclared either: that holds
+    // the phase at RoundEnd and would freeze every decision after it.
+    [Fact]
+    public void A_superseded_win_answer_does_not_declare_the_win()
+    {
+        var t = new EventTracker();
+        var hand = StructFixture.Decoded("44m77m3p55p556s6699s", "3p");
+        t.OnTick(hand, [], T0);
+        t.OnRefresh(CallWindow("Tsumo", "Riichi"), T0);
+        var stale = t.CallWindowGeneration - 1;
+
+        t.MarkCallAnswered(isWin: true, stale);
+        Assert.False(t.WinDeclared);
+        Assert.True(t.CallWindowActive);
+    }
+
+    [Fact]
+    public void Each_window_gets_its_own_generation()
+    {
+        var t = new EventTracker();
+        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), [], T0);
+        t.OnRefresh(Discard(1, "2z"), T0);
+        t.OnRefresh(CallWindow("Pon"), T0);
+        var first = t.CallWindowGeneration;
+
+        t.MarkCallAnswered(isWin: false, first);
+        t.OnRefresh(Discard(2, "2z"), T0);
+        t.OnRefresh(CallWindow("Pon"), T0);
+        Assert.True(t.CallWindowActive);
+        Assert.True(t.CallWindowGeneration > first);
     }
 
     [Fact]

@@ -23,6 +23,8 @@ public sealed unsafe class EmjStateReader : IDisposable
     private readonly IAddonLifecycle.AddonEventDelegate onReceiveEvent;
     private int ticks;
     private bool readFailureLogged;
+    private string lastHealthSignature = string.Empty;
+    private WinScreen? lastCheckedWin;
 
     // Tenpai ground truth: the last in-play snapshot is frozen when the phase turns to
     // RoundEnd, then the seat banners are polled until the announcement has landed.
@@ -111,6 +113,8 @@ public sealed unsafe class EmjStateReader : IDisposable
                 this.ScanWinds(addon);
 
             this.Current = this.builder.Build(decoded, this.tracker, this.Layout, new RulesetOptions(this.configuration.Kuitan, (int)this.configuration.GameLength));
+            this.LogHealthChanges(this.Current);
+            this.CheckScoringAgainstTheGame();
             this.RecordTenpaiGroundTruth(addon, this.Current);
         }
         catch (Exception ex)
@@ -119,8 +123,55 @@ public sealed unsafe class EmjStateReader : IDisposable
         }
     }
 
+    // The snapshot's health notes are the plugin's own account of where its read disagrees
+    // with the game - a wrong closed count, an undecodable slot, a meld it cannot source,
+    // a hand that does not add up. Until 2026-09-22 they went only to the overlay and stall
+    // dumps, so a session log could never show that a decision was taken on a drifted hand
+    // (docs/research/WIN_OFFERS_2026_09_22.md). Logged once per change, not per frame.
+    private void LogHealthChanges(StateSnapshot? snapshot)
+    {
+        var notes = snapshot?.Notes ?? [];
+        var signature = string.Join(" | ", notes);
+        if (signature == this.lastHealthSignature)
+            return;
+        this.lastHealthSignature = signature;
+        if (notes.Count > 0)
+            this.pluginLog.Warning($"[State] Read health: {signature}");
+        else
+            this.pluginLog.Information("[State] Read health: clean.");
+    }
+
+    // The win screen states fu, han, the limit the game applied and what the winner
+    // collects. That is the only ground truth we ever get for the scoring RULES, and it
+    // arrives for all four seats every hand - so the payout table is checked against it
+    // rather than trusted from the Lodestone pages, which do not state the limit rounding
+    // at all. All 23 win screens of 2026-09-22 matched; the untested boundary is round-up
+    // ("kiriage") mangan at 4 han 30 fu / 3 han 60 fu, which this will catch the first time
+    // one appears (docs/research/RULES_CROSSCHECK_2026_09_22.md).
+    private void CheckScoringAgainstTheGame()
+    {
+        if (this.tracker.LastWinScreen is not { Points: > 0 } screen || screen == this.lastCheckedWin)
+            return;
+        this.lastCheckedWin = screen;
+        var expected = ScoringEngine.TotalPaymentFor(screen.Fu, screen.Han, screen.WinnerIsDealer, screen.Tsumo);
+        var who = $"{(screen.WinnerIsDealer ? "dealer" : "non-dealer")} {(screen.Tsumo ? "tsumo" : "ron")}";
+        if (expected == screen.Points)
+        {
+            this.pluginLog.Information($"[Rules] Win screen {screen.Fu} fu {screen.Han} han"
+                                       + $"{(screen.Limit.Length > 0 ? " " + screen.Limit : string.Empty)} ({who}): "
+                                       + $"game paid {screen.Points}, our table agrees.");
+            return;
+        }
+
+        this.pluginLog.Warning($"[Rules] SCORING MISMATCH: the game paid {screen.Points} for {screen.Fu} fu {screen.Han} han"
+                               + $"{(screen.Limit.Length > 0 ? " " + screen.Limit : string.Empty)} ({who}) and our table says {expected}. "
+                               + "Every hand value the policy estimates uses that table.");
+    }
+
     public void Reset()
     {
+        this.lastCheckedWin = null;
+        this.lastHealthSignature = string.Empty;
         this.tracker.Reset();
         this.Current = null;
         this.builder.BuildNotInGame();

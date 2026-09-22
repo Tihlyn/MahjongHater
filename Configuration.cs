@@ -50,12 +50,23 @@ public sealed class Configuration : IPluginConfiguration
 
     public bool Requeue { get; set; }
 
-    // Anti-idle for unattended runs: duties eject after ~5 minutes without input, and the
-    // auto player's ATK events do not count as input (Core/Operate/IdleGuard.cs).
+    // Read game idle counters and send a brief Control press during unattended matches.
     public bool AntiIdle { get; set; } = true;
 
-    // No interval or key any more: the guard writes the game's own idle timers
-     // (Core/Operate/IdleGuard.cs), so there is nothing to tune.
+    // Addon interaction (docs/research/ADDON_INTERACTION_2026_09_22.md). Both default to
+    // the verified behaviour and are read every frame, so the alternatives can be compared
+    // in play without a rebuild.
+    //
+    // HoverEscalation: allow an activation the game demonstrably ignored to switch this
+    // match to the MouseOver+MouseOut click style. Off, because unpaired hover is the
+    // suspect behind the three 2026-09-22 AgentEmj.Update crashes and the pairing has not
+    // been matched against a manual-input trace yet.
+    public bool HoverEscalation { get; set; }
+
+    // NativeListSelection: commit a call row with AtkComponentList.SelectItem(index, true)
+    // instead of the list's registered ListItemClick. The registered event is what the
+    // 2026-07/09 sessions verified; this is the comparison route, not an adopted one.
+    public bool NativeListSelection { get; set; }
 
     public uint RequeueDuty { get; set; } = 766;   // Novice Mahjong (Quick Ranked Match)
 

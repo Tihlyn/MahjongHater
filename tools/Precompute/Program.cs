@@ -40,10 +40,38 @@ try
     {
         var options = new TrainingOptions(args.Length > 3 ? int.Parse(args[3]) : 2048,
             args.Length > 4 ? int.Parse(args[4]) : 3, args.Length > 5 ? int.Parse(args[5]) : 1);
-        var artifact = new OfflineDiscardTrainer(weights).Train(snapshots, options, cancellation.Token);
+        // A corpus recorded from live play holds states the tracking got wrong, and the
+        // trainer refuses those outright. Report and skip them here rather than losing a
+        // whole session's recording to its first bad row.
+        var usable = new List<StateSnapshot>();
+        var skipped = new List<string>();
+        var row = 0;
+        foreach (var snapshot in snapshots)
+        {
+            row++;
+            var why = OfflineDiscardTrainer.Unusable(snapshot);
+            if (why is null)
+                usable.Add(snapshot);
+            else
+                skipped.Add($"  line {row}: {why}");
+        }
+
+        if (skipped.Count > 0)
+        {
+            Console.Error.WriteLine($"Skipping {skipped.Count} of {row} snapshots the trainer cannot use:");
+            foreach (var line in skipped.Take(20))
+                Console.Error.WriteLine(line);
+            if (skipped.Count > 20)
+                Console.Error.WriteLine($"  ... and {skipped.Count - 20} more");
+        }
+
+        if (usable.Count == 0)
+            throw new ArgumentException($"None of the {row} snapshots is a healthy closed-hand discard position.");
+        var artifact = new OfflineDiscardTrainer(weights).Train(usable, options, cancellation.Token);
         cancellation.Token.ThrowIfCancellationRequested();
         PolicyTable.Save(args[2], artifact);
-        Console.WriteLine($"Wrote {artifact.Entries.Length} states to {args[2]} ({artifact.Model}, {options.Iterations} iterations/state).");
+        Console.WriteLine($"Wrote {artifact.Entries.Length} states to {args[2]} ({artifact.Model}, {options.Iterations} iterations/state)"
+                          + $" from {usable.Count} of {row} snapshots.");
     }
     else
     {

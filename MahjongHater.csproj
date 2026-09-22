@@ -63,6 +63,10 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <EmbeddedResource Include="resources/policy/deal_in_rates.json" LogicalName="MahjongHater.resources.policy.deal_in_rates.json" />
+    <!-- An offline lookup table ships the same way once tools/Precompute has produced one:
+         resources/policy/precomputed_policy.json[.gz] is already covered by the glob above,
+         and a packed simulation database goes in resources/policy/simulation_policy. -->
+    <None Include="resources/policy/simulation_policy/**" CopyToOutputDirectory="PreserveNewest" />
     <!-- Learned models ship with the plugin, gzipped (37 MB each); LearnedModel.Load reads
          .json.gz directly, and a model in the config folder overrides the shipped one. -->
     <None Update="resources/models/*.json.gz">

@@ -169,6 +169,8 @@ public sealed class MainWindow : Window
             Widgets.Wrapped($"Precomputed tables: {(precomputed.Loaded ? "loaded" : "not in use")} — {precomputed.Detail}");
         }
 
+        this.DrawInteraction();
+
         var player = this.plugin.AutoPlayer;
         var queuer = this.plugin.Queuer;
         using (Widgets.Card())
@@ -176,7 +178,9 @@ public sealed class MainWindow : Window
             Widgets.Label("AUTO PLAY COUNTERS");
             var guard = this.plugin.IdleGuard;
             Widgets.Wrapped($"{player.DecisionsExecuted} decisions · {player.StallsThisSession} stalls · {player.RecoveriesThisSession} recoveries · {queuer.MatchesQueued} queued", false);
-            Widgets.Wrapped($"Idle timer: {guard.Status}");
+            Widgets.Wrapped($"Anti-AFK: {guard.Status} · {guard.NudgesThisSession} presses");
+            if (guard.LastNudgeObservedReset == false)
+                Widgets.Badge("Last press did not reduce the idle counters", warning: true);
             if (guard.HighestSeenSeconds > 120)
                 Widgets.Badge($"An idle timer reached {guard.HighestSeenSeconds:F0} s", warning: true);
             if (player.StallsThisSession > 0)
@@ -270,6 +274,38 @@ public sealed class MainWindow : Window
     // Dev tooling for unattended matches: the auto player executes the overlay's own
     // decisions, the queuer keeps the Duty Finder fed. Both report one status line each;
     // a stall is called out loudly because it is what these runs are looking for.
+    // How the plugin is talking to the addon right now, and what the last attempt did.
+    // "Dispatched" and "accepted" are deliberately different words here.
+    private void DrawInteraction()
+    {
+        var player = this.plugin.AutoPlayer;
+        using (Widgets.Card())
+        {
+            Widgets.Label("ADDON INTERACTION");
+            Widgets.Wrapped($"Click style: {Core.Operate.EmjOperator.Style} · call rows: {Core.Operate.EmjOperator.Route}");
+            Widgets.Wrapped($"Last action: {player.LastDispatchStatus}");
+            if (Widgets.ToggleRow("Allow the hover click style", "##hoverescalation", this.configuration.HoverEscalation))
+            {
+                this.configuration.HoverEscalation = !this.configuration.HoverEscalation;
+                this.configuration.Save();
+            }
+
+            if (ImGui.IsItemHovered())
+                Widgets.Tooltip("Off: clicks are the activation chain alone. On: an activation the game ignored switches this match "
+                    + "to a matched MouseOver+MouseOut before the click — the style that preceded three AgentEmj.Update crashes.");
+
+            if (Widgets.ToggleRow("Native list selection for call rows", "##nativelist", this.configuration.NativeListSelection))
+            {
+                this.configuration.NativeListSelection = !this.configuration.NativeListSelection;
+                this.configuration.Save();
+            }
+
+            if (ImGui.IsItemHovered())
+                Widgets.Tooltip("Off: the list's own registered ListItemClick, which the 2026-07/09 sessions verified. "
+                    + "On: AtkComponentList.SelectItem(index, dispatch) — a comparison route, unverified here.");
+        }
+    }
+
     private void DrawAutoPlay()
     {
         var player = this.plugin.AutoPlayer;
@@ -298,7 +334,7 @@ public sealed class MainWindow : Window
             Widgets.Wrapped(queuer.Status);
 
             var guard = this.plugin.IdleGuard;
-            if (Widgets.ToggleRow("Hold the duty idle timer (ejection after ~5 min)", "##antiidle", guard.Enabled))
+            if (Widgets.ToggleRow("Prevent inactivity ejection during auto play", "##antiidle", guard.Enabled))
             {
                 guard.Enabled = !guard.Enabled;
                 guard.Reset();
@@ -307,10 +343,8 @@ public sealed class MainWindow : Window
             }
 
             if (ImGui.IsItemHovered())
-                Widgets.Tooltip("While auto play runs a match, keeps the client's own idle timers at zero "
-                    + "(UIModule.InputTimerModule), the same way real input does. Synthetic input does not reset them, "
-                    + "and the auto player's clicks are addon events the timers never see. Outside an unattended match "
-                    + "the normal AFK behaviour is untouched.");
+                Widgets.Tooltip("While auto play runs a match, sends a brief Control press to the game window "
+                    + "when its idle counters exceed 30 seconds. Diagnostics shows whether the counters fell afterward.");
             this.DrawDutyPicker(queuer);
         }
     }

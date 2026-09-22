@@ -213,10 +213,25 @@ draw; a Kan-only set is a claim only when we hold three of the offered tile. The
 the fresh opponent discard, else type-19 `[4]`, else whatever the struct parked in slot 13 when the
 hand has claim shape (`MaxClosedTiles(melds) − 1`).
 
-**Legality gate** — the game only opens a claim window when a call is legal for *our* hand, so a
-window whose tile admits no pon/kan/chi (kamicha only)/ron (`HandTracking.HasAnyLegalCall`) is
-another seat's banner or a stale panel and is dropped. Fails open when the hand is not in claim
-shape (mid-transition).
+**Legality gate** — a claim window whose tile admits no pon/kan/chi (kamicha only)/ron
+(`HandTracking.InferClaims`) is another seat's banner or a stale panel and is dropped. Fails open
+when the hand is not in claim shape (mid-transition).
+
+**...unless the game corroborates it.** A type-23 whose `[1]` row count equals its option codes
+plus Pass describes a **row list the game is showing us**; an announcement of another seat's call
+has none (145/145 type-23 frames on 2026-09-22). That outranks our hand read: such a window opens
+even when our closed tiles cannot explain it, and the disagreement is recorded instead. Only the
+uncorroborated sources — a bare type-19 and the label edge — are still gated by the hand read,
+because for them it is the only evidence there is. Dropping a corroborated window over a drifted
+read is how a Ron on our own declared wait was passed
+(docs/research/WIN_OFFERS_2026_09_22.md).
+
+**Claims as an oracle** — which of Chi/Pon/Kan a tile allows is pure arithmetic over the closed
+hand: no yaku, no furiten, no rule option. `SnapshotBuilder` therefore compares the game's offer
+against `HandTracking.InferClaims` on every confirmed claim window and reports any difference as a
+read-health note (the game offering what we cannot derive = tiles missing from our read; the
+reverse = tiles we hold that are not there). Ron is checked in one direction only, since the game
+also requires a yaku and a furiten-free wait.
 
 **Snapshot** — `Phase = CallPrompt` / `SelfDeclare`, `Legal` = the offered options + Pass (+ Discard
 for a self-declare with the draw in hand), `CallTile`/`CallFromSeat`, `CallShapes` for the chooser.
@@ -270,36 +285,52 @@ wiring to retire it.
 
 **Firing strategy (`EmjOperator`)** — reuse the events *registered* on the target node (correct
 listener, param, target) and deliver exactly one semantic activation per click:
-`ButtonClick` > `ListItemClick` > `MouseClick` > `MouseDown`+`MouseUp`, preceded by the node's
-`MouseOver`; search the subtree per event type, preferring an addon-bound **visible** chain (the
-only one the game reacts to). Chain params are authoritative (a slot's `ButtonClick` param is
-slot+15, not the slot index). A list row is committed through the list's addon-bound
-`ListItemClick` with `ListItemData` (index from the item table, label from the renderer text).
-`FireCallback(int…)` covers handlers wired at the callback layer.
+`ButtonClick` > `ListItemClick` > `MouseClick` > `MouseDown`+`MouseUp`; search the subtree per
+event type, preferring an addon-bound **visible** chain (the only one the game reacts to). Chain
+params are authoritative (a slot's `ButtonClick` param is slot+15, not the slot index). A list row
+is committed through the list's addon-bound `ListItemClick` with a **zeroed, list-shaped**
+`ListItemData` (index and renderer from the item table) — `AtkEventData` is a union whose
+`MouseData.PosX/PosY` overlap `ListItemData.ListItemRenderer` at offset 0, so a mouse payload
+would leave screen coordinates in a pointer field. `FireCallback(int…)` covers handlers wired at
+the callback layer.
+
+Since 2026-09-22 every entry point is guarded and returns a `Dispatch` that says *what was sent*
+or *which guard refused* — there is no synthetic click, no row-0 fallback and no dispatch at a
+control whose ancestor chain is hidden. Diagnostic scalars are copied before `ReceiveEvent`,
+because a handler may rebuild the tree. No `MouseOver` precedes a click by default; the hover
+style is opt-in and needs a matched `MouseOver`/`MouseOut` pair on one holder. See
+[the rework record](research/ADDON_INTERACTION_2026_09_22.md).
 
 **Actuation (`EmjActuator.Execute`)**:
 
 | Decision | Click |
 |---|---|
-| Discard / riichi discard | slot from `FindSlotNodeForTile`, only if it has a visible addon-bound `ButtonClick`; otherwise the next candidate (`RECOVERY:` in the journal) |
-| Pon / Chi / Kan / Ron / Tsumo / Riichi | `ClickByLabel` → row of `104/3` by renderer text → `ListItemClick` |
+| Discard / riichi discard | slot from `FindSlotNodeForTile`, only if it has a visible addon-bound `ButtonClick` and a visible ancestor chain; otherwise the next candidate (`RECOVERY:` in the journal) |
+| Pon / Chi / Kan / Ron / Tsumo / Riichi | `AnswerCall` → `CallRowResolver` over the live item table of `104/3` → `SelectRow` |
 | Chi with chooser | the `52/5..8` button whose three tiles equal the policy's meld |
-| Pass | row "Pass" of `104/3`, or `52/11` in the chooser |
-| Recap | `SelectYesno` Yes if one is up, else node 97, else "End match" |
+| Pass | the "Pass" row of `104/3`, or `52/11` in the chooser |
+| Recap | `SelectYesno` Yes if one is up, else node 97, else the "End match" **button** (a list row is refused here) |
 
-Every list answer calls `MarkCallAnswered(isWin)`. Verified live 2026-09-19 (two matches, one
+A call answer requires an **event-confirmed** window (a label-only window is panel residue),
+a call list whose whole ancestor chain is visible, rows that still carry the open window's
+options, and exactly one matching row with a renderer. It then calls
+`MarkCallAnswered(isWin, generation)` with the window generation captured *before* dispatch, so
+a prompt the handler opens synchronously (the type-25 chi chooser) is not cleared by the answer
+to the window it replaced. Verified live 2026-09-19 (two matches, one
 full hanchan finished 1st): pon accept + post-call discard, riichi → discard → Ron, tsumo (chiitoi),
 open-tanyao Ron, chooser pick, Pass on a 3-row list (`Kan`,`Pon`,`Pass` → row 2). Kan was never
 executed; the chooser's Cancel is untested.
 
 **Driver (`AutoPlayer.Tick`)** — executes a decision once per analysis fingerprint that matches
 the live state and is actionable (Discard/Riichi need `Legal.Discard`; Pass needs a prompt or the
-chooser; `None` never). Retries after 6 s (max 3). Clicks through recaps every 4 s. **Stall** = no
+chooser; `None` never). A dispatch is remembered until the snapshot sequence moves: that, and only
+that, counts as the game accepting it, and Diagnostics reports the two separately. Retries after
+6 s (max 3). Clicks through recaps every 4 s. **Stall** = no
 `Sequence` change for 15 s on `OurTurn`/`CallPrompt`/`SelfDeclare`, 45 s otherwise → appends a dump
 to `pluginConfigs/MahjongHater/autoplay_stalls.log` (snapshot, decision + reasoning steps, prompt
 rows, per-slot discardability, journal, the tracker's last 120 notes), then a recovery ladder:
-Pass (+5 s), discard the draw or any clickable slot (+15 s), recap buttons (+30 s), repeated every
-30 s. All of it is journaled and mirrored to the Dalamud log as `[AutoPlay]`.
+Pass through the same guarded call path (+5 s), discard the draw or any clickable slot **only
+while a discard is legal** (+15 s), recap buttons (+30 s), repeated every 30 s. All of it is journaled and mirrored to the Dalamud log as `[AutoPlay]`.
 
 **Requeue (`MatchQueuer.Tick`)** — Doman Mahjong is a Duty Finder duty (Gold Saucer tab).
 Solo ContentFinderCondition rows: **643** Novice Full Ranked, **766** Novice Quick Ranked, **644**

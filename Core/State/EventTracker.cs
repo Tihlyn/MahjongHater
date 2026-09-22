@@ -51,6 +51,12 @@ public sealed class EventTracker
     private string lastPromptSignature = string.Empty;
     private bool callWindowFromLabels;
     private DateTime labelWindowOpenedUtc;
+
+    // Identity of the CURRENT window: bumped on every open (event, label edge or the
+    // type-25 shape chooser). An operator captures it before dispatch and hands it back
+    // with the answer, so a handler that synchronously opens the NEXT prompt inside
+    // ReceiveEvent cannot have that new prompt cleared by the old one's answer.
+    private long callWindowGeneration;
     // Options of the window the actuator already answered: the game echoes the selection
     // as a type-19 with the same labels (verified live 2026-09-19), which must not re-open it.
     private string? answeredSignature;
@@ -110,6 +116,9 @@ public sealed class EventTracker
     // prompts always come with the event, so an actuator should not answer such a window.
     public bool CallWindowFromLabels => this.callWindowActive && this.callWindowFromLabels;
 
+    // Monotonic id of the open window; 0 before the first one. See callWindowGeneration.
+    public long CallWindowGeneration => this.callWindowGeneration;
+
     public IReadOnlyList<string> CallOptions => this.callOptions;
 
     // Non-empty while the game asks which two hand tiles form the chi (state 25).
@@ -138,16 +147,33 @@ public sealed class EventTracker
 
     // The actuator answered the open window (list row clicked). Clears it so the next
     // snapshot moves on (a riichi needs its discard right after), and ignores the echo.
-    public void MarkCallAnswered(bool isWin)
+    //
+    // `generation` is the window the answer was aimed at, captured BEFORE dispatch. A
+    // native handler may open the next prompt while ReceiveEvent is still running — a Chi
+    // row raises its type-25 shape chooser that way — and clearing "the current window"
+    // then would throw away the prompt that is actually on screen.
+    public void MarkCallAnswered(bool isWin, long generation)
     {
         if (!this.callWindowActive)
             return;
+        if (generation != this.callWindowGeneration)
+        {
+            this.Note($"answer for call window #{generation} ignored: #{this.callWindowGeneration} [{string.Join(",", this.callOptions)}] is open now");
+            return;
+        }
+
         this.answeredSignature = string.Join(",", this.callOptions);
         this.WinDeclared |= isWin;
         this.answeredCallTile = this.callTile;
         this.answeredCallFromSeat = this.callFromSeat;
         this.ClearCallWindow("answered by operator");
     }
+
+    // The fu/han/limit/payment the game itself printed for the last win, or null when the
+    // screen carried none. It is the only ground truth we get for the scoring rules, so it
+    // is checked against ScoringEngine every hand rather than trusted from documentation
+    // (docs/research/RULES_CROSSCHECK_2026_09_22.md).
+    public WinScreen? LastWinScreen { get; private set; }
 
     public IReadOnlyList<string> RecentNotes(int tail) => this.noteRing.TakeLast(Math.Clamp(tail, 1, NoteRingCap)).ToList();
 
@@ -317,7 +343,11 @@ public sealed class EventTracker
                 Tile? offered = this.FreshOpponentDiscard(utc);
                 if (offered is null && f.IsInt(4) && TileHelpers.TryTileFromIconId(f.Int(4), out var called))
                     offered = called;
-                this.OpenCallWindow(opts, offered, "type-19");
+                // A type-23 whose row count is exactly "options + Pass" describes a LIST the
+                // game is asking us to choose from - an announcement of someone else's call
+                // has no such list. That is the game's own statement that the prompt is
+                // local, and it held on all 145 type-23 frames of 2026-09-22.
+                this.OpenCallWindow(opts, offered, "type-19", localList: countMatches);
                 break;
             }
 
@@ -362,6 +392,7 @@ public sealed class EventTracker
                 var fromSeat = this.callFromSeat >= 0 ? this.callFromSeat : this.answeredCallFromSeat;
                 this.answeredSignature = null;
                 this.callWindowActive = true;
+                this.callWindowGeneration++;
                 this.callWindowFromLabels = false;
                 this.callOptions = ["Chi"];
                 this.callShapes = shapes;
@@ -386,10 +417,13 @@ public sealed class EventTracker
                 break;
             }
 
-            case 32: // win screen: [1]=winner seat, [2]="East 3 South Wind"
+            case 32: // win screen: [1]=winner seat, [2]="East 3 South Wind", [3]=1 when the
+                     // winner is the dealer, [6]="40 Fu 3 Han [Mangan]", [7]=points/100,
+                     // [8]=1 on tsumo (all four confirmed against 23 win screens, 2026-09-22).
             {
                 this.roundEnded = true;
                 this.WinDeclared = false;
+                this.LastWinScreen = ParseWinScreen(f);
                 this.LastWinnerSeat = f.Int(1) is >= 0 and <= 3 ? f.Int(1) : -1;
                 this.LastWinByRon = this.discardSinceTurnAdvance && this.LastWinnerSeat >= 0 && this.LastWinnerSeat != this.lastDiscardSeat;
                 this.RonVictimSeat = this.LastWinByRon ? this.lastDiscardSeat : -1;
@@ -567,7 +601,10 @@ public sealed class EventTracker
     // Legality gate: the game only opens a claim window when a call is legal for OUR
     // hand; a window failing it is another seat's action or a stale panel. Fails open
     // when the hand is not a plausible claim-time size (mid-transition).
-    private void OpenCallWindow(List<string> options, Tile? offered, string source)
+    // localList: the frame itself proved the game is showing US a row list (a type-23 whose
+    // row count matches its option codes plus Pass). Only then may the window override what
+    // our own hand read believes.
+    private void OpenCallWindow(List<string> options, Tile? offered, string source, bool localList = false)
     {
         // "Pon!" / "Riichi!" is the announcement banner echoing the same option.
         options = options.Select(o => o.TrimEnd('!')).Distinct().ToList();
@@ -593,12 +630,28 @@ public sealed class EventTracker
         if (isClaim && candidate is { } tile && claimShape
             && !HandTracking.HasAnyLegalCall(this.lastClosed, tile, meldCount, allowChi: this.lastOpponentDiscardSeat is 3 or -1))
         {
-            this.Note($"call window ({source}) for {tile}: no legal local call — not ours; ignoring");
-            this.ClearCallWindow("not our window");
-            return;
+            // Our own hand read is the discriminator only while nothing better exists. A
+            // label edge, or a bare type-19 (the event the game also uses for another seat's
+            // Pon!/Chi! banner), carries no proof that the prompt is local, so a claim we
+            // cannot derive is someone else's announcement or stale panel text.
+            if (!localList)
+            {
+                this.Note($"call window ({source}) for {tile}: no legal local call — not ours; ignoring");
+                this.ClearCallWindow("not our window");
+                return;
+            }
+
+            // A corroborated row list IS the game stating the prompt is ours. Suppressing it
+            // because our read cannot explain it would throw a real window away over a bug in
+            // the read — the exact failure that passed a Ron on our own declared wait — so the
+            // window opens and the disagreement is recorded instead
+            // (docs/research/WIN_OFFERS_2026_09_22.md).
+            this.Note($"call window ({source}) for {tile}: the game is showing a local row list and our closed read "
+                      + $"[{string.Join(" ", this.lastClosed)}] supports no call on it — opening anyway; the read is wrong");
         }
 
         this.callWindowActive = true;
+        this.callWindowGeneration++;
         this.callWindowFromLabels = source == "label edge";
         if (this.callWindowFromLabels)
             this.labelWindowOpenedUtc = this.lastTickUtc;
@@ -606,7 +659,7 @@ public sealed class EventTracker
         this.CallIsClaim = isClaim;
         this.callTile = isClaim ? candidate : null;
         this.callFromSeat = isClaim && offered is not null ? this.lastOpponentDiscardSeat : -1;
-        this.Note($"call window ({source}): [{string.Join(",", options)}] tile={this.callTile?.ToString() ?? "-"} claim={isClaim}");
+        this.Note($"call window #{this.callWindowGeneration} ({source}): [{string.Join(",", options)}] tile={this.callTile?.ToString() ?? "-"} claim={isClaim}");
     }
 
     // Option codes of a type-19/23 row (live 2026-09-22; see the decode above).
@@ -622,6 +675,24 @@ public sealed class EventTracker
     };
 
     private static bool IsOption(string s) => s is "Chi" or "Pon" or "Kan" or "Ron" or "Riichi" or "Tsumo";
+
+    // "40 Fu 3 Han" / "25 Fu 5 Han Mangan" - fu, han and the limit name the game applied.
+    private static WinScreen? ParseWinScreen(AtkFrame f)
+    {
+        var text = f.Str(6);
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+        var m = System.Text.RegularExpressions.Regex.Match(text, @"^\s*(\d+)\s*Fu\s+(\d+)\s*Han\s*(.*)$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!m.Success)
+            return null;
+        var fu = int.Parse(m.Groups[1].Value);
+        var han = int.Parse(m.Groups[2].Value);
+        if (fu is < 20 or > 140 || han is < 1 or > 52)
+            return null;
+        return new WinScreen(fu, han, m.Groups[3].Value.Trim(), f.IsInt(7) ? f.Int(7) * 100 : -1,
+            f.Int(3) == 1, f.Int(8) == 1);
+    }
 
     private void ClearCallWindow(string why)
     {
@@ -751,3 +822,7 @@ public sealed class EventTracker
         this.Note(message);
     }
 }
+
+// What the game printed on its own win screen. Points is the total the winner collects
+// (-1 when the frame did not carry it), before any honba bonus.
+public sealed record WinScreen(int Fu, int Han, string Limit, int Points, bool WinnerIsDealer, bool Tsumo);

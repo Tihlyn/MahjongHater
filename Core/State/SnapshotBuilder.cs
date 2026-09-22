@@ -50,9 +50,28 @@ public sealed class SnapshotBuilder
         if (s.BaseShifted)
             notes.Add($"icon base shifted to {s.EffectiveIconBase}");
 
+        // A hand only ever totals 13 (waiting) or 14 (holding a draw/claim), counting every
+        // meld as three whether it is a kan or not. Anything else means the closed read and
+        // the meld list disagree, and every decision built on it is guesswork - the policy
+        // used to discover this silently, deep inside the win evaluation, and answer a Ron
+        // window with Pass (docs/research/WIN_OFFERS_2026_09_22.md).
+        var handTotal = hand.Count + (3 * melds.Count);
+        if (handTotal is not (13 or 14) && s.StateCode != layout.StateCodes.Deal
+            && s.StateCode != layout.StateCodes.Win && s.StateCode != layout.StateCodes.PostWin)
+            notes.Add($"hand does not add up: {hand.Count} closed + {melds.Count} meld(s) = {handTotal}, expected 13 or 14");
+
         var callTile = t.CallWindowActive && t.CallIsClaim ? t.CallTile : null;
         var options = t.CallWindowActive ? t.CallOptions.ToList() : [];
         var selfDeclare = t.CallWindowActive && !t.CallIsClaim;
+
+        // Work the window backwards as a CHECK, never as the source. Which of Chi/Pon/Kan a
+        // tile allows is pure arithmetic over the closed hand, so the game's own offer and
+        // our read must agree - and when they do not, the offer is right and the read is the
+        // bug. This turns every claim window into an assertion about the hand
+        // (docs/research/WIN_OFFERS_2026_09_22.md); across 2026-09-22's 242 confirmed claim
+        // windows the coarse version of this check never once disagreed.
+        if (t.CallWindowActive && !t.CallWindowFromLabels && t.CallIsClaim && callTile is { } claimed)
+            notes.AddRange(ClaimMismatches(hand, melds.Count, claimed, t.CallFromSeat, options));
 
         var doras = new List<Tile>();
         if (s.DoraIndicator is { } dora && (s.DoraIndicatorCount ?? 1) > 0)
@@ -135,6 +154,7 @@ public sealed class SnapshotBuilder
             CallShapes = t.CallWindowActive
                 ? t.CallShapes.Select(s => new Meld(MeldType.Chi, s, true)).ToList()
                 : [],
+            CallWindowConfirmed = t.CallWindowActive && !t.CallWindowFromLabels,
         };
 
         var key = ContentKey(snapshot);
@@ -218,6 +238,35 @@ public sealed class SnapshotBuilder
             DiscardCount = panel.DiscardCount ?? -1,
             DiscardOrder = order.Count == discards.Count ? order.ToList() : [],
         };
+    }
+
+    // The disagreements worth reporting between the game's claim offer and what our closed
+    // hand allows. Asymmetric on purpose:
+    //   * Chi/Pon/Kan are pure tile counting, so a difference EITHER way is a read error -
+    //     the game offering what we cannot derive means tiles are missing from our read, and
+    //     deriving what it never offered means our read holds tiles that are not there.
+    //   * Ron is only checked in the direction that cannot be explained away. The game also
+    //     demands a yaku and a furiten-free wait, so our seeing a win it did not offer is
+    //     ordinary; its offering a win we cannot complete is the 16:20:40 signature.
+    private static IEnumerable<string> ClaimMismatches(IReadOnlyList<Tile> hand, int meldCount, Tile claimed,
+        int fromSeat, IReadOnlyList<string> offered)
+    {
+        var inferred = HandTracking.InferClaims(hand, claimed, meldCount, allowChi: fromSeat is 3 or -1);
+        foreach (var (option, flag) in new[]
+                 {
+                     ("Chi", ClaimOptions.Chi), ("Pon", ClaimOptions.Pon), ("Kan", ClaimOptions.Kan),
+                 })
+        {
+            var game = offered.Contains(option);
+            var ours = inferred.HasFlag(flag);
+            if (game && !ours)
+                yield return $"the game offers {option} on {claimed} and our hand cannot: closed read is missing tiles";
+            else if (ours && !game)
+                yield return $"our hand claims {option} on {claimed} and the game does not offer it: closed read has tiles the game does not";
+        }
+
+        if (offered.Contains("Ron") && !inferred.HasFlag(ClaimOptions.Ron))
+            yield return $"the game offers Ron on {claimed} and our hand does not complete: the win is taken, the read is wrong";
     }
 
     private static GamePhase ComputePhase(int code, StateCodeTable codes, bool callWindow, bool selfDeclare, int totalClosed, int handCount)

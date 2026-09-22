@@ -5,6 +5,10 @@ namespace MahjongHater.Core.Policy;
 public sealed class DecisionPolicy : IPolicy
 {
     private const LegalAction Calls = LegalAction.Pon | LegalAction.Chi | LegalAction.MinKan | LegalAction.AnKan | LegalAction.ShouMinKan;
+
+    // Reason stage marking "the game says this hand wins and we cannot see why". The win is
+    // still taken; the caller logs the hand so the read can be repaired.
+    public const string WinReadDisagrees = "win-read-disagrees";
     private readonly IOpponentModel opponents;
     private readonly IDiscardPolicy discards;
     private readonly IPushFoldPolicy pushFold;
@@ -59,15 +63,38 @@ public sealed class DecisionPolicy : IPolicy
             ct.ThrowIfCancellationRequested();
             if (!state.Can(legal))
                 continue;
+
+            // A win the GAME offered is authoritative. It opens a Tsumo/Ron window only for a
+            // hand that is complete and carries a yaku, so re-deriving that from our own read
+            // can only ever lose a won hand — never gain one. On 2026-09-22 (16:19:42 →
+            // 16:20:40) the plugin declared riichi on a 6m/9m wait, ankan'd, then answered the
+            // game's own Ron window on 6m with Pass because this evaluation scored the hand
+            // 0 han; the hand ran out as an exhaustive draw.
+            //
+            // An UNCONFIRMED window is a different thing entirely: it was guessed from panel
+            // text that survives every closed prompt, so there is no offer to trust and our
+            // own evaluation stays the gate. That is what keeps a phantom "Tsumo" label from
+            // becoming a declaration.
             var han = WinningHan(state, method, ct);
+            var tile = method == WinMethod.Tsumo ? state.DrawnTile : state.CallTile;
             if (han >= this.weights.MinHanDoman && han > 0)
             {
                 steps.Add(new Reason("win", $"Declare {kind}: {han} yaku han meets the {this.weights.MinHanDoman}-han minimum."));
-                return new ActionChoice(kind, method == WinMethod.Tsumo ? state.DrawnTile : state.CallTile,
-                    null, $"Declare {kind}.", steps.ToArray(), []);
+                return new ActionChoice(kind, tile, null, $"Declare {kind}.", steps.ToArray(), []);
             }
 
-            steps.Add(new Reason("win", $"Decline {kind}: winning hand has {han} yaku han; need {this.weights.MinHanDoman}."));
+            if (!state.CallWindowConfirmed)
+            {
+                steps.Add(new Reason("win", $"Decline {kind}: winning hand has {han} yaku han (need {this.weights.MinHanDoman}), "
+                                            + "and no prompt event confirmed the offer."));
+                continue;
+            }
+
+            steps.Add(new Reason(WinReadDisagrees,
+                $"Declare {kind}: the game offered it, so it is a legal win, but our hand read scores only {han} yaku han "
+                + $"(closed [{string.Join(" ", state.Hand)}], {state.OurMelds.Count} meld(s), riichi={state.OurRiichi}, "
+                + $"tile={tile?.ToString() ?? "-"}). Taking the offer; the read is what needs fixing."));
+            return new ActionChoice(kind, tile, null, $"Declare {kind}.", steps.ToArray(), []);
         }
 
         ct.ThrowIfCancellationRequested();

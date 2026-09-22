@@ -257,9 +257,9 @@ public sealed unsafe class MatchQueuer
             return false;
         }
 
-        var fired = EmjOperator.ClickNode(addon, &button->OwnerNode->AtkResNode);
-        this.log($"[Queue] {FinderAddon} Join: {string.Join("; ", fired)}");
-        return true;
+        var dispatch = EmjOperator.ClickNode(addon, &button->OwnerNode->AtkResNode);
+        this.log($"[Queue] {FinderAddon} Join: {dispatch.Detail}");
+        return dispatch.Sent;
     }
 
     private void HideFinder()
@@ -289,9 +289,14 @@ public sealed unsafe class MatchQueuer
         var button = confirm->CommenceButton;
         if (button != null && button->OwnerNode != null && button->IsEnabled && button->OwnerNode->AtkResNode.IsVisible())
         {
-            var fired = EmjOperator.ClickNode(addon, &button->OwnerNode->AtkResNode);
-            this.log($"[Queue] {ConfirmAddon} Commence button: {string.Join("; ", fired)}");
-            return true;
+            var dispatch = EmjOperator.ClickNode(addon, &button->OwnerNode->AtkResNode);
+            if (dispatch.Sent)
+            {
+                this.log($"[Queue] {ConfirmAddon} Commence button: {dispatch.Detail}");
+                return true;
+            }
+
+            this.log($"[Queue] {ConfirmAddon} Commence button not clickable ({dispatch.Detail}); falling back to the callback");
         }
 
         var callback = EmjOperator.FireCallback(addon, CommenceCallback);

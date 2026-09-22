@@ -106,6 +106,13 @@ public sealed record StateSnapshot(
     // order. Non-empty only after a Chi was accepted and more than one shape fits.
     public IReadOnlyList<Meld> CallShapes { get; init; } = [];
 
+    // True when an ACTUAL prompt event (type-19/23/25) opened the window that carries Legal,
+    // false when only the prompt panel's text suggested one. The panel keeps its labels after
+    // every prompt closes, so a label-guessed window is not evidence the game is offering
+    // anything - while an offer the game really made is authoritative about legality in a way
+    // our own hand read is not (docs/research/WIN_OFFERS_2026_09_22.md).
+    public bool CallWindowConfirmed { get; init; }
+
     public SeatState Us => this.Seats[0];
 
     public bool IsOpen => this.OurMelds.Any(m => m.IsOpen);

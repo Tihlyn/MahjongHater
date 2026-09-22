@@ -175,7 +175,9 @@ sampled record; they are not pooled into misleading independent sample counts.
 
 Copy the **entire verified database folder** to
 `pluginConfigs/MahjongHater/simulation_policy`, enable **Experimental precomputed
-policy**, save and reload the plugin. The simulator database takes precedence
+policy**, save and reload the plugin. To ship it with the plugin instead, put the same
+folder at `resources/policy/simulation_policy` before building; the plugin searches the
+config folder first, then next to the DLL, then `resources/policy`. The simulator database takes precedence
 over the earlier `precomputed_policy.json` table. The plugin checks the model and
 rule/weight profile before loading it.
 

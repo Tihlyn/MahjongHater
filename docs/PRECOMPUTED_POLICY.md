@@ -46,9 +46,23 @@ trained once, ignoring snapshot sequence numbers and hand ordering.
    that plugin session and logs the error; advice continues.
 2. Train that JSONL file with the standalone command above. Each line is a complete
    `StateSnapshot`; `SnapshotJson` is the round-trip serializer. Tiles use `1m`,
-   `0p`, `7z` notation. The trainer rejects inconsistent visible tile counts.
+   `0p`, `7z` notation. The trainer rejects inconsistent visible tile counts; `train`
+   reports those rows and trains the rest, so one bad row does not cost a whole session's
+   recording. (8 of the 79 rows recorded on 2026-09-22 carried a fifth visible copy of a
+   tile — a state-tracking defect worth chasing separately.)
 3. Place the output at
-   `pluginConfigs/MahjongHater/precomputed_policy.json`.
+   `pluginConfigs/MahjongHater/precomputed_policy.json`, or ship it with the plugin by
+   putting it in `resources/policy/` before building: the plugin looks in the config
+   folder first, then next to the DLL, then in `resources/policy`, and reads a
+   `precomputed_policy.json.gz` directly.
+
+   **What a table is and is not.** Entries are keyed by an exact belief-state identity —
+   ordered discards, scores, wall, beliefs and all. A table therefore answers the states it
+   was trained on and nothing else; it is a cache of solved positions, not a model that
+   generalises. The trained *model* in this plugin is the learned policy in
+   `resources/models`. Expect a table trained on a recorded session to hit ~never in new
+   play, and see [the simulator guide](SIMULATOR.md) ("Exact matches from random self-play
+   will be rare") before spending days of CPU on a large one.
 4. Enable **Experimental precomputed policy**, save and reload. The plugin logs
    the loaded state count, or the reason it could not load the table. The overlay
    shows the lookup/fallback reason with each decision.

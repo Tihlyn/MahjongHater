@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.IO.Compression;
 using System.Text.Json;
 
 namespace MahjongHater.Core.Precomputed;
@@ -64,9 +65,14 @@ public sealed class PolicyTable
         return true;
     }
 
+    // A ".json.gz" artifact is read directly, like the learned models: a trained table is
+    // far larger than the JSON it is packed from, and the plugin ships it as it is.
     public static PolicyTable Load(string path, string profile)
     {
-        using var stream = File.OpenRead(path);
+        using var file = File.OpenRead(path);
+        using var stream = path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)
+            ? new GZipStream(file, CompressionMode.Decompress)
+            : (Stream)file;
         var artifact = JsonSerializer.Deserialize<PolicyArtifact>(stream)
             ?? throw new InvalidDataException("Empty precomputed policy artifact.");
         return new PolicyTable(artifact, profile);

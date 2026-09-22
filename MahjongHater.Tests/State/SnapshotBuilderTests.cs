@@ -30,6 +30,62 @@ public class SnapshotBuilderTests
         Assert.Equal(Tile.Parse("5p"), s.DoraIndicators[0]);
     }
 
+    // A hand only ever totals 13 or 14 with every meld counted as three. When it does not,
+    // every decision built on it is guesswork - and the plugin used to notice only deep
+    // inside the win evaluation, where it answered a Ron window with Pass
+    // (docs/research/WIN_OFFERS_2026_09_22.md).
+    [Fact]
+    public void A_hand_that_does_not_add_up_is_reported_as_a_health_note()
+    {
+        // One meld tracked, but the closed read still holds a full 13 tiles: 13 + 3 = 16.
+        var s = Build(new SnapshotBuilder(), new EventTracker(),
+            StructFixture.Decoded("123m456p789s1122z", null, stateCode: 15,
+                melds: [[new StructFixture.MeldRecord(28, 1)], null, null, null]));
+        Assert.Contains(s.Notes, n => n.Contains("does not add up"));
+    }
+
+    [Fact]
+    public void A_consistent_hand_has_no_arithmetic_note()
+    {
+        var s = Build(new SnapshotBuilder(), new EventTracker(), StructFixture.Decoded("123m456p789s1122z", "3z"));
+        Assert.DoesNotContain(s.Notes, n => n.Contains("does not add up"));
+    }
+
+    // The window worked backwards: what the game offers on a tile must match what our closed
+    // hand allows, because Chi/Pon/Kan are pure tile counting. A difference is an assertion
+    // that the hand read is wrong, and it rides out on the snapshot's health notes.
+    [Fact]
+    public void An_offer_our_hand_cannot_support_is_reported()
+    {
+        var t = new EventTracker();
+        var d = StructFixture.Decoded("123m456p789s1122z", null, stateCode: 15);
+        t.OnTick(d, [], T0);
+        t.OnRefresh(AtkFrame.OfInts(8, 3, StructFixture.IconOf(Tile.Parse("7z"), 76041)), T0);
+        t.OnRefresh(AtkFrame.OfInts([23, 2, 5, 0, .. new int[18]]).WithString(6, "Pon!").WithString(7, "Pon").WithString(8, "Pass"), T0);
+
+        var s = new SnapshotBuilder().Build(d, t, Layout, RulesetOptions.Default);
+        Assert.True(s.CallWindowConfirmed);
+        Assert.Contains(s.Notes, n => n.Contains("offers Pon") && n.Contains("missing tiles"));
+    }
+
+    // Provenance: only a prompt EVENT makes the offered actions authoritative. A window the
+    // panel text alone suggested is a guess, and the policy keeps its own gate for it.
+    [Fact]
+    public void Call_window_provenance_reaches_the_snapshot()
+    {
+        var t = new EventTracker();
+        var d = StructFixture.Decoded("44m77m3p55p556s6699s", "3p");
+        var labelOnly = Build(new SnapshotBuilder(), t, d, ["Tsumo", "Pass"]);
+        Assert.False(labelOnly.CallWindowConfirmed);
+
+        var t2 = new EventTracker();
+        t2.OnTick(d, [], T0);
+        t2.OnRefresh(AtkFrame.OfInts([23, 2, 1, 0, .. new int[18]]).WithString(6, "Tsumo!").WithString(7, "Tsumo").WithString(8, "Pass"), T0);
+        var confirmed = t2.CallWindowActive ? new SnapshotBuilder().Build(d, t2, Layout, RulesetOptions.Default) : null;
+        Assert.NotNull(confirmed);
+        Assert.True(confirmed!.CallWindowConfirmed);
+    }
+
     [Fact]
     public void Thirteen_tiles_without_a_draw_is_the_others_turn()
     {
@@ -126,7 +182,7 @@ public class SnapshotBuilderTests
         Assert.Equal(GamePhase.SelfDeclare, before.Phase);
         Assert.True(before.Can(LegalAction.Tsumo));
 
-        t.MarkCallAnswered(isWin: true);
+        t.MarkCallAnswered(isWin: true, t.CallWindowGeneration);
         var after = Build(b, t, d);
         Assert.Equal(GamePhase.RoundEnd, after.Phase);
         Assert.Equal(LegalAction.None, after.Legal);
