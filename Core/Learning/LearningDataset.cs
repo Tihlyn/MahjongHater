@@ -18,6 +18,7 @@ public static class LearningDataset
     // computed members) also drops every scalar of the anonymous manifest object, which
     // left train.py without Schema/Features/RowFloats.
     private static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions ProvenanceJson = new();   // same reason: anonymous rows
 
     public const int Opponents = 207;
     public const int Schema = 3;
@@ -94,7 +95,7 @@ public static class LearningDataset
             }
             if (half) foreach (var value in stored) writer.Write((Half)value);
             else foreach (var value in stored) writer.Write(value);
-            provenance.WriteLine(JsonSerializer.Serialize(new { Split = split, Row = counts[split], Game = game, Human = human }, SimulationFiles.Json));
+            provenance.WriteLine(JsonSerializer.Serialize(new { Split = split, Row = counts[split], Game = game, Human = human }, ProvenanceJson));
             counts[split]++;
             if (human) humans[split]++; else searchRows++;
         }

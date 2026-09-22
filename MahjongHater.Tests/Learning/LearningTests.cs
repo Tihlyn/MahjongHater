@@ -123,6 +123,10 @@ public sealed class LearningTests
 
         Assert.True(total > 0);
         Assert.Equal(total + root.GetProperty("Skipped").GetInt32(), corpus.Manifest.Games.Sum(g => g.Decisions));
+        // Row provenance must carry its fields (anonymous objects lose them under SimulationFiles.Json).
+        var provenance = File.ReadLines(Path.Combine(dataset, "rows.jsonl")).First();
+        Assert.Contains("\"Game\"", provenance);
+        Assert.Contains("\"Split\"", provenance);
     }
 
     [Fact]
