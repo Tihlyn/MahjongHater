@@ -51,6 +51,7 @@ public sealed class Plugin : IDalamudPlugin
             DefenseModel = this.Configuration.DefenseV2 ? DefenseModel.V2 : DefenseModel.Legacy,
         };
         IPolicy policy = new DecisionPolicy(weights: weights);
+        this.Reader.PolicyTag = this.Configuration.DefenseV2 ? "V2" : "Legacy";
         if (this.Configuration.LearnedPolicyEnabled)
         {
             try
@@ -65,6 +66,7 @@ public sealed class Plugin : IDalamudPlugin
                 var opponents = new MahjongHater.Core.Learning.LearnedOpponentModel(model, weights, useLearnedDanger: false);
                 policy = new DecisionPolicy(opponents: opponents, discards: new MahjongHater.Core.Learning.LearnedDiscardPolicy(model, weights),
                     calls: new MahjongHater.Core.Learning.LearnedCallPolicy(model, weights), weights: weights);
+                this.Reader.PolicyTag = "learned-guarded";
                 pluginLog.Information($"Learned policy loaded ({model.Status}) as learned-guarded; exact cache remains first when enabled.");
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)

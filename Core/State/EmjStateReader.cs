@@ -195,6 +195,11 @@ public sealed unsafe class EmjStateReader : IDisposable
     // Draw screens label every seat "Tenpai!"/"Noten..." in the seat banners; a win names
     // the winner in type-32. Banners keep their last text (residue), so on a draw we wait
     // until all three opponent banners read Tenpai/Noten — up to ~5 s — before trusting them.
+    // The policy actually in charge of decisions ("learned-guarded", "V2", "Legacy"), written
+    // into hand_results.csv so live matches with different policies can be compared
+    // (tools/ab_summary.py). Set by the plugin once the policy stack is built.
+    public string? PolicyTag { get; set; }
+
     private void RecordTenpaiGroundTruth(AtkUnitBase* addon, StateSnapshot snapshot)
     {
         if (snapshot.Phase != GamePhase.RoundEnd)
@@ -203,7 +208,7 @@ public sealed unsafe class EmjStateReader : IDisposable
             {
                 this.lastPlaySnapshot = snapshot;
                 this.dealIns.Population = this.configuration.CalibrationPopulation;
-                this.dealIns.Model = this.configuration.DefenseV2 ? "V2" : "Legacy";
+                this.dealIns.Model = this.PolicyTag ?? (this.configuration.DefenseV2 ? "V2" : "Legacy");
                 this.dealIns.Observe(snapshot, DateTime.UtcNow);
             }
 
