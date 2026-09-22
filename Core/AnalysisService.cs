@@ -28,11 +28,13 @@ public sealed class AnalysisService : IDisposable
     // so 13↔14 flicker across the draw/discard boundary doesn't trigger wasted work.
     private const int DebounceTicks = 3;
 
-    private static readonly TimeSpan WatchdogTimeout = TimeSpan.FromSeconds(2);
+    public static readonly TimeSpan DefaultWatchdog = TimeSpan.FromSeconds(2);
+
     private static readonly TimeSpan StalledAfter = TimeSpan.FromSeconds(3);
 
     private readonly IPolicy policy;
     private readonly Action<Exception, string>? logError;
+    private readonly TimeSpan watchdog;
 
     private int version;
     private CancellationTokenSource? cts;
@@ -43,11 +45,15 @@ public sealed class AnalysisService : IDisposable
     private volatile AnalysisPublication? latest;
 
     // logError keeps this class free of Dalamud types (unit-testable); the plugin
-    // passes IPluginLog.Error through it.
-    public AnalysisService(IPolicy policy, Action<Exception, string>? logError = null)
+    // passes IPluginLog.Error through it. `watchdog` bounds one evaluation: the plugin takes
+    // the default, tests set their own so a slow or contended machine cannot decide the
+    // outcome (the first evaluation in a process also pays for JIT: ~90 ms warm-up here,
+    // 2.5 ms afterwards, but far more on a shared CI runner).
+    public AnalysisService(IPolicy policy, Action<Exception, string>? logError = null, TimeSpan? watchdog = null)
     {
         this.policy = policy;
         this.logError = logError;
+        this.watchdog = watchdog is { } budget && budget > TimeSpan.Zero ? budget : DefaultWatchdog;
     }
 
     public AnalysisPublication? Latest => this.latest;
@@ -110,7 +116,7 @@ public sealed class AnalysisService : IDisposable
         var myVersion = Interlocked.Increment(ref this.version);
         this.cts?.Cancel();
         this.cts?.Dispose();
-        this.cts = new CancellationTokenSource(WatchdogTimeout);
+        this.cts = new CancellationTokenSource(this.watchdog);
         var token = this.cts.Token;
 
         this.dispatchedFingerprint = fingerprint;

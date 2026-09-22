@@ -56,7 +56,10 @@ public sealed class Plugin : IDalamudPlugin
         {
             try
             {
-                var model = MahjongHater.Core.Learning.LearnedModel.Load(Path.Combine(pluginInterface.GetPluginConfigDirectory(), "learned_policy.json"));
+                // The config folder first (what a user drops in, and where a per-length model
+                // goes), then the plugin folder, so a model shipped alongside the DLL works
+                // without being copied anywhere.
+                var model = MahjongHater.Core.Learning.LearnedModel.Load(LearnedModelPath(pluginInterface, (int)this.Configuration.GameLength));
                 if (model.Rules.Kuitan != this.Configuration.Kuitan || model.Rules.HandsInMatch != (int)this.Configuration.GameLength
                     || model.Rules.DoubleWindPairFu != this.Configuration.DoubleWindPairFu)
                     throw new InvalidDataException("Learned model rule profile differs from plugin configuration.");
@@ -244,6 +247,24 @@ public sealed class Plugin : IDalamudPlugin
     {
         this.pluginLog.Information($"Mahjong Hater logout detected (type={type}, code={code}).");
         this.Reader.Reset();
+    }
+
+    // learned_policy.json, or learned_policy-4.json / -8.json when both match lengths are
+    // installed side by side; config folder wins so a downloaded model can override a
+    // shipped one.
+    private static string LearnedModelPath(IDalamudPluginInterface pluginInterface, int hands)
+    {
+        var names = new[] { $"learned_policy-{hands}.json", "learned_policy.json" };
+        var folders = new[] { pluginInterface.GetPluginConfigDirectory(), pluginInterface.AssemblyLocation.DirectoryName ?? "." };
+        foreach (var folder in folders)
+            foreach (var name in names)
+            {
+                var candidate = Path.Combine(folder, name);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+
+        return Path.Combine(folders[0], names[1]);   // the path the error message should name
     }
 
     private void OnFrameworkUpdate(IFramework framework)

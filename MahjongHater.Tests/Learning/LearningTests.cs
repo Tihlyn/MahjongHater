@@ -217,7 +217,7 @@ public sealed class LearningTests
         tablesOnly.Update(state);
         Assert.Equal(opponents.TenpaiProbability(1), tablesOnly.TenpaiProbability(1));
         Assert.NotEqual("learned", tablesOnly.Explain(Tile.Parse("5p"), 1).Why);
-        Assert.Equal(new OpponentModel().Danger(Tile.Parse("5p"), 1), 0, 6);   // sanity: fresh model has no state
+        Assert.Equal(0, new OpponentModel().Danger(Tile.Parse("5p"), 1), 6);   // sanity: fresh model has no state
         // A rule profile the model was not trained for: the table model answers instead.
         opponents.Update(state with { Ruleset = new RulesetOptions(true, 4) });
         Assert.NotEqual("learned", opponents.Explain(Tile.Parse("5p"), 1).Why);
