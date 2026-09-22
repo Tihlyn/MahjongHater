@@ -568,8 +568,10 @@ def train(args):
     # With everything on the device the CPU only orchestrates; spare threads would just spin.
     torch.set_num_threads(min(args.threads, 4) if device.type == "cuda" else args.threads)
     torch.backends.cudnn.benchmark = True   # fixed 34-wide shapes: let cuDNN pick the conv kernels once
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    # No TF32: training runs under fp16 autocast anyway, and the remaining fp32 maths must match
+    # the plugin's exact fp32 inference (learn-check tolerance 2e-4).
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
@@ -688,8 +690,9 @@ def train(args):
     atomic_json(args.output / "metrics.json", report)
     head = torch.from_numpy(splits["test"].read(0, 8).astype(np.float32))   # first eight test rows, straight from the file
     with torch.no_grad():
-        model.eval()
-        head_output = model(head[:, :layout.features].to(device)).float().cpu()
+        # Parity vectors in plain fp32 on the CPU: the reference the C# inference is checked against.
+        reference = model.eval().to("cpu")
+        head_output = reference(head[:, :layout.features]).float()
     vectors = [{"Input": head[i, :layout.features].tolist(), "Output": head_output[i].tolist()} for i in range(len(head))]
     atomic_json(args.output / "parity.json", vectors)
     print(json.dumps({"model": str(args.output / "learned_policy.json"), "test_policy_top1": report["test"]["policy_top1"],
