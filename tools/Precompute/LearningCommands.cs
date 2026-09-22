@@ -6,7 +6,7 @@ using MahjongHater.Core.Simulation;
 
 internal static class LearningCommands
 {
-    public const string Usage = "learn-data <replay-corpus> <new-dataset> [search-run|-] [max-games] [float32|float16] [workers] | learn-check <model.json> <parity.json>"
+    public const string Usage = "learn-data <replay-corpus> <new-dataset> [search-run|-] [max-games] [float32|float16] [workers] [compact|dense] | learn-check <model.json> <parity.json>"
         + " | learn-eval <replay-corpus> <report.json> [model.json|-] [split=test] [max-games] [threads]"
         + " | learn-fit-tenpai <replay-corpus> [split=train] [max-games]";
     public static bool Handles(string command) => command is "learn-data" or "learn-check" or "learn-eval" or "learn-fit-tenpai";
@@ -47,8 +47,10 @@ internal static class LearningCommands
         {
             var dtype = args.Length > 5 ? args[5] : "float32";
             if (dtype is not ("float32" or "float16")) throw new ArgumentException("dtype must be float32 or float16");
+            var form = args.Length > 7 ? args[7] : "compact";
+            if (form is not ("compact" or "dense")) throw new ArgumentException("row form must be compact or dense");
             LearningDataset.Export(new ReplayCorpus(args[1]), args[2], args.Length > 3 && args[3] != "-" ? args[3] : null, ct,
-                args.Length > 4 ? int.Parse(args[4]) : int.MaxValue, dtype == "float16", args.Length > 6 ? int.Parse(args[6]) : 0);
+                args.Length > 4 ? int.Parse(args[4]) : int.MaxValue, dtype == "float16", args.Length > 6 ? int.Parse(args[6]) : 0, form == "compact");
             Console.WriteLine(File.ReadAllText(Path.Combine(args[2], "manifest.json")));
         }
         else

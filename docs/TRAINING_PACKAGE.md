@@ -23,7 +23,8 @@ What the model learns (feature version `public-tiles-v2`, artifact schema 2):
 Two match lengths: the archives hold hanchan (Full Match) and tonpuusen (Quick Match) games
 and the plugin only loads a model trained on the configured length, so run the pipeline
 once per length (`-HandsInMatch 8`, the default, and `-HandsInMatch 4 -RunName quick`).
-Quick Match games are ~10 % of the archives (n28: 690 of 3 181).
+Quick Match games are roughly a quarter of the archive files (28 829 of the 30 archives'
+files are tonpuusen; the rank filter keeps most of them).
 
 ## Requirements on the compute box
 
@@ -32,10 +33,10 @@ Quick Match games are ~10 % of the archives (n28: 690 of 3 181).
   wheel exists for it; when in doubt install 3.12 from python.org.
 - NVIDIA driver recent enough for CUDA 12.6 wheels (any driver from 2024 on); 8 GB VRAM is
   plenty for the default network.
-- Disk: archives 1.1 GB, corpus ≈ 25 GB (all 30 archives), dataset **≈ 80 GB at the
-  default 24 000 games** (float16, ≈ 600 rows per game, 5.6 KB per row). The export stage
-  refuses to start without the space; lower `-MaxGames` or point `-WorkDirectory` at a
-  bigger drive.
+- Disk: archives 1.1 GB, corpus ≈ 25 GB (all 30 archives: 106 964 hanchan games, 63.7 M
+  decisions), dataset **≈ 125 GB at the default 60 000 games** (compact float16 rows:
+  ≈ 600 rows per game, 3.3 KB per row; the whole set ≈ 210 GB). The export stage refuses
+  to start without the space; lower `-MaxGames` or point `-WorkDirectory` at a bigger drive.
 - Memory: import and export stay under ~3 GB; training under ~4 GB RAM (the loader streams
   a bounded shuffle buffer) plus the GPU.
 
@@ -56,12 +57,12 @@ to `work\logs\<stage>-<timestamp>.log`.
 |---|---|---|---|
 | fetch | downloads `mjlog_pf4-20_n1..n30.zip` from tenhou.net with SHA-256 provenance | `work\raw\` + `archives.json` | minutes (1.1 GB) |
 | import | parses every game; keeps East-South games with a 7-dan+ acting player; emits turn and claim-window decisions | `work\corpus\` | ~1 h for all archives (16 479 games / 4 archives took 9 min on 10 workers) |
-| export | dense float16 rows for a uniform sample of `-MaxGames` games | `work\dataset-<games>-float16\` | ~30–45 min for 24 000 games (8 600 rows/s on 10 workers) |
-| train | residual network on CUDA with mixed precision, early-stopped on validation loss, calibration fitted on validation | `work\model-<run>\learned_policy.json`, `metrics.json`, `parity.json` | GPU-bound: ~5–8 min per epoch at 14 M rows for the default net on an RTX 2070-class card (the first, loader-bound version of the script took 15 min for a net a third the size) |
+| export | compact float16 rows for a uniform sample of `-MaxGames` games (the 36 broadcast planes stored as one value each; the trainer expands them on the GPU) | `work\dataset-<games>-float16-compact\` | ~8 600 rows/s on 10 workers: ~70 min for 60 000 games |
+| train | residual network on CUDA with mixed precision, early-stopped on validation loss, calibration fitted on validation | `work\model-<run>\learned_policy.json`, `metrics.json`, `parity.json` | GPU-bound: measured 163 s per 11.4 M rows for the default net on an RTX 3080 (≈ 7 min per epoch at 60 000 games); an RTX 2070-class card is ~4× slower |
 | check | C# inference reproduces the PyTorch outputs on the parity vectors | log line "Verified 8 PyTorch/C# inference vectors" | seconds |
 | eval | `learn-eval` on 1 500 held-out test games: agreement per category, reaction agreement + call rate, counterfactual deal-in of the chosen tile, tenpai/danger calibration, for the heuristics and the learned policies side by side | `work\eval\<run>-test.json` + log | ~30 min |
 
-Defaults: `-MaxGames 24000 -Blocks 8 -Channels 160 -Hidden 512 -Epochs 20 -Batch 4096
+Defaults: `-MaxGames 60000 -Blocks 8 -Channels 160 -Hidden 512 -Epochs 20 -Batch 4096
 -WindowRows 0 -Dropout 0.1`. The network is ≈ 5 M parameters (~100 MB as JSON; the plugin's load limit
 is 256 MB) and costs ≈ 10 ms per position in the plugin's C# inference (a decision runs it
 once, plus three score counterfactuals for the placement stakes). `-Blocks 10 -Channels 192`
@@ -95,7 +96,7 @@ Useful variations:
 .\Run-Training.ps1 -Stage train,check,eval -RunName res6            # default net
 .\Run-Training.ps1 -Stage train,check,eval -RunName res10 -Blocks 10 -Channels 192 -Epochs 30
 .\Run-Training.ps1 -Stage train,check,eval -RunName res6 -Resume    # continue an interrupted run
-.\Run-Training.ps1 -MaxGames 12000                                  # half the disk (~40 GB)
+.\Run-Training.ps1 -MaxGames 100000 -RunName all                   # every hanchan game in the archives (~210 GB)
 .\Run-Training.ps1 -Device cpu -Batch 256                           # no usable GPU (10× slower)
 .\Run-Training.ps1 -HandsInMatch 4 -RunName quick -MaxGames 100000  # Quick Match model (all tonpuusen games)
 ```

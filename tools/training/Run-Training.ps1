@@ -25,9 +25,10 @@ param(
     # 8 = hanchan (Full Match), 4 = tonpuusen (Quick Match). The archives hold both; a model
     # only serves the length it was trained on (the plugin checks), so train one per length.
     [ValidateSet(4, 8)][int]$HandsInMatch = 8,
-    # Games exported to the dense dataset (uniform hash sample). ~600 rows per game, 5.6 KB per row
-    # in float16: 24 000 games ~ 80 GB. The export stage refuses to start without the disk space.
-    [int]$MaxGames = 24000,
+    # Games exported to the dataset (uniform hash sample). ~600 rows per game, 3.3 KB per compact
+    # float16 row: 24 000 games ~ 48 GB, the whole archive set (~107 000 hanchan games) ~ 210 GB.
+    # The export stage refuses to start without the disk space.
+    [int]$MaxGames = 60000,
     [ValidateSet('float16', 'float32')][string]$Dtype = 'float16',
     [int]$Workers = [Math]::Max(1, [Environment]::ProcessorCount - 1),
     # Network and optimisation. blocks 8 / channels 160 / hidden 512 is ~5 M parameters; with every
@@ -60,7 +61,7 @@ $raw = Join-Path $work 'raw'
 $length = if ($HandsInMatch -eq 8) { '' } else { "-$HandsInMatch" }
 $rules = Join-Path $root $(if ($HandsInMatch -eq 8) { 'generation.json' } else { "generation-$HandsInMatch.json" })
 $corpus = Join-Path $work "corpus$length"
-$dataset = Join-Path $work "dataset-$MaxGames-$Dtype$length"
+$dataset = Join-Path $work "dataset-$MaxGames-$Dtype-compact$length"
 $model = Join-Path $work "model-$RunName"
 $logs = Join-Path $work 'logs'
 $evalDir = Join-Path $work 'eval'
@@ -116,12 +117,12 @@ if ($stages -contains 'import') {
 if ($stages -contains 'export') {
     if (Test-Path -LiteralPath $dataset) { Write-Host "export: dataset exists at $dataset" }
     else {
-        $bytesPerRow = 2820 * $(if ($Dtype -eq 'float16') { 2 } else { 4 })
+        $bytesPerRow = 1633 * $(if ($Dtype -eq 'float16') { 2 } else { 4 })
         $needed = [long]$MaxGames * 600 * $bytesPerRow
         $free = (Get-PSDrive -Name ([IO.Path]::GetPathRoot($work)).Substring(0, 1)).Free
         Write-Host ("export: ~{0:N1} GB expected for {1} games ({2}), {3:N0} GB free" -f @(($needed / 1GB), $MaxGames, $Dtype, ($free / 1GB)))
         if ($free -lt $needed * 1.15) { throw "Not enough disk space for the export; lower -MaxGames (each 1 000 games ~ $([Math]::Round(600 * $bytesPerRow / 1GB * 1000, 1)) GB) or free space." }
-        Invoke-Logged 'export' { & $exe learn-data $corpus $dataset - $MaxGames $Dtype $Workers }
+        Invoke-Logged 'export' { & $exe learn-data $corpus $dataset - $MaxGames $Dtype $Workers compact }
     }
 }
 

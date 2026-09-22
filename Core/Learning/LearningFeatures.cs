@@ -24,6 +24,10 @@ public static class LearningFeatures
     public const int Actions = 82;
     public const int LegacyActions = 74;
     public const int PassAction = 74, PonAction = 75, OpenKanAction = 76, ChiLowAction = 77, ChiMiddleAction = 78, ChiHighAction = 79, ClosedKanAction = 80, AddedKanAction = 81;
+    // Storage form of a v2 row: planes 0-31 as they are, the 32 broadcast global planes as one
+    // value each, planes 64-67 as they are, the 4 broadcast look-ahead planes as one value each.
+    // 1 260 values instead of 2 448; the trainer expands on the device, the plugin never sees it.
+    public const int CompactCount = 32 * Width + 32 + 4 * Width + 4;
 
     public static bool IsKnownVersion(string version) => version is Version or LegacyVersion;
 
@@ -166,6 +170,28 @@ public static class LearningFeatures
                 }
             }
         }
+    }
+
+    public static float[] Compact(ReadOnlySpan<float> dense)
+    {
+        if (dense.Length < Count) throw new ArgumentException("A v2 feature vector is required.");
+        var compact = new float[CompactCount];
+        dense[..(32 * Width)].CopyTo(compact);
+        for (var g = 0; g < 32; g++) compact[32 * Width + g] = dense[(32 + g) * Width];
+        dense.Slice(64 * Width, 4 * Width).CopyTo(compact.AsSpan(32 * Width + 32));
+        for (var g = 0; g < 4; g++) compact[32 * Width + 32 + 4 * Width + g] = dense[(68 + g) * Width];
+        return compact;
+    }
+
+    public static float[] Expand(ReadOnlySpan<float> compact)
+    {
+        if (compact.Length < CompactCount) throw new ArgumentException("A compact v2 feature vector is required.");
+        var dense = new float[Count];
+        compact[..(32 * Width)].CopyTo(dense);
+        for (var g = 0; g < 32; g++) Array.Fill(dense, compact[32 * Width + g], (32 + g) * Width, Width);
+        compact.Slice(32 * Width + 32, 4 * Width).CopyTo(dense.AsSpan(64 * Width));
+        for (var g = 0; g < 4; g++) Array.Fill(dense, compact[32 * Width + 32 + 4 * Width + g], (68 + g) * Width, Width);
+        return dense;
     }
 
     // Tiles we would give up for each legal claim of `tile` (pon / open kan / chi shapes);

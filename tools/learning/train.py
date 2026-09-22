@@ -56,9 +56,15 @@ class Layout:
         self.features_version = manifest["Features"]
         self.channels = manifest["Channels"]
         self.actions = manifest["Actions"]
-        self.features = self.channels * WIDTH
+        self.features = self.channels * WIDTH          # dense feature planes the network consumes
         self.placement = self.schema >= 3
-        self.row = self.features + self.actions + 1 + OPPONENTS + self.actions + (1 if self.placement else 0)
+        # Storage form (schema 3, "Compact"): planes 0-31, 32 broadcast globals as scalars,
+        # planes 64-67, 4 broadcast look-ahead scalars; expanded on the device by `expand`.
+        self.compact = bool(manifest.get("Compact", False))
+        if self.compact and self.channels != 72:
+            raise ValueError("Compact rows are defined for public-tiles-v2 only")
+        self.stored = 32 * WIDTH + 32 + 4 * WIDTH + 4 if self.compact else self.features
+        self.row = self.stored + self.actions + 1 + OPPONENTS + self.actions + (1 if self.placement else 0)
         if manifest["RowFloats"] != self.row:
             raise ValueError("Dataset row size does not match its declared layout")
         self.dtype = "<f2" if manifest.get("Dtype", "float32") == "float16" else "<f4"
@@ -94,11 +100,20 @@ class Network(nn.Module):
         return self.output(F.relu(self.dense(self.dropout(h.flatten(1)))))
 
 
+def expand(stored, layout):
+    """Dense 72x34 planes from the storage form (identity for dense rows)."""
+    if not layout.compact:
+        return stored
+    a = 32 * WIDTH
+    return torch.cat([stored[:, :a], stored[:, a:a + 32].repeat_interleave(WIDTH, dim=1),
+                      stored[:, a + 32:a + 32 + 4 * WIDTH], stored[:, a + 32 + 4 * WIDTH:a + 32 + 4 * WIDTH + 4].repeat_interleave(WIDTH, dim=1)], 1)
+
+
 def unpack(rows, layout):
-    x = rows[:, :layout.features]
-    legal = rows[:, layout.features:layout.features + layout.actions] > 0
-    human = rows[:, layout.features + layout.actions].long()
-    offset = layout.features + layout.actions + 1
+    x = expand(rows[:, :layout.stored], layout)
+    legal = rows[:, layout.stored:layout.stored + layout.actions] > 0
+    human = rows[:, layout.stored + layout.actions].long()
+    offset = layout.stored + layout.actions + 1
     targets = rows[:, offset:offset + OPPONENTS]
     q = rows[:, offset + OPPONENTS:offset + OPPONENTS + layout.actions]
     # Placement 1..4 -> class 0..3, -1 = unknown (search rows).
@@ -692,8 +707,9 @@ def train(args):
     with torch.no_grad():
         # Parity vectors in plain fp32 on the CPU: the reference the C# inference is checked against.
         reference = model.eval().to("cpu")
-        head_output = reference(head[:, :layout.features]).float()
-    vectors = [{"Input": head[i, :layout.features].tolist(), "Output": head_output[i].tolist()} for i in range(len(head))]
+        head_input = expand(head[:, :layout.stored], layout)
+        head_output = reference(head_input).float()
+    vectors = [{"Input": head_input[i].tolist(), "Output": head_output[i].tolist()} for i in range(len(head))]
     atomic_json(args.output / "parity.json", vectors)
     print(json.dumps({"model": str(args.output / "learned_policy.json"), "test_policy_top1": report["test"]["policy_top1"],
                       "test_reaction_top1": report["test"]["reaction_top1"],

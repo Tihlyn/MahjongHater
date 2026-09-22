@@ -57,6 +57,12 @@ public sealed class LearningTests
         Assert.Equal(64 * 34, legacy.Length);
         Assert.Equal(legacy, x.Take(64 * 34));
         Assert.Throws<ArgumentException>(() => LearningFeatures.Encode(state, "other"));
+        // Storage form: the 36 broadcast planes collapse to one value each and expand back exactly.
+        var compact = LearningFeatures.Compact(x);
+        Assert.Equal(LearningFeatures.CompactCount, compact.Length);
+        Assert.Equal(x, LearningFeatures.Expand(compact));
+        Assert.Equal(x[32 * 34], compact[32 * 34]);                 // first global (our score)
+        Assert.Equal(x[68 * 34], compact[32 * 34 + 32 + 4 * 34]);   // current shanten plane
     }
 
     [Fact]
@@ -102,7 +108,9 @@ public sealed class LearningTests
         Assert.Equal(LearningFeatures.Version, root.GetProperty("Features").GetString());
         Assert.Equal(LearningFeatures.Channels, root.GetProperty("Channels").GetInt32());
         Assert.Equal(LearningFeatures.Actions, root.GetProperty("Actions").GetInt32());
-        Assert.Equal(LearningDataset.RowFloats, root.GetProperty("RowFloats").GetInt32());
+        Assert.True(root.GetProperty("Compact").GetBoolean());
+        Assert.Equal(LearningDataset.CompactRowFloats, root.GetProperty("RowFloats").GetInt32());
+        Assert.Equal(LearningFeatures.CompactCount, root.GetProperty("FeatureFloats").GetInt32());
         Assert.Equal(corpus.Fingerprint, root.GetProperty("Corpus").GetString());
         var rows = root.GetProperty("Rows");
         var total = 0;
@@ -110,7 +118,7 @@ public sealed class LearningTests
         {
             var n = rows.GetProperty(split).GetInt32();
             total += n;
-            Assert.Equal(n * LearningDataset.RowFloats * 4L, new FileInfo(Path.Combine(dataset, split + ".f32")).Length);
+            Assert.Equal(n * LearningDataset.CompactRowFloats * 4L, new FileInfo(Path.Combine(dataset, split + ".f32")).Length);
         }
 
         Assert.True(total > 0);

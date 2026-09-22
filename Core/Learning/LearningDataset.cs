@@ -23,12 +23,15 @@ public static class LearningDataset
     public const int Schema = 3;
     // features | legal mask | human action | opponent targets | search Q | placement (1-4), all v2 sizes.
     public const int RowFloats = LearningFeatures.Count + LearningFeatures.Actions + 1 + Opponents + LearningFeatures.Actions + 1;
+    public const int Tail = RowFloats - LearningFeatures.Count;
+    // The same row with the features in storage form (LearningFeatures.Compact): 1 633 values.
+    public const int CompactRowFloats = LearningFeatures.CompactCount + Tail;
 
     // `maxGames` takes a uniform, split-independent subset (ordered by a hash slice the
     // split function does not use) so a large corpus can be exported at dense size.
     // Rows of one game are encoded on `workers` threads and written in corpus order.
     public static void Export(ReplayCorpus corpus, string destination, string? searchRun = null, CancellationToken ct = default,
-        int maxGames = int.MaxValue, bool half = false, int workers = 0)
+        int maxGames = int.MaxValue, bool half = false, int workers = 0, bool compact = true)
     {
         if (workers < 1) workers = Math.Max(1, Environment.ProcessorCount - 1);
         var path = Path.GetFullPath(destination);
@@ -81,8 +84,16 @@ public static class LearningDataset
         {
             if (row is null) { skipped++; return; }
             var writer = writers[split];
-            if (half) foreach (var value in row) writer.Write((Half)value);
-            else foreach (var value in row) writer.Write(value);
+            ReadOnlySpan<float> stored = row;
+            if (compact)
+            {
+                var packed = new float[CompactRowFloats];
+                LearningFeatures.Compact(row).CopyTo(packed, 0);
+                row.AsSpan(LearningFeatures.Count).CopyTo(packed.AsSpan(LearningFeatures.CompactCount));
+                stored = packed;
+            }
+            if (half) foreach (var value in stored) writer.Write((Half)value);
+            else foreach (var value in stored) writer.Write(value);
             provenance.WriteLine(JsonSerializer.Serialize(new { Split = split, Row = counts[split], Game = game, Human = human }, SimulationFiles.Json));
             counts[split]++;
             if (human) humans[split]++; else searchRows++;
@@ -147,7 +158,8 @@ public static class LearningDataset
         File.WriteAllText(Path.Combine(temp, "manifest.json"), JsonSerializer.Serialize(new
         {
             Schema, Features = LearningFeatures.Version, Channels = LearningFeatures.Channels, Width = 34, Actions = LearningFeatures.Actions,
-            RowFloats, Dtype = half ? "float16" : "float32", Extension = extension, Corpus = corpus.Fingerprint, Rules = corpus.Manifest.TargetRules, Rows = counts, HumanRows = humans,
+            RowFloats = compact ? CompactRowFloats : RowFloats, Compact = compact, FeatureFloats = compact ? LearningFeatures.CompactCount : LearningFeatures.Count,
+            Dtype = half ? "float16" : "float32", Extension = extension, Corpus = corpus.Fingerprint, Rules = corpus.Manifest.TargetRules, Rows = counts, HumanRows = humans,
             GamesUsed = Math.Min(maxGames, corpus.Count), GamesInCorpus = corpus.Count,
             SearchRows = searchRows, Skipped = skipped, Sha256 = hashes,
             SearchRunFingerprint = searchRun is null ? null : SimulationFiles.Read<RunManifest>(Path.Combine(searchRun, "manifest.json.gz")).Fingerprint,

@@ -98,6 +98,13 @@ configuration is required.
 
 ## Export supervised learning data
 
+`learn-data <corpus> <dataset> [search-run|-] [max-games] [float32|float16] [workers]
+[compact|dense]` writes the dense training rows `train.py` consumes (manifest + one binary
+file per split). `compact` (default) stores the 36 broadcast feature planes as one value
+each (1 633 values per row instead of 2 821; the trainer expands them on the device and the
+plugin never sees the storage form); `float16` halves the size again. The JSONL export
+below is the older, human-readable form of the same decisions.
+
 ```powershell
 .\Precompute.exe replay-export corpus/competitive train.jsonl train
 .\Precompute.exe replay-export corpus/competitive validation.jsonl validation
