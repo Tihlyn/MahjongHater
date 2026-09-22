@@ -130,8 +130,10 @@ public sealed unsafe class MatchQueuer
                 if (this.registerStage != 0)
                 {
                     this.log($"[Queue] registered via {(this.registerStage == 2 ? "the Duty Finder window" : "QueueDuties")} → {state}");
-                    if (this.registerStage == 2)
-                        this.HideFinder();
+                    // Close the finder whichever route registered: once preferWindow is set
+                    // an earlier attempt may have left one open, and a window we opened and
+                    // never closed sits in the input path for the whole following match.
+                    this.HideFinder();
                     this.registerStage = 0;
                 }
 
@@ -203,6 +205,11 @@ public sealed unsafe class MatchQueuer
 
                 this.log("[Queue] QueueDuties did not change the queue state; using the Duty Finder window instead");
                 this.preferWindow = true;
+                // The window path starts its own clock. It used to inherit the direct
+                // request's, so the give-up below could fire before the window had even
+                // finished opening - 13 ms after it, on 2026-09-22 at 16:06:55 - and each
+                // abandoned attempt left another Duty Finder open behind the table.
+                this.lastQueueAttemptUtc = now;
                 this.OpenFinder(id);
                 return;
 
@@ -210,6 +217,7 @@ public sealed unsafe class MatchQueuer
                 if (sinceAttempt > RetryQueueEvery)
                 {
                     this.log("[Queue] Duty Finder window path did not register either; giving up this attempt");
+                    this.HideFinder();
                     this.registerStage = 0;
                     this.Status = "Registration failed (see log)";
                     return;

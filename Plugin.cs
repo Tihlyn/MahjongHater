@@ -2,6 +2,7 @@ using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using Dalamud.Bindings.ImGui;
 using MahjongHater.Core;
 using MahjongHater.Core.Operate;
 using MahjongHater.Core.Policy;
@@ -163,7 +164,7 @@ public sealed class Plugin : IDalamudPlugin
 
         this.commandManager.AddHandler(CommandName, new CommandInfo(this.OnCommand)
         {
-            HelpMessage = "Toggle the Mahjong Hater overlay. '/mhater config' opens the settings.",
+            HelpMessage = "Toggle the Mahjong Hater overlay. '/mhater config' opens the settings, '/mhater focus' logs why the table may not be taking clicks.",
             ShowInHelp = true,
         });
 
@@ -242,13 +243,39 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnCommand(string command, string arguments)
     {
-        if (arguments.Trim().Equals("config", StringComparison.OrdinalIgnoreCase))
+        var argument = arguments.Trim();
+        if (argument.Equals("config", StringComparison.OrdinalIgnoreCase))
         {
             this.OpenConfigWindow();
             return;
         }
 
+        if (argument.Equals("focus", StringComparison.OrdinalIgnoreCase) || argument.Equals("input", StringComparison.OrdinalIgnoreCase))
+        {
+            this.ReportInputState();
+            return;
+        }
+
         this.ToggleMainWindow();
+    }
+
+    // "/mhater focus", to be run WHILE the table refuses clicks. Everything it prints is a
+    // read: focus holders, the table's own visibility and collision, any gating unit that is
+    // open (especially one that is open but invisible), and whether Dalamud's ImGui layer is
+    // taking the mouse before the game sees it.
+    private void ReportInputState()
+    {
+        var lines = UiInputReport.Build(this.gameGui, this.Reader.Layout.AddonName);
+        var io = ImGui.GetIO();
+        lines.Add("-- Dalamud / ImGui --");
+        lines.Add($"WantCaptureMouse={io.WantCaptureMouse} WantCaptureKeyboard={io.WantCaptureKeyboard} "
+                  + $"anyItemActive={ImGui.IsAnyItemActive()} anyMouseDown={ImGui.IsAnyMouseDown()}");
+        lines.Add($"our overlay open={this.MainWindow.IsOpen} config open={this.ConfigWindow.IsOpen} "
+                  + $"autoPlay={this.AutoPlayer.Enabled} requeue={this.Queuer.Enabled} idleKeyDown={this.IdleGuard.IsKeyDown}");
+        this.pluginLog.Information("[Input] ---- /mhater focus ----");
+        foreach (var line in lines)
+            this.pluginLog.Information($"[Input] {line}");
+        this.pluginLog.Information("[Input] ---- end ----");
     }
 
     private void DrawUi()

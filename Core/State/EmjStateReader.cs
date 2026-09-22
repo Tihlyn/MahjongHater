@@ -25,6 +25,9 @@ public sealed unsafe class EmjStateReader : IDisposable
     private bool readFailureLogged;
     private string lastHealthSignature = string.Empty;
     private WinScreen? lastCheckedWin;
+    private const int BlockerScanInterval = 60;
+    private int blockerTicks;
+    private string lastBlockerSignature = string.Empty;
 
     // Tenpai ground truth: the last in-play snapshot is frozen when the phase turns to
     // RoundEnd, then the seat banners are polled until the announcement has landed.
@@ -115,6 +118,7 @@ public sealed unsafe class EmjStateReader : IDisposable
             this.Current = this.builder.Build(decoded, this.tracker, this.Layout, new RulesetOptions(this.configuration.Kuitan, (int)this.configuration.GameLength));
             this.LogHealthChanges(this.Current);
             this.CheckScoringAgainstTheGame();
+            this.LogInputBlockerChanges();
             this.RecordTenpaiGroundTruth(addon, this.Current);
         }
         catch (Exception ex)
@@ -168,8 +172,25 @@ public sealed unsafe class EmjStateReader : IDisposable
                                + "Every hand value the policy estimates uses that table.");
     }
 
+    // The table can stop taking mouse input while the addon itself keeps working - auto
+    // play is unaffected, because it dispatches events directly and never uses focus or
+    // hit-testing, which is exactly why manual play can be impossible while nothing looks
+    // wrong. Whatever sits in front of the table is recorded when it appears, so the next
+    // occurrence names itself instead of being reconstructed afterwards.
+    private void LogInputBlockerChanges()
+    {
+        if (++this.blockerTicks % BlockerScanInterval != 0)
+            return;
+        var signature = UiInputReport.Blockers(this.gameGui, this.Layout.AddonName);
+        if (signature == this.lastBlockerSignature)
+            return;
+        this.lastBlockerSignature = signature;
+        this.pluginLog.Information($"[Input] {signature}");
+    }
+
     public void Reset()
     {
+        this.lastBlockerSignature = string.Empty;
         this.lastCheckedWin = null;
         this.lastHealthSignature = string.Empty;
         this.tracker.Reset();
