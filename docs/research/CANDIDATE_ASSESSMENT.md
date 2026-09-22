@@ -102,6 +102,32 @@ Treat `all90` as the candidate if it clears three bars, then stop optimising imi
    not a signal either way), plus a read of the reasons the overlay gives for calls and
    folds — that is the check that the imitation transferred to Doman rules.
 
+### Running the bars
+
+`tools/candidate_bars.py` (also in the training package) checks each bar and exits 1 on a
+failure. On the training box, after `Run-Training.ps1 … -RunName all90` has finished its
+`check` and `eval` stages:
+
+```powershell
+python candidate_bars.py bar1 work\model-all90\metrics.json work\model-res\metrics.json
+python candidate_bars.py bar2 work\evalll90-test.json work\evales-test.json      # same 1 500 test games as run 8
+```
+
+Bar 3 needs the plugin: build `main` in Release (or take CI's `latest.zip`), copy
+`work\model-all90\learned_policy.json` to `%AppData%\XIVLauncher\pluginConfigs\MahjongHater\learned_policy.json`,
+play a batch of human-room hanchan with **Learned policy** on (hands log as
+`learned-guarded`) and a batch with it off (`V2`), then:
+
+```powershell
+python tools\candidate_bars.py bar3            # reads hand_results.csv from the plugin config folder
+python toolsb_summary.py                     # the per-policy table
+```
+
+Both arms should be played in the same period and room; the plugin tags every hand with the
+policy in charge, so the batches can be interleaved. The log line `Learned policy loaded
+(...) as learned-guarded` in Dalamud confirms the model was accepted for the configured rule
+profile (Kuitan on, Full Match, double-wind pair 4 fu — the corpus profile).
+
 If all three hold: train the Quick Match model with the same settings, bump
 `Directory.Build.props` to 2.0.0, tag, ship both artifacts with the release. Keep in scope
 after the release only what a live signal asks for: a push/fold problem → path E; a call

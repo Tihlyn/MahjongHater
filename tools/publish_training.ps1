@@ -26,6 +26,7 @@ foreach ($file in 'Setup-Training.ps1', 'Run-Training.ps1', 'check_env.py', 'req
     Copy-Item -LiteralPath (Join-Path $repo "tools/training/$file") -Destination $destination
 }
 Copy-Item -LiteralPath (Join-Path $repo 'tools/learning/train.py') -Destination $destination
+Copy-Item -LiteralPath (Join-Path $repo 'tools/candidate_bars.py') -Destination $destination
 Copy-Item -LiteralPath (Join-Path $repo 'docs/TRAINING_PACKAGE.md') -Destination (Join-Path $destination 'README.md')
 Copy-Item -LiteralPath (Join-Path $repo 'docs/REPLAY_IMPORT.md') -Destination $destination
 Copy-Item -LiteralPath (Join-Path $repo 'docs/research/EVALUATION.md') -Destination $destination
