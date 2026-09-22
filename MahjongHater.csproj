@@ -63,5 +63,10 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <EmbeddedResource Include="resources/policy/deal_in_rates.json" LogicalName="MahjongHater.resources.policy.deal_in_rates.json" />
+    <!-- Learned models ship with the plugin, gzipped (37 MB each); LearnedModel.Load reads
+         .json.gz directly, and a model in the config folder overrides the shipped one. -->
+    <None Update="resources/models/*.json.gz">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 </Project>

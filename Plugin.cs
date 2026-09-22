@@ -59,10 +59,12 @@ public sealed class Plugin : IDalamudPlugin
                 // The config folder first (what a user drops in, and where a per-length model
                 // goes), then the plugin folder, so a model shipped alongside the DLL works
                 // without being copied anywhere.
-                var model = MahjongHater.Core.Learning.LearnedModel.Load(LearnedModelPath(pluginInterface, (int)this.Configuration.GameLength));
+                var path = LearnedModelPath(pluginInterface, (int)this.Configuration.GameLength);
+                var model = MahjongHater.Core.Learning.LearnedModel.Load(path);
                 if (model.Rules.Kuitan != this.Configuration.Kuitan || model.Rules.HandsInMatch != (int)this.Configuration.GameLength
                     || model.Rules.DoubleWindPairFu != this.Configuration.DoubleWindPairFu)
-                    throw new InvalidDataException("Learned model rule profile differs from plugin configuration.");
+                    throw new InvalidDataException($"Model is for {model.Rules.HandsInMatch}-hand matches"
+                        + $"{(model.Rules.Kuitan ? string.Empty : ", kuitan off")}; the plugin is configured for {(int)this.Configuration.GameLength}.");
                 // "learned-guarded" (docs/research/EVALUATION_RUNS.md): the network's discard
                 // ordering and tenpai head inside the measured danger budget; danger itself stays
                 // on the Houou tables, riichi/calls/wins on the heuristic rules.
@@ -70,12 +72,20 @@ public sealed class Plugin : IDalamudPlugin
                 policy = new DecisionPolicy(opponents: opponents, discards: new MahjongHater.Core.Learning.LearnedDiscardPolicy(model, weights),
                     calls: new MahjongHater.Core.Learning.LearnedCallPolicy(model, weights), weights: weights);
                 this.Reader.PolicyTag = "learned-guarded";
-                pluginLog.Information($"Learned policy loaded ({model.Status}) as learned-guarded; exact cache remains first when enabled.");
+                this.LearnedPolicy = new LearnedPolicyState(true,
+                    $"{Path.GetFileName(path)} ({model.Rules.HandsInMatch}-hand, {model.Schema switch { 1 => "schema 1", _ => "schema 2" }}, {model.Status})",
+                    Path.GetDirectoryName(path) ?? string.Empty);
+                pluginLog.Information($"Learned policy loaded from {path} ({model.Status}) as learned-guarded; exact cache remains first when enabled.");
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
             {
+                this.LearnedPolicy = new LearnedPolicyState(false, ex.Message, string.Empty);
                 pluginLog.Warning($"Learned policy unavailable; using existing policy: {ex.Message}");
             }
+        }
+        else
+        {
+            this.LearnedPolicy = new LearnedPolicyState(false, "Turned off in the settings.", string.Empty);
         }
         if (this.Configuration.PrecomputedPolicyEnabled)
         {
@@ -177,6 +187,10 @@ public sealed class Plugin : IDalamudPlugin
 
     public IdleGuard IdleGuard { get; }
 
+    // What became of the learned policy at load: the Diagnostics tab shows it, because
+    // "is the model actually in use?" is otherwise only answerable from the Dalamud log.
+    public LearnedPolicyState LearnedPolicy { get; private set; } = new(false, "Turned off in the settings.", string.Empty);
+
     public string StallLogPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "autoplay_stalls.log");
 
     public void Dispose()
@@ -249,13 +263,18 @@ public sealed class Plugin : IDalamudPlugin
         this.Reader.Reset();
     }
 
-    // learned_policy.json, or learned_policy-4.json / -8.json when both match lengths are
-    // installed side by side; config folder wins so a downloaded model can override a
-    // shipped one.
+    // The models ship with the plugin as resources/models/learned_policy-<hands>.json.gz.
+    // The config folder is searched first so a downloaded or self-trained model overrides the
+    // shipped one, and the per-length name wins over the generic one.
     private static string LearnedModelPath(IDalamudPluginInterface pluginInterface, int hands)
     {
-        var names = new[] { $"learned_policy-{hands}.json", "learned_policy.json" };
-        var folders = new[] { pluginInterface.GetPluginConfigDirectory(), pluginInterface.AssemblyLocation.DirectoryName ?? "." };
+        string[] names =
+        [
+            $"learned_policy-{hands}.json", $"learned_policy-{hands}.json.gz",
+            "learned_policy.json", "learned_policy.json.gz",
+        ];
+        var shipped = Path.Combine(pluginInterface.AssemblyLocation.DirectoryName ?? ".", "resources", "models");
+        string[] folders = [pluginInterface.GetPluginConfigDirectory(), pluginInterface.AssemblyLocation.DirectoryName ?? ".", shipped];
         foreach (var folder in folders)
             foreach (var name in names)
             {
@@ -264,7 +283,7 @@ public sealed class Plugin : IDalamudPlugin
                     return candidate;
             }
 
-        return Path.Combine(folders[0], names[1]);   // the path the error message should name
+        return Path.Combine(shipped, names[1]);   // the path an error message should name
     }
 
     private void OnFrameworkUpdate(IFramework framework)

@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.IO.Compression;
 using System.Text.Json;
 using MahjongHater.Core.Simulation;
 using MahjongHater.Core.State;
@@ -119,11 +120,52 @@ public sealed class LearnedModel
         this.artifact = artifact with { Dense = Copy(artifact.Dense), Output = Copy(artifact.Output), Conv1 = null, Conv2 = null, Stem = null, Blocks = null };
     }
 
+    private const long SizeLimit = 256 * 1024 * 1024;
+
+    // Plain .json, or .json.gz as the models ship inside the plugin (a third of the size).
     public static LearnedModel Load(string path)
     {
-        if (new FileInfo(path).Length > 256 * 1024 * 1024) throw new InvalidDataException("Model exceeds size limit.");
-        return new LearnedModel(JsonSerializer.Deserialize<LearnedArtifact>(File.ReadAllText(path), SimulationFiles.Json)
-            ?? throw new InvalidDataException("Empty learned model."));
+        if (new FileInfo(path).Length > SizeLimit) throw new InvalidDataException("Model exceeds size limit.");
+        using var file = File.OpenRead(path);
+        Stream content = path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)
+            ? new GZipStream(file, CompressionMode.Decompress)
+            : file;
+        try
+        {
+            // Decompression must not be able to blow past the limit either.
+            using var bounded = new BoundedStream(content, SizeLimit);
+            return new LearnedModel(JsonSerializer.Deserialize<LearnedArtifact>(bounded, SimulationFiles.Json)
+                ?? throw new InvalidDataException("Empty learned model."));
+        }
+        finally
+        {
+            if (!ReferenceEquals(content, file)) content.Dispose();
+        }
+    }
+
+    private sealed class BoundedStream(Stream inner, long limit) : Stream
+    {
+        private long read;
+
+        public override int Read(byte[] buffer, int offset, int count) => this.Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            var n = inner.Read(buffer);
+            this.read += n;
+            if (this.read > limit) throw new InvalidDataException("Model exceeds size limit.");
+            return n;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => this.read; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     public bool Supports(StateSnapshot state) => state.Ruleset.Kuitan == this.Rules.Kuitan

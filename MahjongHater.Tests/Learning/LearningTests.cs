@@ -265,6 +265,24 @@ public sealed class LearningTests
     }
 
     [Fact]
+    public void Model_loads_from_json_and_from_the_gzip_the_plugin_ships()
+    {
+        using var temp = new TemporaryDirectory();
+        var artifact = SyntheticArtifact(2, 3);
+        var json = System.Text.Json.JsonSerializer.Serialize(artifact, MahjongHater.Core.Simulation.SimulationFiles.Json);
+        var plain = Path.Combine(temp.Path, "learned_policy.json");
+        var packed = Path.Combine(temp.Path, "learned_policy-8.json.gz");
+        File.WriteAllText(plain, json);
+        using (var file = File.Create(packed))
+        using (var zip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
+            zip.Write(System.Text.Encoding.UTF8.GetBytes(json));
+        Assert.True(new FileInfo(packed).Length < new FileInfo(plain).Length);
+
+        var state = Snap("123m456m4578p447s1z");
+        Assert.Equal(LearnedModel.Load(plain).Predict(state), LearnedModel.Load(packed).Predict(state));
+    }
+
+    [Fact]
     public void Placement_head_is_optional_and_answers_score_counterfactuals()
     {
         var plain = new LearnedModel(SyntheticArtifact(2, 3));

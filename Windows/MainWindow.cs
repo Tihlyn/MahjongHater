@@ -148,6 +148,26 @@ public sealed class MainWindow : Window
         else
             DrawWaiting("No table", "Table tracking appears here once you are seated.");
 
+        var learned = this.plugin.LearnedPolicy;
+        using (Widgets.Card())
+        {
+            Widgets.Label("LEARNED POLICY");
+            Widgets.Badge(learned.Loaded ? "Model loaded" : "Heuristics only", warning: !learned.Loaded);
+            Widgets.Wrapped(learned.Detail);
+            if (learned.Loaded && learned.Folder.Length > 0)
+            {
+                Widgets.Wrapped($"From: {learned.Folder}");
+                if (ImGui.IsItemHovered())
+                    Widgets.Tooltip("A model in the plugin config folder overrides the one shipped with the plugin.");
+            }
+            else
+            {
+                Widgets.Wrapped(this.configuration.LearnedPolicyEnabled
+                    ? "The heuristics are deciding. Fix the above and reload the plugin; the Dalamud log has the full message."
+                    : "Turn on Learned policy in the settings and reload the plugin to use the model shipped with it.");
+            }
+        }
+
         var player = this.plugin.AutoPlayer;
         var queuer = this.plugin.Queuer;
         using (Widgets.Card())

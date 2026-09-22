@@ -37,24 +37,22 @@ In Dalamud Settings → **Experimental**, add
 `https://raw.githubusercontent.com/Tihlyn/MahjongHater/main/repo.json` to the custom plugin
 repositories, save, then install **MahjongHater** from the plugin installer.
 
-### Learned policy (optional)
+### Learned policy
 
-The plugin plays on its heuristics out of the box. The trained policy is a separate download
-because the model is 85 MB — too large to carry in every plugin update:
+Both trained models ship inside the plugin (`resources/models/learned_policy-8.json.gz` for
+Full Match, `-4` for Quick Match), so there is nothing to download or unzip. Turn on
+**Learned policy** in `/mhater config` and reload the plugin; the one matching the configured
+match length is used. The overlay's **Diagnostics** tab states whether a model is loaded and
+which file it came from, and the Dalamud log confirms it with
+`Learned policy loaded from ... as learned-guarded`.
 
-1. Take `learned-policy-full-match-v2.0.0.zip` (Full Match / hanchan) or
-   `learned-policy-quick-match-v2.0.0.zip` (Quick Match / East-only) from the
-   [release](https://github.com/Tihlyn/MahjongHater/releases).
-2. Extract `learned_policy.json` into `%AppData%\XIVLauncher\pluginConfigs\MahjongHater\`.
-   To keep both, rename them `learned_policy-8.json` and `learned_policy-4.json`; the plugin
-   picks the one matching the configured match length.
-3. Enable **Learned policy** in `/mhater config` and reload the plugin. The Dalamud log
-   confirms it with `Learned policy loaded (...) as learned-guarded`; if the model's rule
-   profile does not match the settings, the plugin says so and stays on the heuristics.
+To use your own model instead, put `learned_policy-8.json` (or `-4`, `.json.gz` also works)
+in `%AppData%\XIVLauncher\pluginConfigs\MahjongHater\`: the config folder is searched
+first. The same archives are attached to each
+[release](https://github.com/Tihlyn/MahjongHater/releases) with a `metrics.json` summary.
 
-Each archive also carries `metrics.json`, the model's held-out scores. What the models do and
-do not do is in `docs/research/CANDIDATE_ASSESSMENT.md`; the numbers are in
-`docs/research/EVALUATION_RUNS.md`.
+What the models do and do not do is in `docs/research/CANDIDATE_ASSESSMENT.md`; the numbers
+are in `docs/research/EVALUATION_RUNS.md`.
 
 ## Use
 
