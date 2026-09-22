@@ -3,7 +3,7 @@
     "Author": "Tihlyn",
     "Name": "MahjongHater",
     "InternalName": "MahjongHater",
-    "AssemblyVersion": "2.2.0.0",
+    "AssemblyVersion": "2.3.0.0",
     "Description": "Reads the Doman Mahjong (Emj) table straight from the game and runs a decision policy over it: recommended discard, call, riichi or win, ranked alternatives with deal-in risk, and the reasoning behind each step. Highlights the recommended tile in the game UI.",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/Tihlyn/MahjongHater",
@@ -24,11 +24,11 @@
     "IconUrl": "",
     "Punchline": "Doman Mahjong advisor: discard, call and riichi recommendations with reasoning.",
     "AcceptsFeedback": true,
-    "DownloadLinkInstall": "https://github.com/Tihlyn/MahjongHater/releases/download/v2.2.0.0/latest.zip",
-    "DownloadLinkUpdate": "https://github.com/Tihlyn/MahjongHater/releases/download/v2.2.0.0/latest.zip",
-    "DownloadLinkTesting": "https://github.com/Tihlyn/MahjongHater/releases/download/v2.2.0.0/latest.zip",
+    "DownloadLinkInstall": "https://github.com/Tihlyn/MahjongHater/releases/download/v2.3.0/latest.zip",
+    "DownloadLinkUpdate": "https://github.com/Tihlyn/MahjongHater/releases/download/v2.3.0/latest.zip",
+    "DownloadLinkTesting": "https://github.com/Tihlyn/MahjongHater/releases/download/v2.3.0/latest.zip",
     "IsHide": false,
     "IsTestingExclusive": false,
-    "LastUpdate": 1790103089
+    "LastUpdate": 1790105651
   }
 ]
