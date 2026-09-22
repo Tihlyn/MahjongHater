@@ -4,6 +4,8 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+## [2.2.0.0] - 2026-09-22
+
 ### Changed
 
 - Addon interaction is guarded end to end (docs/research/ADDON_INTERACTION_2026_09_22.md).
