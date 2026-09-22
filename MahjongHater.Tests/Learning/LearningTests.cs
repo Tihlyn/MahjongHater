@@ -233,6 +233,9 @@ public sealed class LearningTests
         Assert.Empty(imported.Rejected);
         var corpus = new ReplayCorpus(corpusPath);
         var model = new LearnedModel(SyntheticArtifact(2, 3));
+        var reactionsOnly = LearningEvaluation.Run(corpus, model, PolicyWeights.Default, new EvaluationOptions { Split = "all", Threads = 2, ReactionsOnly = true });
+        Assert.DoesNotContain("all", reactionsOnly.Agreement[LearningEvaluation.Heuristic].Keys);
+        Assert.True(reactionsOnly.Agreement[LearningEvaluation.Guarded]["reaction"].Decisions > 0);
         var report = LearningEvaluation.Run(corpus, model, PolicyWeights.Default, new EvaluationOptions { Split = "all", Threads = 2 });
         Assert.Equal(corpus.Count, report.Games);
         Assert.True(report.Decisions > 0);
@@ -301,6 +304,15 @@ public sealed class LearningTests
         var heuristic = new CallPolicy().Evaluate(offered, Model(offered), CancellationToken.None);
         var eagerDecision = eager.Evaluate(offered, Model(offered), CancellationToken.None);
         Assert.True(!eagerDecision.Accept || heuristic.Accept);
+        // With trust, a yaku-safe pon the strict heuristic declines (no shanten gain) may be
+        // taken when the network prefers it; a yakuless one never is.
+        var tempo = Snap("123m456p789s1155z", LegalAction.Pon) with { DrawnTile = null, CallTile = Tile.Parse("5z"), CallFromSeat = 3, Phase = GamePhase.CallPrompt };
+        Assert.False(new CallPolicy().Evaluate(tempo, Model(tempo), CancellationToken.None).Accept);
+        var trusting = new LearnedCallPolicy(model, weights with { LearnedCallTrust = 1 });
+        var trusted = trusting.Evaluate(tempo, Model(tempo), CancellationToken.None);
+        Assert.True(!trusted.Accept || trusted.Kind == ActionKind.Pon && trusted.Reason.Display.Contains("tempo"));
+        var yakuless = Snap("123m456p67s1122z9s", LegalAction.Pon) with { DrawnTile = null, CallTile = Tile.Parse("2z"), CallFromSeat = 3, Phase = GamePhase.CallPrompt, SeatWind = Wind.West };
+        Assert.False(trusting.Evaluate(yakuless, Model(yakuless), CancellationToken.None).Accept);
         // Not a claim window (own turn): pure heuristic, no learned note.
         var turn = Snap("123m456m4578p447s1z", LegalAction.Discard);
         Assert.False(LearnedCallPolicy.IsClaimWindow(turn));

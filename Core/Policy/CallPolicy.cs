@@ -76,6 +76,25 @@ public sealed class CallPolicy : ICallPolicy
             ?? CallDecision.Decline("No call improves the hand while preserving a yaku route or safe kan shape.");
     }
 
+    // Every claim (pon / chi / open kan of the offered tile) after which some discard keeps an
+    // open yaku route — the yaku-safety half of Evaluate without its "must lower shanten"
+    // half, for a caller (LearnedCallPolicy) that decides speed vs shape itself.
+    public IReadOnlyList<CallDecision> Viable(StateSnapshot state, CancellationToken ct)
+    {
+        var viable = new List<CallDecision>();
+        foreach (var option in Options(state).Where(o => o.Kind is ActionKind.Pon or ActionKind.Chi or ActionKind.MinKan))
+        {
+            ct.ThrowIfCancellationRequested();
+            var remaining = state.Hand.ToList();
+            foreach (var tile in option.Consumed)
+                remaining.Remove(tile);
+            var melds = state.OurMelds.Append(option.Meld).ToList();
+            if (remaining.Distinct().Any(t => HasOpenYakuRoute(state, RemoveOne(remaining, t), melds, option.Meld.Tiles[0])))
+                viable.Add(Accept(option, "Call keeps an open yaku route."));
+        }
+        return viable;
+    }
+
     private static IEnumerable<CallOption> Options(StateSnapshot state)
     {
         if (!state.OurRiichi && state.CallTile is { } called && state.CallFromSeat is >= 1 and <= 3)

@@ -274,9 +274,14 @@ public sealed record PolicyWeights
     // Chasing a riichi with a bad wait needs this much (Fukuchi: 5 200, mangan vs the dealer).
     public double ChaseBadWaitPoints { get; init; } = 5200;
     public double ChaseBadWaitPointsVsDealer { get; init; } = 8000;
-    // Learned call decisions: decline a heuristic call when the network's pass probability
-    // reaches this (LearnedCallPolicy).
-    public double LearnedCallPassThreshold { get; init; } = 0.5;
+    // Learned call decisions (LearnedCallPolicy): pass when the network's pass probability
+    // reaches this, otherwise take its best call; values above 0.5 call more often.
+    // 0.7 / trust 1: matches the Phoenix call rate (15.7 % vs 16.7 %) at 90.6 % reaction
+    // agreement on the validation sweep of docs/research/EVALUATION_RUNS.md run 8b.
+    public double LearnedCallPassThreshold { get; init; } = 0.7;
+    // 0: a learned call also needs the heuristic CallPolicy's acceptance (lowers shanten and
+    // keeps a yaku route); 1: any yaku-viable meld of the network's kind/shape will do.
+    public int LearnedCallTrust { get; init; } = 1;
     // Placement stakes (IPlacementModel): utility of finishing 1st..4th, and how strongly the
     // budget follows the stakes ratio (0 = ignore, 1 = fully). The factor is clamped to
     // [PlacementStakesMin, PlacementStakesMax].

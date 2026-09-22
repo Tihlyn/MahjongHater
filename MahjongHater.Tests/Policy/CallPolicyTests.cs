@@ -48,6 +48,18 @@ public class CallPolicyTests
     }
 
     [Fact]
+    public void Viable_lists_yaku_safe_claims_regardless_of_shanten()
+    {
+        // The strict policy declines this yakuhai pon (no shanten gain); it is still yaku-safe.
+        var offered = Offered("123m456p789s1155z", "5z", LegalAction.Pon);
+        var viable = new CallPolicy().Viable(offered, default);
+        Assert.Contains(viable, v => v.Accept && v.Kind == ActionKind.Pon && v.Meld!.Tiles.All(t => t.Equals(Tile.Parse("5z"))));
+        // A yakuless open hand has no viable claim at all.
+        var yakuless = Offered("123m456p67s1122z9s", "2z", LegalAction.Pon) with { SeatWind = Wind.West };
+        Assert.Empty(new CallPolicy().Viable(yakuless, default));
+    }
+
+    [Fact]
     public void Pon_is_preferred_over_chi_at_equal_shanten()
     {
         var state = Offered("5534m555z678p22s9s", "5m", LegalAction.Pon | LegalAction.Chi);

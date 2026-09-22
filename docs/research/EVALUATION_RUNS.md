@@ -231,3 +231,28 @@ the validation split (next); (2) riichi declaration is fixed in the raw policy (
 riichi choices right) but learned-guarded still takes the heuristic's riichi decision — worth
 switching once the call gate is tuned; (3) with the danger head level with the tables,
 `useLearnedDanger` becomes a fair A/B candidate.
+
+## Run 8b — learned call gate sweep (validation split, 300 games, 37 833 claim windows)
+
+`learn-eval … validation 300 14 <weights.json> reactions-only` with the `model-res` model.
+Two gate changes were needed first: the pass threshold had no effect above 0.5 (the gate also
+required the call to be the argmax, which pass ≥ 0.5 already implies) — it is now the pass
+probability alone; and `LearnedCallTrust = 1` lets the network take any yaku-viable meld of
+its kind/shape (`CallPolicy.Viable`) instead of only calls that lower shanten. Humans call on
+16.7 % of these windows; the heuristic on 23.7 % (agreement 81.0 %, human-call agreement
+63.0 %).
+
+| threshold | trust | agreement | human passed | human called | call rate |
+|---:|---:|---:|---:|---:|---:|
+| 0.5 | 0 | 90.2 % | 97.8 % | 52.2 % | 10.7 % |
+| 0.7 | 0 | 89.9 % | 96.5 % | 57.2 % | 12.8 % |
+| 0.9 | 0 | 88.1 % | 93.5 % | 61.1 % | 15.9 % |
+| 0.5 | 1 | **91.1 %** | 97.1 % | 61.1 % | 12.8 % |
+| 0.6 | 1 | 90.9 % | 96.2 % | 64.6 % | 14.2 % |
+| **0.7** | **1** | 90.6 % | 95.1 % | **68.1 %** | **15.7 %** |
+| 0.8 | 1 | 89.7 % | 93.4 % | 71.3 % | 17.8 % |
+| 0.9 | 1 | 87.4 % | 90.0 % | 74.4 % | 21.2 % |
+
+Adopted: **0.7 / trust 1** — the call rate matches the humans (15.7 % vs 16.7 %) with the
+network's decisions on human-call windows (68.1 %) above the heuristic's, at a 0.5-pt cost in
+overall agreement against the most conservative setting. Trust never opens a yakuless hand.

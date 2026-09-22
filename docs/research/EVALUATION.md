@@ -46,6 +46,10 @@ Policies: `heuristic` (defense v2, analyzer ordering), `heuristic-ev` (defense v
 danger) and `learned-guarded` (imitation ordering under the danger budget, learned tenpai,
 `LearnedCallPolicy` on claim windows — the plugin's "learned policy" toggle).
 
+Options after `[threads]`: `[weights.json|-]` overrides any `PolicyWeights` field (a JSON
+object, e.g. `{"LearnedCallPassThreshold": 0.7}`), `reactions-only` scores claim windows
+only — 300 validation games in ~100 s — for tuning the learned call gate.
+
 ## Reading the numbers
 
 - Agreement with Phoenix humans is an imitation proxy, not strength; a policy can be safer

@@ -7,7 +7,7 @@ using MahjongHater.Core.Simulation;
 internal static class LearningCommands
 {
     public const string Usage = "learn-data <replay-corpus> <new-dataset> [search-run|-] [max-games] [float32|float16] [workers] [compact|dense] | learn-check <model.json> <parity.json>"
-        + " | learn-eval <replay-corpus> <report.json> [model.json|-] [split=test] [max-games] [threads]"
+        + " | learn-eval <replay-corpus> <report.json> [model.json|-] [split=test] [max-games] [threads] [weights.json|-] [reactions-only]"
         + " | learn-fit-tenpai <replay-corpus> [split=train] [max-games]";
     public static bool Handles(string command) => command is "learn-data" or "learn-check" or "learn-eval" or "learn-fit-tenpai";
     public static int Run(string[] args, CancellationToken ct)
@@ -36,9 +36,15 @@ internal static class LearningCommands
                 Split = args.Length > 4 ? args[4] : "test",
                 MaxGames = args.Length > 5 ? int.Parse(args[5]) : int.MaxValue,
                 Threads = args.Length > 6 ? int.Parse(args[6]) : Math.Max(1, Environment.ProcessorCount - 1),
+                ReactionsOnly = args.Length > 8 && args[8] == "reactions-only",
             };
             if (options.Split is not ("train" or "validation" or "test" or "all")) throw new ArgumentException("split must be train, validation, test or all");
-            var report = LearningEvaluation.Run(corpus, model, PolicyWeights.Default, options, Console.Error.WriteLine, ct);
+            // Weight overrides as a JSON object of PolicyWeights properties, e.g. {"LearnedCallPassThreshold": 0.7}.
+            var weights = args.Length > 7 && args[7] != "-"
+                ? JsonSerializer.Deserialize<PolicyWeights>(File.ReadAllText(args[7])) ?? throw new InvalidDataException("Empty weights file.")
+                : PolicyWeights.Default;
+            if (args.Length > 7 && args[7] != "-") Console.Error.WriteLine($"weights: {File.ReadAllText(args[7]).Trim()}");
+            var report = LearningEvaluation.Run(corpus, model, weights, options, Console.Error.WriteLine, ct);
             LearningEvaluation.Write(args[2], report);
             Console.WriteLine(LearningEvaluation.Format(report));
             return 0;

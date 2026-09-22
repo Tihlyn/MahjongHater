@@ -21,6 +21,9 @@ public sealed record EvaluationOptions
     public int MaxGames { get; init; } = int.MaxValue;
     public int Threads { get; init; } = Math.Max(1, Environment.ProcessorCount - 1);
     public bool IncludeLegacy { get; init; } = true;
+    // Score claim-window reactions only (turn decisions skipped): the fast loop for tuning
+    // the learned call gate on the validation split.
+    public bool ReactionsOnly { get; init; }
 }
 
 public sealed record AgreementCell(int Decisions, int Agree, int Unmapped, int HumanDealIns, int PolicyDealIns,
@@ -77,7 +80,7 @@ public static class LearningEvaluation
         var started = DateTime.UtcNow;
         var done = 0;
         var parallel = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, options.Threads), CancellationToken = ct };
-        Parallel.ForEach(games, parallel, () => new Worker(policies, model, weights), (index, _, worker) =>
+        Parallel.ForEach(games, parallel, () => new Worker(policies, model, weights, options.ReactionsOnly), (index, _, worker) =>
         {
             var game = corpus.Read(index);
             foreach (var decision in game.Decisions)
@@ -172,8 +175,11 @@ public static class LearningEvaluation
         private readonly PolicyWeights weights;
         public Totals Local { get; }
 
-        public Worker(List<string> names, LearnedModel? model, PolicyWeights weights)
+        private readonly bool reactionsOnly;
+
+        public Worker(List<string> names, LearnedModel? model, PolicyWeights weights, bool reactionsOnly = false)
         {
+            this.reactionsOnly = reactionsOnly;
             this.model = model;
             this.weights = weights;
             this.heuristicOpponents = new OpponentModel(weights);
@@ -202,6 +208,8 @@ public static class LearningEvaluation
                 this.EvaluateReaction(d);
                 return;
             }
+            if (this.reactionsOnly)
+                return;
 
             // Turn decisions: a closed or open hand with a discard legal (riichi optional).
             // Wins are never recorded as replay decisions.
