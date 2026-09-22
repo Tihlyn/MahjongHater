@@ -4,6 +4,8 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+## [2.3.0] - 2026-09-22
+
 ### Added
 
 - `/mhater focus` reports why the mahjong table may not be taking clicks, to be run while it
