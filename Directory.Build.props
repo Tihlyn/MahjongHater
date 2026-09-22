@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <Version>2.0.1</Version>
+    <Version>2.0.2.1</Version>
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild Condition="'$(CI)' != ''">true</ContinuousIntegrationBuild>
     <DalamudLibPath Condition="'$(DalamudLibPath)' == '' and '$(DALAMUD_HOME)' != ''">$(DALAMUD_HOME)</DalamudLibPath>

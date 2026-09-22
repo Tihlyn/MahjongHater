@@ -4,6 +4,37 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+## [2.0.2.1] - 2026-09-22
+
+### Fixed
+
+- Anti-idle: the synthetic keystroke did not stop duty ejection (the client does not count
+  synthetic input for its timers). The guard now holds `UIModule.InputTimerModule`'s AFK,
+  content and input timers at zero while auto play runs a match, the method NightmareXIV's
+  AntiAfkKick uses; outside an unattended match the normal AFK behaviour is untouched.
+- Call windows are read from the option codes in the AtkValues integer lane (1=Tsumo, 2=Ron,
+  3=Riichi, 4=Kan, 5=Pon, 6=Chi) instead of the button text, cross-checked against the row
+  labels and the row count. This is locale-independent, keeps the "Discard" banner out of the
+  option list, and rejects the unrelated integer payloads a type-19 also carries.
+- A call window opened only from the prompt panel's text now expires after 400 ms unless an
+  event confirms it. The panel keeps its labels after a prompt closes, which invented windows
+  offering a finished hand's Ron or a riichi on a 1-shanten hand.
+- Clicks never leave the addon hovering a tile: the operator fires the activation chain alone,
+  and the hover fallback (MouseOver + MouseOut before the click) is only used if a click does
+  not register. An unpaired MouseOver left the Emj agent refreshing a discarded tile's tooltip
+  and crashed the game three times in one session (docs/research/LIVE_ISSUES_2026_09_22.md).
+- The optional precomputed/simulation tables no longer log a warning when they were never
+  generated; their state shows in the Diagnostics tab instead.
+
+### Changed
+
+- The main window shows the Doman Mahjong rank and rating in place of the session W/L and win
+  rate. The game exposes them only in the Gold Saucer Info window, so the plugin reads them
+  whenever that window is open and remembers the last value.
+- When the game offers riichi and the policy answers with a discard, the closed hand, drawn
+  tile and meld count are logged — the one decision-quality defect the 2026-09-22 session
+  showed (2 of 9 genuine offers) needs that to be diagnosed.
+
 ## [2.0.1] - 2026-09-22
 
 ### Added
