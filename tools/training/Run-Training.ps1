@@ -30,9 +30,9 @@ param(
     [int]$MaxGames = 24000,
     [ValidateSet('float16', 'float32')][string]$Dtype = 'float16',
     [int]$Workers = [Math]::Max(1, [Environment]::ProcessorCount - 1),
-    # Network and optimisation. blocks 8 / channels 160 / hidden 512 is ~5 M parameters; with the
-    # training data streamed through GPU memory the card, not the loader, sets the epoch time, so
-    # batches are large. -WindowRows 0 sizes the device-resident window from free GPU memory.
+    # Network and optimisation. blocks 8 / channels 160 / hidden 512 is ~5 M parameters; with every
+    # split streamed through GPU memory the card, not the loader, sets the epoch time, so batches
+    # are large. -WindowRows 0 sizes the two device-resident windows from free GPU memory.
     [int]$Blocks = 8,
     [int]$Channels = 160,
     [int]$Hidden = 512,
@@ -41,6 +41,8 @@ param(
     [double]$LearningRate = 0.001,
     [int]$BufferRows = 262144,
     [int]$WindowRows = 0,
+    # Regularisation: the first 11 M-row run started overfitting at epoch 6 without it.
+    [double]$Dropout = 0.1,
     [ValidateSet('auto', 'cuda', 'cpu')][string]$Device = 'auto',
     [string]$RunName = 'res',
     # Evaluation: held-out test split of the corpus; 0 = every test game (slow: ~1 s per game per thread).
@@ -126,7 +128,8 @@ if ($stages -contains 'export') {
 if ($stages -contains 'train') {
     if (-not (Test-Path -LiteralPath $python)) { throw 'Run .\Setup-Training.ps1 first (creates .venv with torch).' }
     $trainArgs = @((Join-Path $root 'train.py'), $dataset, $model, '--epochs', $Epochs, '--batch', $Batch, '--threads', $Workers, '--lr', $LearningRate,
-        '--channels', $Channels, '--hidden', $Hidden, '--blocks', $Blocks, '--device', $Device, '--buffer-rows', $BufferRows, '--window-rows', $WindowRows, '--memory-log')
+        '--channels', $Channels, '--hidden', $Hidden, '--blocks', $Blocks, '--device', $Device, '--buffer-rows', $BufferRows, '--window-rows', $WindowRows,
+        '--dropout', $Dropout, '--memory-log')
     if ($Resume -or (Test-Path -LiteralPath (Join-Path $model 'checkpoint.pt'))) { $trainArgs += '--resume' }
     Invoke-Logged "train-$RunName" { & $python @trainArgs }
 }

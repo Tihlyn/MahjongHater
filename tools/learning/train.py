@@ -15,13 +15,14 @@ Memory: nothing is memory-mapped or copied whole. Training reads shuffled chunks
 into a bounded shuffle buffer (--buffer-rows); validation/test are streamed with metrics
 accumulated per batch. --memory-log prints the resident set after every epoch.
 
-GPU: --device cuda (or auto) with automatic mixed precision. Training data streams through
-device memory: a reader thread fills a pinned window of randomly ordered contiguous chunks
-(--window-rows, default ~a third of free GPU memory) while the GPU trains on the previous
-window; shuffling, batching and unpacking happen on the device, and the objective has no
-host/device synchronisation points. With that the GPU, not the loader, sets the epoch time,
-so use big batches (--batch 4096) and a deeper network. On the CPU the loader runs on a
-background thread instead (--prefetch batches ahead).
+GPU: --device cuda (or auto) with automatic mixed precision. Every split streams through
+device memory: a reader thread reads the file in randomly ordered contiguous chunks through a
+small ring of pinned pieces straight into one of two device-resident windows (--window-rows,
+default ~a quarter of free GPU memory each) while the GPU works on the other; shuffling,
+batching, unpacking, the objective and every validation/test metric run on the device, and
+the training loop has no host/device synchronisation points. Host memory stays under a
+gigabyte whatever the window size. On the CPU the loader runs on a background thread instead
+(--prefetch batches ahead).
 """
 import argparse
 import ctypes
@@ -72,9 +73,10 @@ class Layout:
 
 
 class Network(nn.Module):
-    def __init__(self, layout, channels=24, hidden=64, blocks=0):
+    def __init__(self, layout, channels=24, hidden=64, blocks=0, dropout=0.):
         super().__init__()
         self.layout = layout
+        self.dropout = nn.Dropout(dropout)   # on the flattened planes before the dense layer; identity at inference
         self.stem = nn.Conv1d(layout.channels, channels, 3, padding=1)
         self.blocks = nn.ModuleList(nn.ModuleList([nn.Conv1d(channels, channels, 3, padding=1), nn.Conv1d(channels, channels, 3, padding=1)])
                                     for _ in range(blocks))
@@ -89,7 +91,7 @@ class Network(nn.Module):
         h = F.relu(self.stem(x.reshape(-1, self.layout.channels, WIDTH)))
         for conv1, conv2 in self.blocks:
             h = F.relu(conv2(F.relu(conv1(h))) + h)
-        return self.output(F.relu(self.dense(h.flatten(1))))
+        return self.output(F.relu(self.dense(self.dropout(h.flatten(1)))))
 
 
 def unpack(rows, layout):
@@ -137,66 +139,106 @@ def objective(output, legal, human, targets, q, placement, layout):
             + .3 * placed)
 
 
-class DeviceWindows:
-    """Training batches from windows of rows resident on the device. The file is visited in
-    random chunk order (contiguous chunks of `chunk` rows, like Split.shuffled_batches); a
-    reader thread fills a pinned staging buffer with the next window while the GPU trains on
-    the current one; the window is copied over in its stored dtype and shuffled, sliced and
-    unpacked on the device. Host work per epoch is one sequential-ish read of the file."""
+class DeviceStream:
+    """Rows of a split resident on the device, filled by a reader thread.
 
-    def __init__(self, split, batch, window_rows, rng, device, seed):
-        self.split, self.batch, self.device = split, batch, device
-        layout = split.layout
-        self.chunk = max(batch, min(8192, window_rows))
-        starts = list(range(0, split.rows, self.chunk))
-        rng.shuffle(starts)
-        per_window = max(1, window_rows // self.chunk)
-        self.windows = [starts[i:i + per_window] for i in range(0, len(starts), per_window)]
+    The file is visited in contiguous chunks of `chunk` rows (random order when a generator is
+    given, file order otherwise). Chunks go through a ring of small pinned pieces into one of
+    two device windows on a copy stream while the consumer works on the other window, so the
+    host holds a few hundred MB however large the windows are. The consumer shuffles, slices
+    and unpacks on the device. One object serves every split of a dataset."""
+
+    def __init__(self, layout, device, window_rows, chunk=8192, pieces=4):
+        self.layout, self.device = layout, device
+        self.chunk = chunk
+        self.window_rows = max(chunk, window_rows // chunk * chunk)
         dtype = torch.float16 if layout.item == 2 else torch.float32
-        self.staging = torch.empty((per_window * self.chunk, layout.row), dtype=dtype, pin_memory=device.type == "cuda")
-        self.view = self.staging.numpy()
-        self.ready = queue.Queue(maxsize=1)     # rows filled in staging, or an exception
-        self.free = threading.Semaphore(1)      # staging may be overwritten
-        self.generator = torch.Generator().manual_seed(seed)
-        self.thread = threading.Thread(target=self._read, daemon=True)
-        self.thread.start()
+        cuda = device.type == "cuda"
+        self.pieces = [torch.empty((chunk, layout.row), dtype=dtype, pin_memory=cuda) for _ in range(pieces)]
+        self.piece_views = [piece.numpy() for piece in self.pieces]
+        self.piece_events = [None] * pieces
+        self.windows = [torch.empty((self.window_rows, layout.row), dtype=dtype, device=device) for _ in range(2)]
+        self.copy_stream = torch.cuda.Stream(device) if cuda else None
 
-    def _read(self):
-        try:
-            with self.split.file.open("rb") as file:
-                for window in self.windows:
-                    self.free.acquire()
-                    filled = 0
-                    for start in window:
-                        count = min(self.chunk, self.split.rows - start)
-                        file.seek(start * self.split.layout.row * self.split.layout.item)
-                        file.readinto(memoryview(self.view[filled:filled + count]).cast("B"))
-                        filled += count
-                    self.ready.put(filled)
-        except BaseException as error:  # noqa: BLE001 - forwarded to the consumer
-            self.ready.put(error)
+    def _event(self):
+        return torch.cuda.Event() if self.device.type == "cuda" else None
 
-    def __iter__(self):
-        layout = self.split.layout
-        for _ in self.windows:
-            item = self.ready.get()
+    def run(self, split, batch, rng=None, seed=0):
+        """Iterate (count, unpacked parts) over the whole split once."""
+        starts = list(range(0, split.rows, self.chunk))
+        if rng is not None:
+            rng.shuffle(starts)
+        per_window = self.window_rows // self.chunk
+        plan = [starts[i:i + per_window] for i in range(0, len(starts), per_window)]
+        ready = queue.Queue(maxsize=1)
+        released = [threading.Semaphore(1), threading.Semaphore(1)]   # window may be overwritten
+        done_events = [None, None]                                     # consumer's last use of the window
+
+        def read():
+            try:
+                with split.file.open("rb") as file:
+                    for w, window in enumerate(plan):
+                        slot = w % 2
+                        released[slot].acquire()
+                        target = self.windows[slot]
+                        if self.copy_stream is not None and done_events[slot] is not None:
+                            self.copy_stream.wait_event(done_events[slot])
+                        filled = 0
+                        for n, start in enumerate(window):
+                            k = n % len(self.pieces)
+                            if self.piece_events[k] is not None:
+                                self.piece_events[k].synchronize()      # the piece's previous copy has landed
+                            count = min(self.chunk, split.rows - start)
+                            file.seek(start * self.layout.row * self.layout.item)
+                            file.readinto(memoryview(self.piece_views[k][:count]).cast("B"))
+                            if self.copy_stream is not None:
+                                with torch.cuda.stream(self.copy_stream):
+                                    target[filled:filled + count].copy_(self.pieces[k][:count], non_blocking=True)
+                                    self.piece_events[k] = self._event()
+                                    self.piece_events[k].record(self.copy_stream)
+                            else:
+                                target[filled:filled + count].copy_(self.pieces[k][:count])
+                            filled += count
+                        landed = self._event()
+                        if landed is not None:
+                            landed.record(self.copy_stream)
+                        ready.put((slot, filled, landed))
+            except BaseException as error:  # noqa: BLE001 - forwarded to the consumer
+                ready.put(error)
+
+        threading.Thread(target=read, daemon=True).start()
+        generator = torch.Generator().manual_seed(seed)
+        for _ in plan:
+            item = ready.get()
             if isinstance(item, BaseException):
                 raise item
-            rows = self.staging[:item].to(self.device, copy=True)   # synchronous: staging is reused right after
-            self.free.release()
-            order = torch.randperm(item, generator=self.generator).to(self.device)
-            for j in range(0, item, self.batch):
-                index = order[j:j + self.batch]
-                yield len(index), unpack(rows.index_select(0, index).float(), layout)
-            del rows
+            slot, filled, landed = item
+            if landed is not None:
+                torch.cuda.current_stream().wait_event(landed)
+            rows = self.windows[slot][:filled]
+            if rng is not None:
+                order = torch.randperm(filled, generator=generator).to(self.device)
+                for j in range(0, filled, batch):
+                    index = order[j:j + batch]
+                    yield len(index), unpack(rows.index_select(0, index).float(), self.layout)
+            else:
+                for j in range(0, filled, batch):
+                    piece = rows[j:j + batch]
+                    yield len(piece), unpack(piece.float(), self.layout)
+            if self.device.type == "cuda":
+                done_events[slot] = self._event()
+                done_events[slot].record()
+            released[slot].release()
 
 
-def device_window_rows(split, requested, device):
-    """Rows per device window: the request, or about a third of the free device memory."""
-    if requested > 0 or device.type != "cuda":
-        return min(requested if requested > 0 else 262144, split.rows)
+def device_window_rows(layout, requested, device):
+    """Rows per device window (two windows): the request, or about a quarter of free memory."""
+    if requested > 0:
+        return requested
+    if device.type != "cuda":
+        return 131072
     free, _ = torch.cuda.mem_get_info()
-    return max(8192, min(split.rows, int(free * .35 // (split.layout.row * split.layout.item))))
+    return max(8192, int(free * .25 // (layout.row * layout.item)))
 
 
 class Prefetcher:
@@ -308,23 +350,31 @@ def resident_mb():
 
 
 @torch.no_grad()
-def stream(model, split, batch, device):
-    """Yield (rows on CPU, output on CPU) per batch with the model in eval mode."""
+def stream(model, split, batch, device, loader=None):
+    """Yield (unpacked parts, output) per batch with the model in eval mode, everything on the
+    device when a DeviceStream is given (metrics then run there too)."""
     model.eval()
+    if loader is not None:
+        for _, parts in loader.run(split, batch):
+            with torch.autocast(device_type=device.type, enabled=device.type == "cuda"):
+                output = model(parts[0])
+            yield parts, output.float()
+        return
     for _, rows in split.batches(batch):
-        x = rows[:, :split.layout.features].to(device, non_blocking=True)
+        parts = unpack(rows, split.layout)
+        x = parts[0].to(device, non_blocking=True)
         with torch.autocast(device_type=device.type, enabled=device.type == "cuda"):
             output = model(x)
-        yield rows, output.float().cpu()
+        yield parts, output.float().cpu()
 
 
 def fit_calibration(logits, targets):
     mask = targets >= 0
-    x, y = logits[mask].detach(), targets[mask].detach()
+    x, y = logits[mask].detach().float(), targets[mask].detach().float()
     if len(y) < 30 or y.sum() < 5 or (1 - y).sum() < 5:
         return {"Slope": 1., "Bias": 0.}, "insufficient validation positives/negatives; identity calibration"
-    raw_slope = nn.Parameter(torch.tensor(math.log(math.expm1(1.))))
-    bias = nn.Parameter(torch.tensor(0.))
+    raw_slope = nn.Parameter(torch.tensor(math.log(math.expm1(1.)), device=x.device))
+    bias = nn.Parameter(torch.tensor(0., device=x.device))
     optimizer = torch.optim.LBFGS([raw_slope, bias], max_iter=60, line_search_fn="strong_wolfe")
 
     def closure():
@@ -393,7 +443,7 @@ def rule_masks(x, layout):
     return riichi, safe
 
 
-def evaluate(model, split, batch, device, tenpai_cal, wait_cal, value_scale=1.):
+def evaluate(model, split, batch, device, tenpai_cal, wait_cal, value_scale=1., loader=None):
     """Streaming report: one batch of rows in memory at a time. Reaction rows (legal set
     includes pass) are reported separately from turn rows."""
     layout = split.layout
@@ -405,8 +455,7 @@ def evaluate(model, split, batch, device, tenpai_cal, wait_cal, value_scale=1.):
     placement_count = placement_top1 = rank_top1 = 0
     placement_nll = 0.
     pass_index = 74 if layout.actions > 74 else -1
-    for rows, output in stream(model, split, batch, device):
-        x, legal, human, targets, q, placement = unpack(rows, layout)
+    for (x, legal, human, targets, q, placement), output in stream(model, split, batch, device, loader):
         labeled = human >= 0
         if labeled.any():
             logits = output[labeled, :layout.actions].masked_fill(~legal[labeled], -1e9)
@@ -459,17 +508,19 @@ def evaluate(model, split, batch, device, tenpai_cal, wait_cal, value_scale=1.):
             "placement_top1_by_current_rank": rank_top1 / placement_count if placement_count else None}
 
 
-def validation_pass(model, split, batch, device):
-    """Validation loss plus the small per-row pieces calibration needs (logits and masked
-    targets of the tenpai/ron heads, value ratio terms); never the feature planes."""
+def validation_pass(model, split, batch, device, loader=None, collect=False):
+    """Validation loss; with `collect`, also the per-row pieces calibration needs (logits and
+    masked targets of the tenpai/ron heads, value ratio terms), never the feature planes.
+    Everything stays on the device until the end."""
     layout = split.layout
-    total = 0.
+    total = torch.zeros((), device=device if loader is not None else "cpu", dtype=torch.float64)
     tenpai_logits, tenpai_targets, wait_logits, wait_targets = [], [], [], []
     value_target_sum = value_pred_sum = 0.
     value_count = 0
-    for rows, output in stream(model, split, batch, device):
-        x, legal, human, targets, q, placement = unpack(rows, layout)
-        total += float(objective(output, legal, human, targets, q, placement, layout)) * len(rows)
+    for (x, legal, human, targets, q, placement), output in stream(model, split, batch, device, loader):
+        total += objective(output, legal, human, targets, q, placement, layout).double() * len(x)
+        if not collect:
+            continue
         riichi, safe = rule_masks(x, layout)
         tenpai_logits.append(output[:, layout.tenpai:layout.tenpai + 3].clone())
         tenpai_targets.append(targets[:, :3].masked_fill(riichi, -1))
@@ -479,7 +530,10 @@ def validation_pass(model, split, batch, device):
         value_count += int(value_mask.sum())
         value_target_sum += float(targets[:, 105:][value_mask].sum())
         value_pred_sum += float(F.softplus(output[:, layout.points:layout.points + 102])[value_mask].sum())
-    return (total / len(split), torch.cat(tenpai_logits), torch.cat(tenpai_targets), torch.cat(wait_logits), torch.cat(wait_targets),
+    loss = float(total) / len(split)
+    if not collect:
+        return (loss,)
+    return (loss, torch.cat(tenpai_logits), torch.cat(tenpai_targets), torch.cat(wait_logits), torch.cat(wait_targets),
             value_count, value_target_sum, value_pred_sum)
 
 
@@ -508,9 +562,14 @@ def train(args):
         raise ValueError("Epochs, batch, threads and learning rate must be positive; buffer-rows must cover a batch")
     if args.channels < 1 or args.channels > 256 or args.hidden < 1 or args.hidden > 512 or args.blocks < 0 or args.blocks > 64:
         raise ValueError("channels 1-256, hidden 1-512, blocks 0-64 (LearnedModel limits)")
+    if not 0 <= args.dropout < 1:
+        raise ValueError("dropout must be in [0, 1)")
     device = pick_device(args.device)
-    torch.set_num_threads(args.threads)
+    # With everything on the device the CPU only orchestrates; spare threads would just spin.
+    torch.set_num_threads(min(args.threads, 4) if device.type == "cuda" else args.threads)
     torch.backends.cudnn.benchmark = True   # fixed 34-wide shapes: let cuDNN pick the conv kernels once
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
@@ -519,11 +578,13 @@ def train(args):
     identity_fields = {"dataset": manifest, "seed": args.seed, "batch": args.batch, "lr": args.lr, "architecture": architecture}
     if args.schedule != "constant":
         identity_fields["schedule"] = f"{args.schedule}-{args.epochs}"   # the decay horizon is part of the run
+    if args.dropout > 0:
+        identity_fields["dropout"] = args.dropout
     identity = hashlib.sha256(json.dumps(identity_fields, sort_keys=True).encode()).hexdigest()
     if args.output.exists() and not args.resume:
         raise ValueError("Output exists; use a new directory or --resume")
     args.output.mkdir(parents=True, exist_ok=True)
-    model = Network(layout, args.channels, args.hidden, args.blocks).to(device)
+    model = Network(layout, args.channels, args.hidden, args.blocks, args.dropout).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     # Cosine decay to 5 % of the base rate over the planned epochs: the usual +0.5-1 pt of
     # imitation accuracy at the end of a run over a constant rate.
@@ -543,7 +604,8 @@ def train(args):
         torch.set_rng_state(saved["rng"])
         start, best_loss, history = saved["epoch"], saved["best_loss"], saved["history"]
     use_windows = args.loader == "windows" or args.loader == "auto" and device.type == "cuda"
-    window_rows = device_window_rows(splits["train"], args.window_rows, device) if use_windows else 0
+    window_rows = device_window_rows(layout, args.window_rows, device) if use_windows else 0
+    loader = DeviceStream(layout, device, window_rows) if use_windows else None
     print(json.dumps({"device": str(device), "window_rows": window_rows, "architecture": architecture, "parameters": sum(p.numel() for p in model.parameters()),
                       "train_rows": len(splits["train"]), "schema": layout.schema}), flush=True)
     # Test data is not evaluated until model selection and calibration are frozen.
@@ -552,8 +614,8 @@ def train(args):
         rng = np.random.default_rng(args.seed + epoch)
         total_loss, seen, steps = torch.zeros((), device=device), 0, 0
         epoch_started = time.time()
-        if use_windows:
-            batches = DeviceWindows(splits["train"], args.batch, window_rows, rng, device, args.seed + epoch)
+        if loader is not None:
+            batches = loader.run(splits["train"], args.batch, rng, args.seed + epoch)
         else:
             batches = Prefetcher(splits["train"].shuffled_batches(args.batch, args.buffer_rows, rng), layout, device, args.prefetch)
         for count, (x, legal, human, targets, q, placement) in batches:
@@ -576,7 +638,7 @@ def train(args):
         if not math.isfinite(total_loss):
             raise FloatingPointError("Nonfinite training loss")
         train_seconds = time.time() - epoch_started
-        validation_loss = validation_pass(model, splits["validation"], args.batch, device)[0]
+        validation_loss = validation_pass(model, splits["validation"], args.batch, device, loader)[0]
         entry = {"epoch": epoch + 1, "train_loss": total_loss / max(1, seen), "validation_loss": validation_loss,
                  "train_seconds": round(train_seconds), "validation_seconds": round(time.time() - epoch_started - train_seconds)}
         if args.memory_log:
@@ -601,7 +663,7 @@ def train(args):
     # Riichi is a deterministic tenpai fact, and known-safe tiles are hard rules.
     # Fit probabilistic calibration only where those rules do not decide the result.
     _, tenpai_logits, tenpai_targets, wait_logits, wait_targets, value_count, value_target_sum, value_pred_sum = \
-        validation_pass(model, splits["validation"], args.batch, device)
+        validation_pass(model, splits["validation"], args.batch, device, loader, collect=True)
     tenpai_cal, tenpai_note = fit_calibration(tenpai_logits, tenpai_targets)
     wait_cal, wait_note = fit_calibration(wait_logits, wait_targets)
     del tenpai_logits, tenpai_targets, wait_logits, wait_targets
@@ -617,14 +679,14 @@ def train(args):
     atomic_json(args.output / "learned_policy.json", artifact)
     report = {"dataset": manifest, "training_identity": identity, "history": history, "architecture": architecture,
               "calibration": {"tenpai": tenpai_note, "conditional_ron": wait_note, "value_scale": value_scale},
-              "validation": evaluate(model, splits["validation"], args.batch, device, tenpai_cal, wait_cal, value_scale),
-              "test": evaluate(model, splits["test"], args.batch, device, tenpai_cal, wait_cal, value_scale),
+              "validation": evaluate(model, splits["validation"], args.batch, device, tenpai_cal, wait_cal, value_scale, loader),
+              "test": evaluate(model, splits["test"], args.batch, device, tenpai_cal, wait_cal, value_scale, loader),
               "limitations": ["Whole-game split; players and time periods can overlap.",
                               "Imitation accuracy is not playing strength; evaluate complete games before promotion.",
                               "Own-turn kan and win decisions retain the existing policy.",
                               "Opponent values exclude ura, honba and red winning-tile bonuses."]}
     atomic_json(args.output / "metrics.json", report)
-    head = torch.from_numpy(splits["test"].read(0, 8).astype(np.float32))
+    head = torch.from_numpy(splits["test"].read(0, 8).astype(np.float32))   # first eight test rows, straight from the file
     with torch.no_grad():
         model.eval()
         head_output = model(head[:, :layout.features].to(device)).float().cpu()
@@ -653,7 +715,8 @@ if __name__ == "__main__":
     parser.add_argument("--blocks", type=int, default=0, help="residual blocks after the stem (0-64)")
     parser.add_argument("--device", default="auto", help="cpu, cuda or auto")
     parser.add_argument("--prefetch", type=int, default=6, help="CPU training: batches prepared ahead on the loader thread")
-    parser.add_argument("--window-rows", type=int, default=0, help="CUDA training: rows per device-resident window (0 = ~a third of free GPU memory)")
+    parser.add_argument("--window-rows", type=int, default=0, help="CUDA: rows per device-resident window, two windows (0 = ~a quarter of free GPU memory each)")
     parser.add_argument("--loader", default="auto", choices=["auto", "windows", "prefetch"], help="auto = device windows on CUDA, prefetch thread on CPU")
     parser.add_argument("--schedule", default="cosine", choices=["cosine", "constant"], help="learning-rate schedule over --epochs")
+    parser.add_argument("--dropout", type=float, default=0.1, help="dropout before the dense layer (the first 11 M-row run overfit from epoch 6)")
     train(parser.parse_args())

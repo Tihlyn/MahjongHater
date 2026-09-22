@@ -62,7 +62,7 @@ to `work\logs\<stage>-<timestamp>.log`.
 | eval | `learn-eval` on 1 500 held-out test games: agreement per category, reaction agreement + call rate, counterfactual deal-in of the chosen tile, tenpai/danger calibration, for the heuristics and the learned policies side by side | `work\eval\<run>-test.json` + log | ~30 min |
 
 Defaults: `-MaxGames 24000 -Blocks 8 -Channels 160 -Hidden 512 -Epochs 20 -Batch 4096
--WindowRows 0`. The network is ≈ 5 M parameters (~100 MB as JSON; the plugin's load limit
+-WindowRows 0 -Dropout 0.1`. The network is ≈ 5 M parameters (~100 MB as JSON; the plugin's load limit
 is 256 MB) and costs ≈ 10 ms per position in the plugin's C# inference (a decision runs it
 once, plus three score counterfactuals for the placement stakes). `-Blocks 10 -Channels 192`
 (≈ 8 M parameters, ≈ 16 ms) is the next step up if the run looks capacity-limited (train
@@ -71,17 +71,22 @@ at batch 4096. The learning rate follows a cosine decay to 5 % over the planned 
 (`--schedule constant` in `train.py` turns it off), so `-Epochs` is part of the run's
 identity: a resume must keep it.
 
-How the data reaches the GPU: `train.py` streams the training split through device memory.
-A reader thread fills a pinned window (`-WindowRows`, default ≈ a third of free GPU memory,
-≈ 450 k rows / 2.5 GB on an 8 GB card) with randomly ordered contiguous chunks of the file
-while the GPU trains on the previous window; the window is copied over in float16 and
-shuffled, sliced and unpacked on the device, and the objective has no host/device
-synchronisation points. Host work per epoch is one read of the file (80 GB: 40 s on NVMe,
-~3 min on a SATA SSD, either well under the compute time) and ~3 GB of RAM. `train_seconds`
-and `gpu_peak_mb` in the log say whether the card is busy: expect several GB of peak GPU
-memory and `nvidia-smi` near 100 %. The first version of the script kept the loader on the
-training thread with a sync per loss term, which starved the GPU (200 MB peak, 15 min per
-epoch); that is what the log line `window_rows` distinguishes.
+How the data reaches the GPU: `train.py` streams every split through device memory. A
+reader thread reads the file in randomly ordered contiguous chunks (46 MB) through a ring of
+four pinned pieces straight into one of two device-resident windows (`-WindowRows`, default
+≈ a quarter of free GPU memory each — ≈ 400 k rows / 2.3 GB on a 10 GB card) while the GPU
+works on the other; shuffling, batching, unpacking, the objective and every validation/test
+metric run on the device, and the training loop has no host/device synchronisation points.
+Host RAM stays around 2 GB whatever the window size (the previous design pinned a whole
+window per epoch and evaluated on the CPU with every core — 12 GB of RAM and the CPU pinned
+at 100 % during validation). Host work per epoch is one read of the file (80 GB: 40 s on
+NVMe, ~3 min on a SATA SSD). `train_seconds` / `validation_seconds` and `gpu_peak_mb` in
+the log say whether the card is busy; expect `nvidia-smi` near 100 %.
+
+Regularisation: `-Dropout 0.1` (before the dense layer; identity at inference) is on by
+default because the first 11 M-row run started overfitting at epoch 6 (validation loss
+flat while training loss kept falling). If a run still shows that pattern, more games
+(`-MaxGames`) beat a bigger network.
 
 Useful variations:
 
