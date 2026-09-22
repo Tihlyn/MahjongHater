@@ -153,7 +153,11 @@ public sealed class MainWindow : Window
         using (Widgets.Card())
         {
             Widgets.Label("AUTO PLAY COUNTERS");
-            Widgets.Wrapped($"{player.DecisionsExecuted} decisions · {player.StallsThisSession} stalls · {player.RecoveriesThisSession} recoveries · {queuer.MatchesQueued} queued", false);
+            var guard = this.plugin.IdleGuard;
+            Widgets.Wrapped($"{player.DecisionsExecuted} decisions · {player.StallsThisSession} stalls · {player.RecoveriesThisSession} recoveries · {queuer.MatchesQueued} queued · {guard.NudgesThisSession} nudges", false);
+            Widgets.Wrapped($"Anti-idle: {guard.Status}");
+            if (guard.NudgesThisSession > 0 && !guard.LastNudgeReachedTheGame)
+                Widgets.Badge("Last nudge went to a background window", warning: true);
             if (player.StallsThisSession > 0)
             {
                 Widgets.Wrapped($"Stall log: {this.plugin.StallLogPath}");
@@ -265,6 +269,20 @@ public sealed class MainWindow : Window
             }
 
             Widgets.Wrapped(queuer.Status);
+
+            var guard = this.plugin.IdleGuard;
+            if (Widgets.ToggleRow("Anti-idle nudge (duties eject after ~5 min)", "##antiidle", guard.Enabled))
+            {
+                guard.Enabled = !guard.Enabled;
+                guard.Reset();
+                this.configuration.AntiIdle = guard.Enabled;
+                this.configuration.Save();
+            }
+
+            if (ImGui.IsItemHovered())
+                Widgets.Tooltip("While auto play runs a match, sends one harmless input every "
+                    + $"{IdleGuard.Clamp(guard.Interval).TotalSeconds:F0} s — but only after the machine has been idle that long, "
+                    + "so it never interferes while you are using it. The auto player's own clicks are addon events, which the duty timer does not see.");
             this.DrawDutyPicker(queuer);
         }
     }

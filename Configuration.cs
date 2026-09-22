@@ -42,6 +42,12 @@ public sealed class Configuration : IPluginConfiguration
 
     public bool Requeue { get; set; }
 
+    // Anti-idle for unattended runs: duties eject after ~5 minutes without input, and the
+    // auto player's ATK events do not count as input (Core/Operate/IdleGuard.cs).
+    public bool AntiIdle { get; set; } = true;
+
+    public int AntiIdleSeconds { get; set; } = 150;
+
     public uint RequeueDuty { get; set; } = 766;   // Novice Mahjong (Quick Ranked Match)
 
     public static Configuration Load(IDalamudPluginInterface pluginInterface)

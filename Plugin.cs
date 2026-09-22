@@ -116,6 +116,11 @@ public sealed class Plugin : IDalamudPlugin
         {
             Enabled = this.Configuration.AutoPlay,
         };
+        this.IdleGuard = new IdleGuard(msg => pluginLog.Information(msg))
+        {
+            Enabled = this.Configuration.AntiIdle,
+            Interval = TimeSpan.FromSeconds(this.Configuration.AntiIdleSeconds),
+        };
         this.Queuer = new MatchQueuer(gameGui, clientState, msg => pluginLog.Information(msg))
         {
             Enabled = this.Configuration.Requeue,
@@ -165,6 +170,8 @@ public sealed class Plugin : IDalamudPlugin
     public AutoPlayer AutoPlayer { get; }
 
     public MatchQueuer Queuer { get; }
+
+    public IdleGuard IdleGuard { get; }
 
     public string StallLogPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "autoplay_stalls.log");
 
@@ -248,6 +255,7 @@ public sealed class Plugin : IDalamudPlugin
         this.Reader.Tick();
         this.AnalysisService.Update(this.Reader.Current);
         this.AutoPlayer.Tick(this.Reader.Current);
+        this.IdleGuard.Tick(this.AutoPlayer.Enabled, this.AutoPlayer.InMatch, DateTime.UtcNow);
         this.Queuer.Tick(this.AutoPlayer.InMatch);
     }
 
