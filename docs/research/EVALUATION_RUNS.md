@@ -184,3 +184,50 @@ is the strongest runtime configuration on every defensive number (25 % fewer dea
 the humans against a riichi at 63 % agreement). The two remaining gaps are exactly the ones
 the v2 stack targets: riichi declaration (the network under-declares, 62.9 % of human
 riichis) and calls (heuristic over-calls, 23.6 % vs 16.3 %).
+
+## Run 8 — first v2 model (`model-res`: 8×160 residual, 11.4 M rows, RTX 3080) on the 107 k-game corpus
+
+Data: all 30 Phoenix archives imported on the training box (106 964 hanchan games, 63.7 M
+decisions, corpus `88F5E78F5159`); dataset = 24 000 of them (11.4 M train rows), 20 epochs,
+best validation loss at epoch 8 (1.1257; overfitting afterwards → `--dropout 0.1` and more
+games for the next run). Trainer test split (1.44 M rows): **policy top-1 73.0 %**
+(v1 c96/h256: 69.1 %), **reaction top-1 91.9 %**, tenpai Brier 0.048 / ECE 0.0016,
+conditional-ron Brier 0.042 / ECE 0.001, placement top-1 46.9 % (current-rank baseline
+47.1 %). C# inference 8.6 ms per position. The package's `check` stage failed on this run
+because that script version computed the parity vectors on the GPU, where cuDNN convolutions
+default to TF32 (2.6e-3 error); recomputed in fp32 on the CPU: 3.8e-6 (fixed in `1236aa7`).
+
+Harness, 1 500 held-out games, 887 102 decisions (702 122 turn, 184 980 reactions), 103 min
+on 14 threads:
+
+| | human | heuristic | legacy | learned | learned-guarded |
+|---|---:|---:|---:|---:|---:|
+| agreement, all (n=702 122) | — | 52.3 % | 52.3 % | **69.3 %** | 66.4 % |
+| agreement, human-riichi (n=10 770) | — | 86.0 % | 80.3 % | 74.2 % (v1: 62.9 %) | 85.6 % |
+| agreement, riichi-choice (n=29 325) | — | 45.0 % | 45.4 % | **81.7 %** | 48.7 % |
+| agreement, vs-riichi (n=123 078) | — | 56.3 % | 52.4 % | 69.8 % | 65.8 % |
+| reaction agreement (n=184 980) | — | 81.1 % | 81.1 % | 81.1 % | **90.3 %** |
+| reaction, human passed (n=154 563) | — | 84.5 % | 84.5 % | 84.5 % | 97.8 % |
+| reaction, human called (n=30 417) | — | 63.6 % | 63.6 % | 63.6 % | 52.5 % |
+| call rate on claim windows | 16.4 % | 23.7 % | 23.7 % | 23.7 % | 10.7 % |
+| chosen-tile deal-in, vs-riichi | 2.05 % | 2.06 % | 2.85 % | 1.91 % | **1.70 %** |
+| chosen-tile deal-in, all | 0.93 % | 0.89 % | 1.12 % | 0.86 % | 0.78 % |
+
+Placement head (learned top-1 / NLL vs current-rank top-1): all 46.8 % / 1.124 vs 47.4 %;
+South 3+ 62.3 % / 0.884 vs 63.0 %; all-last 72.3 % / 0.680 vs 73.2 %. Top-1 does not beat
+the "finish where you stand" rule, but the probabilities do: a rank baseline calibrated to its
+own accuracy has NLL 1.27 overall and 0.875 at all-last, so the head carries information beyond
+the standing — which is what the placement-stakes factor consumes.
+
+Calibration: learned tenpai head AUC **0.871 / 0.808** closed / open (refit logistic 0.848 /
+0.772), ECE 0.003 / 0.018; learned danger head now level with the Houou tables (vs-riichi
+all-kinds AUC 0.799 vs 0.806, vs-tenpai-no-riichi **0.802 vs 0.792**) and better calibrated
+(ECE 0.0025 vs 0.0056).
+
+Conclusions: (1) the learned call gate is now the under-caller: with `LearnedCallPassThreshold
+= 0.5` plus the heuristic's veto, learned-guarded calls on 10.7 % of windows against the human
+16.4 %, and declines half of the calls humans made — the threshold and the veto need tuning on
+the validation split (next); (2) riichi declaration is fixed in the raw policy (81.7 % of
+riichi choices right) but learned-guarded still takes the heuristic's riichi decision — worth
+switching once the call gate is tuned; (3) with the danger head level with the tables,
+`useLearnedDanger` becomes a fair A/B candidate.
