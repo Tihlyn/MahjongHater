@@ -40,6 +40,12 @@ public class EventTrackerTests
         return options.Length < 2 ? frame.WithString(8, "Pass") : frame;
     }
 
+    // The turn advancing to us (type-5, [2]=0). A self-declare offer can only follow our own
+    // draw, and the label edge now requires that event just as a claim edge requires a fresh
+    // opponent discard - which is why stale "Chi" text goes quiet on its own and stale
+    // "Riichi" text used not to.
+    private static AtkFrame OurDraw(int wall = 50) => AtkFrame.OfInts([5, wall, 0, .. new int[18]]);
+
     private static int Code(string option) => option switch
     {
         "Tsumo" => 1, "Ron" => 2, "Riichi" => 3, "Kan" => 4, "Pon" => 5, "Chi" => 6,
@@ -114,6 +120,7 @@ public class EventTrackerTests
     {
         var t = new EventTracker();
         var hand = StructFixture.Decoded("123m456p789s1122z", "3z");
+        t.OnRefresh(OurDraw(), T0);
         t.OnTick(hand, ["Riichi", "Pass"], T0);
         Assert.True(t.CallWindowActive);
         Assert.True(t.CallWindowFromLabels);
@@ -185,6 +192,7 @@ public class EventTrackerTests
     public void Own_turn_prompt_is_a_self_declare_not_a_claim()
     {
         var t = new EventTracker();
+        t.OnRefresh(OurDraw(), T0);
         t.OnTick(StructFixture.Decoded("123m456p789s1122z", "3z"), ["Riichi", "Pass"], T0);
         Assert.True(t.CallWindowActive);
         Assert.False(t.CallIsClaim);
@@ -451,6 +459,7 @@ public class EventTrackerTests
 
         // ...and the same panel text on a hand that is NOT in riichi still opens one.
         var free = new EventTracker();
+        free.OnRefresh(OurDraw(), T0);
         free.OnTick(StructFixture.Decoded("34m788m111p789p99s", "5m"), ["Riichi", "Pass"], T0);
         Assert.True(free.CallWindowActive);
         Assert.Equal(["Riichi"], free.CallOptions);
@@ -463,6 +472,7 @@ public class EventTrackerTests
     {
         var t = new EventTracker();
         var seated = StructFixture.Decoded("44m77m3p55p556s6699s", "3p", riichiIndices: [3, 255, 255, 255]);
+        t.OnRefresh(OurDraw(), T0);
         t.OnTick(seated, ["Riichi", "Tsumo", "Pass"], T0);
         Assert.True(t.CallWindowActive);
         Assert.Equal(["Tsumo"], t.CallOptions);
@@ -484,6 +494,23 @@ public class EventTrackerTests
         Assert.Equal(2, named.LastWinnerSeat);
     }
 
+    // The asymmetry this fixes: a claim edge dies on its own because the discard it hangs on
+    // ages out after 8 s, while a self-declare edge used to hang on hand SHAPE, which is true
+    // on every draw forever. Stale panel text with no recent draw behind it now opens nothing.
+    [Fact]
+    public void A_self_declare_label_needs_a_recent_draw_the_way_a_claim_needs_a_discard()
+    {
+        var stale = new EventTracker();
+        stale.OnRefresh(OurDraw(), T0);
+        stale.OnTick(StructFixture.Decoded("123m456p789s1122z", "3z"), ["Tsumo", "Pass"], T0.AddSeconds(30));
+        Assert.False(stale.CallWindowActive);
+
+        var fresh = new EventTracker();
+        fresh.OnRefresh(OurDraw(), T0);
+        fresh.OnTick(StructFixture.Decoded("123m456p789s1122z", "3z"), ["Tsumo", "Pass"], T0.AddSeconds(2));
+        Assert.True(fresh.CallWindowActive);
+    }
+
     [Fact]
     public void Notes_are_kept_for_stall_dumps()
     {
@@ -497,6 +524,7 @@ public class EventTrackerTests
     public void Self_declare_label_edge_needs_the_draw_in_hand()
     {
         var t = new EventTracker();
+        t.OnRefresh(OurDraw(), T0);
         t.OnTick(StructFixture.Decoded("15m6m12p568p5s1356z", null), ["Tsumo", "Riichi", "Pass"], T0);
         Assert.False(t.CallWindowActive);
         t.OnTick(StructFixture.Decoded("15m6m12p568p5s1356z", null), [], T0);

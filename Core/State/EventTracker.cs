@@ -38,6 +38,9 @@ public sealed class EventTracker
     private Tile? lastOpponentDiscard;
     private int lastOpponentDiscardSeat = -1;
     private DateTime lastOpponentDiscardUtc = DateTime.MinValue;
+    // When the turn last advanced to us. A self-declare offer can only follow our own draw,
+    // and this is what gives the label edge an event to hang on - see the selfDeclare guard.
+    private DateTime lastOwnDrawUtc = DateTime.MinValue;
 
     private static readonly TimeSpan LabelWindowGrace = TimeSpan.FromMilliseconds(400);
 
@@ -239,6 +242,8 @@ public sealed class EventTracker
             case 5: // turn advance: [1]=wall remaining, [2]=seat that draws next
                 if (f.Int(1) is > 0 and <= 70)
                     this.eventWallRemaining = f.Int(1);
+                if (f.IsInt(2) && f.Int(2) == 0)
+                    this.lastOwnDrawUtc = utc;
                 this.discardSinceTurnAdvance = false;
                 this.ClearCallWindow("turn advance (type-5)");
                 this.DropWinDeclared("turn advance (type-5)");
@@ -572,8 +577,19 @@ public sealed class EventTracker
         {
             // A self-declare window only exists on our draw (14 - 3*melds closed); the panel
             // keeps "Tsumo"/"Riichi" texts across the next deal (verified live 2026-09-19).
+            // A CLAIM label edge is anchored to a real event with a lifetime: an opponent
+            // discard within the last 8 seconds. That is why stale "Chi"/"Pon" text stops
+            // re-opening windows on its own once the discard ages out.
+            //
+            // A SELF-DECLARE edge used to be anchored to nothing but hand SHAPE - that we hold
+            // a full hand - which is true on every single draw, forever. So the panel's stale
+            // "Riichi" text re-opened a phantom every turn for the rest of the hand (219 in one
+            // session on 2026-09-23) while the chi text beside it stayed quiet. It now needs
+            // the same kind of anchor: our own draw, just as recent.
             var offered = this.FreshOpponentDiscard(utc);
-            var selfDeclare = labels.All(l => l is "Riichi" or "Tsumo" or "Kan")
+            var freshOwnDraw = (utc - this.lastOwnDrawUtc).TotalSeconds < 8;
+            var selfDeclare = freshOwnDraw
+                              && labels.All(l => l is "Riichi" or "Tsumo" or "Kan")
                               && this.prevClosedAll.Count == HandTracking.MaxClosedTiles(this.seatMelds[0].Count);
             if (offered is not null || selfDeclare)
                 this.OpenCallWindow(labels, offered ?? this.callTile, "label edge");
@@ -584,6 +600,7 @@ public sealed class EventTracker
 
     public void Reset()
     {
+        this.lastOwnDrawUtc = DateTime.MinValue;
         this.ResetRound("reset");
         this.roundEnded = true;
         this.lastTotalDiscards = 0;

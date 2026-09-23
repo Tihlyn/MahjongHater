@@ -145,7 +145,9 @@ public class SnapshotBuilderTests
     [Fact]
     public void Self_declare_prompt_keeps_the_draw_and_maps_riichi()
     {
-        var s = Build(new SnapshotBuilder(), new EventTracker(), StructFixture.Decoded("123m456p789s1122z", "3z"), ["Riichi", "Pass"]);
+        var t = new EventTracker();
+        t.OnRefresh(AtkFrame.OfInts([5, 50, 0, .. new int[18]]), T0);   // the turn advances to us
+        var s = Build(new SnapshotBuilder(), t, StructFixture.Decoded("123m456p789s1122z", "3z"), ["Riichi", "Pass"]);
         Assert.Equal(GamePhase.SelfDeclare, s.Phase);
         Assert.Equal(14, s.Hand.Count);
         Assert.True(s.Can(LegalAction.Riichi));

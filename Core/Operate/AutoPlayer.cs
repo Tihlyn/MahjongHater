@@ -30,6 +30,15 @@ public sealed class AutoPlayer
     private static readonly TimeSpan RecoverRepeatEvery = TimeSpan.FromSeconds(30);
 
     private static readonly TimeSpan RecapClickEvery = TimeSpan.FromSeconds(4);
+
+    // How long a recap is left alone before the first advance. RecapClickEvery only ever
+    // throttled REPEATS, so the first [14] went out in the same millisecond the win screen
+    // appeared - fine while the click was unreliable, and instantly destructive once the
+    // callback started landing every time. The game moves from the win screen (32) to the
+    // scoring recap (29) by itself, and 29 is where it publishes the winner's hand, the yaku
+    // and the han; advancing before that both hides the recap from the player and throws away
+    // the only ground truth we get for our own scoring.
+    private static readonly TimeSpan RecapDwell = TimeSpan.FromSeconds(6);
     private const int JournalCap = 60;
 
     private readonly EmjStateReader reader;
@@ -60,6 +69,7 @@ public sealed class AutoPlayer
     private DateTime lastRecapClickUtc;
     private string? lastRecapLine;
     private string? lastRecapReason;
+    private DateTime recapSinceUtc;
 
     private bool stalled;
     private DateTime stallSinceUtc;
@@ -151,9 +161,13 @@ public sealed class AutoPlayer
         if (state.Phase == GamePhase.RoundEnd)
         {
             this.pendingFingerprint = null;
+            if (this.recapSinceUtc == default)
+                this.recapSinceUtc = now;
             this.HandleRecap(state, now);
             return;
         }
+
+        this.recapSinceUtc = default;
 
         this.ActOnDecision(state, now);
         this.WatchForStall(state, now);
@@ -354,6 +368,12 @@ public sealed class AutoPlayer
         }
 
         this.Status = "Round recap";
+        if (now - this.recapSinceUtc < RecapDwell)
+        {
+            this.Status = $"Round recap: reading it for {(RecapDwell - (now - this.recapSinceUtc)).TotalSeconds:F0} s";
+            return;
+        }
+
         if (now - this.lastRecapClickUtc < RecapClickEvery)
             return;
         this.lastRecapClickUtc = now;

@@ -6,6 +6,19 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ### Fixed
 
+- Auto play no longer skips the round recap. `RecapClickEvery` throttled repeat presses but
+  never the first, so `[14]` went out in the same millisecond the win screen appeared. That was
+  harmless while the click was unreliable and instantly destructive once the callback started
+  landing every time: the game moves from the win screen (32) to the scoring recap (29) by
+  itself, and 29 is where it publishes the winner's hand, the yaku and the han. Hands were
+  ending with no recap on screen and the scoring oracle had nothing to read. A recap is now
+  left alone for six seconds before the first advance.
+- A self-declare label edge needs a recent draw, the way a claim edge needs a recent discard.
+  This is why stale "Chi" text went quiet on its own while stale "Riichi" text did not: a claim
+  hangs on an opponent discard that ages out after 8 seconds, while a self-declare hung on hand
+  *shape*, which is true on every draw forever. Both are now anchored to an event with a
+  lifetime.
+
 - `AtkValueType.ManagedString` values were dropped by the struct reader. The round recap uses
   that type for yaku names and for every per-yaku han, so a Pinfu + Aka Dora win read as one
   yaku worth zero han - and the new yaku check duly blamed the detector for it. The recap now
