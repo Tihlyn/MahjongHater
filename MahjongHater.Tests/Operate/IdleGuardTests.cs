@@ -153,6 +153,27 @@ public class IdleGuardTests
         Assert.Single(h.Sent, x => x.Down);
     }
 
+    // A held key is allowed to stand automation down - a real modifier changes what a click
+    // means, and the Emj panel reads Ctrl for its point-difference toggle. An UNDELIVERABLE
+    // release is not: it used to block every automated action for the rest of the session,
+    // freezing a match over a keystroke. Auto play now speaks the addon's command channel,
+    // which no modifier alters, so the block expires while the release keeps retrying.
+    [Fact]
+    public void A_stuck_release_stops_blocking_automation_but_keeps_retrying()
+    {
+        var h = new Harness { UpSucceeds = false };
+        h.Tick();
+        Assert.True(h.Guard.IsKeyDown);
+        Assert.True(h.Guard.BlocksAutomation);     // genuinely held: stand aside
+
+        h.Tick(.3);
+        Assert.True(h.Guard.BlocksAutomation);     // release only just overdue
+
+        h.Tick(6);
+        Assert.True(h.Guard.IsKeyDown);            // still held, still retrying
+        Assert.False(h.Guard.BlocksAutomation);    // ...but no longer freezing the match
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

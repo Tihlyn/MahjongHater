@@ -27,6 +27,9 @@ public sealed class IdleGuard
     private static readonly TimeSpan CheckEvery = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan HoldFor = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan ObserveAfter = TimeSpan.FromSeconds(1);
+
+    // How long past its due release a held key may keep automation waiting.
+    private static readonly TimeSpan StuckAfter = TimeSpan.FromSeconds(3);
     private readonly Action<string> log;
     private readonly Func<Timers?> read;
     private readonly Func<nint> findWindow;
@@ -37,6 +40,7 @@ public sealed class IdleGuard
     private DateTime retryReleaseAtUtc;
     private DateTime observeAtUtc;
     private nint pressedWindow;
+    private DateTime lastTickUtc;
     private Timers? beforePress;
 
     // Platform seams keep tests independent of native pointers and OS input.
@@ -57,11 +61,23 @@ public sealed class IdleGuard
     public Timers? LastTimers { get; private set; }
     public bool? LastNudgeObservedReset { get; private set; }
     public bool IsKeyDown => this.pressedWindow != 0;
+
+    // Whether automation should stand aside for the press. It should while the key is
+    // genuinely held - a real modifier can change what a click means, and the Emj panel has a
+    // "Ctrl: Show Point Difference" control, so the game does read it - but NOT forever. A
+    // release that cannot be delivered used to block every automated action for the rest of
+    // the session, freezing a match over a keystroke; auto play now speaks the addon's command
+    // channel (FireCallback), which no modifier can alter, so a stuck release stops blocking
+    // once it is plainly overdue and only the release keeps retrying.
+    // Uses the guard's own clock (the last Tick), not the wall clock: everything here runs on
+    // the framework thread against the time that tick was given.
+    public bool BlocksAutomation => this.IsKeyDown && this.lastTickUtc < this.releaseAtUtc + StuckAfter;
     public string Status { get; private set; } = "Off";
 
     // Framework thread. Call even when disabled so a pending release can finish.
     public void Tick(bool autoPlayEnabled, bool inMatch, DateTime nowUtc)
     {
+        this.lastTickUtc = nowUtc;
         var active = this.Enabled && autoPlayEnabled && inMatch;
         if (this.IsKeyDown)
         {

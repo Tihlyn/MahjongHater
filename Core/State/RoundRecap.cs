@@ -27,6 +27,11 @@ public sealed record RoundRecap(
     public int DoraHan => this.Yaku.Where(y => y.IsDoraLike).Sum(y => y.Han);
 
     public IEnumerable<string> YakuNames => this.Yaku.Where(y => !y.IsDoraLike).Select(y => y.Name);
+
+    // The recap prints the total, so the parts we read must add up to it. When they do not we
+    // did not read it correctly - a dropped value type, a layout that moved - and comparing
+    // our scoring against a half-read recap would cry wolf rather than find anything.
+    public bool ParsedCleanly => this.Yaku.Count > 0 && this.Yaku.Sum(y => y.Han) == this.Han;
 }
 
 // Decodes the state-29 round recap. The layout was read off the live client on 2026-09-23

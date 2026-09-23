@@ -91,6 +91,31 @@ public class RoundRecapTests
         Assert.Equal(recap.YakuHan, best);   // Riichi = 1; the other han is the ura dora
     }
 
+    // The live Pinfu + Aka Dora win of 2026-09-23: the game wrote the second yaku name and
+    // BOTH han values as ManagedString, a type the struct reader dropped, so a two-yaku win
+    // read as one yaku worth zero han and the comparison blamed the detector. The parts must
+    // add up to the printed total before any comparison is made.
+    [Fact]
+    public void A_half_read_recap_is_not_treated_as_a_disagreement()
+    {
+        var v = new int[112];
+        v[0] = 29; v[42] = 2; v[14] = 13; v[41] = 76056;
+        var halfRead = AtkFrame.OfInts(v)
+            .WithString(5, "Called Ron").WithString(6, "30 Fu 2 Han")
+            .WithString(43, "Pinfu");          // [44] "Aka Dora" and [61]/[62] dropped
+        var recap = RoundRecapReader.Read(halfRead)!;
+        Assert.Single(recap.Yaku);
+        Assert.Equal(0, recap.Yaku[0].Han);
+        Assert.False(recap.ParsedCleanly);     // 0 han read against a printed 2
+    }
+
+    [Fact]
+    public void A_fully_read_recap_adds_up()
+    {
+        var recap = RoundRecapReader.Read(LiveRecap())!;
+        Assert.True(recap.ParsedCleanly);      // Riichi 1 + Ura Dora 1 = the printed 2 han
+    }
+
     [Fact]
     public void Dora_and_ura_indicators_are_read()
     {

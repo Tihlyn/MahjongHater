@@ -468,6 +468,22 @@ public class EventTrackerTests
         Assert.Equal(["Tsumo"], t.CallOptions);
     }
 
+    // [1] of a win screen is sometimes an empty string rather than a seat index. Int() then
+    // yields 0, which reads as "seat 0 won" - us - and on 2026-09-23 a 3,000 point loss was
+    // reported as our own win, which in turn made the recap check compare our hand against
+    // the winner's.
+    [Fact]
+    public void A_win_screen_without_a_seat_index_leaves_the_winner_unknown()
+    {
+        var t = new EventTracker();
+        t.OnRefresh(AtkFrame.OfInts([32, 0, .. new int[20]]).WithString(1, "").WithString(2, "East 1 East Wind"), T0);
+        Assert.Equal(-1, t.LastWinnerSeat);
+
+        var named = new EventTracker();
+        named.OnRefresh(AtkFrame.OfInts([32, 2, .. new int[20]]).WithString(2, "East 1 East Wind"), T0);
+        Assert.Equal(2, named.LastWinnerSeat);
+    }
+
     [Fact]
     public void Notes_are_kept_for_stall_dumps()
     {

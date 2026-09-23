@@ -435,7 +435,10 @@ public sealed class EventTracker
                 this.roundEnded = true;
                 this.WinDeclared = false;
                 this.LastWinScreen = ParseWinScreen(f);
-                this.LastWinnerSeat = f.Int(1) is >= 0 and <= 3 ? f.Int(1) : -1;
+                // [1] is sometimes an empty string rather than a seat. Int() then yields 0,
+                // which reads as "seat 0 won" - us - and that is how a 3,000 point loss was
+                // reported as our own win on 2026-09-23.
+                this.LastWinnerSeat = f.IsInt(1) && f.Int(1) is >= 0 and <= 3 ? f.Int(1) : -1;
                 this.LastWinByRon = this.discardSinceTurnAdvance && this.LastWinnerSeat >= 0 && this.LastWinnerSeat != this.lastDiscardSeat;
                 this.RonVictimSeat = this.LastWinByRon ? this.lastDiscardSeat : -1;
                 this.RonTile = this.LastWinByRon ? this.lastDiscardTile : null;

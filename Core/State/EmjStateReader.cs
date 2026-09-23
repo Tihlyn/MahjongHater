@@ -234,7 +234,16 @@ public sealed unsafe class EmjStateReader : IDisposable
                                        + "Every decision that hand made was taken on the second one.");
         }
 
-        // B - our han for that hand, against the han the game awarded for it.
+        // B - our han for that hand, against the han the game awarded for it. Only when the
+        // recap was read completely: if the parts do not add up to the printed total we
+        // misread it, and blaming the detector for that would be crying wolf.
+        if (!recap.ParsedCleanly)
+        {
+            this.pluginLog.Information($"[Rules] Recap not fully parsed ({recap.Yaku.Count} yaku summing to "
+                                       + $"{recap.Yaku.Sum(y => y.Han)} of {recap.Han} han); skipping the yaku check.");
+            return;
+        }
+
         var detected = this.DetectHan(recap, hand);
         if (detected is { } han && han != recap.YakuHan)
             this.pluginLog.Warning($"[Rules] YAKU HAN MISMATCH: the game awarded {recap.YakuHan} han from ["

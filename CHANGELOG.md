@@ -6,6 +6,21 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ### Fixed
 
+- `AtkValueType.ManagedString` values were dropped by the struct reader. The round recap uses
+  that type for yaku names and for every per-yaku han, so a Pinfu + Aka Dora win read as one
+  yaku worth zero han - and the new yaku check duly blamed the detector for it. The recap now
+  also self-validates: the han we read must add up to the total the game printed, and the
+  comparison is skipped rather than reported when it does not.
+- A win screen whose `[1]` is an empty string rather than a seat index no longer reads as
+  "seat 0 won", i.e. us. A 3,000 point loss was reported as our own win on 2026-09-23, which
+  also made the recap check compare our hand against the winner's.
+- Anti-idle no longer freezes a match. A Control release that cannot be delivered used to
+  block every automated action for the rest of the session; auto play now speaks the addon's
+  command channel, which no modifier can alter, so the block expires once the release is
+  plainly overdue while the release itself keeps retrying. The operator also now acts before
+  the anti-idle press each frame, so a synthetic keystroke is never delivered in the moments
+  before a dispatch.
+
 - A "Riichi" label is ignored once we are already in riichi. The panel keeps its Riichi/Pass
   rows visible after a declaration - they sit under the round recap - and the label edge
   re-opened a phantom self-declare window on every turn advance, 219 of them in one session,

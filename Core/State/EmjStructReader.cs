@@ -64,6 +64,10 @@ internal sealed unsafe class EmjStructReader
                     break;
                 case AtkValueType.String:
                 case AtkValueType.ConstString:
+                case AtkValueType.ManagedString:
+                    // ManagedString was missing until 2026-09-23 and the values written with it
+                    // were dropped silently. The round recap uses it for yaku names and for
+                    // every per-yaku han, so a two-yaku win read as one yaku worth 0 han.
                     strings[i] = SafeString(ref v);
                     break;
             }

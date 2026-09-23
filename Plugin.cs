@@ -390,13 +390,18 @@ public sealed class Plugin : IDalamudPlugin
         EmjOperator.Route = this.Configuration.NativeListSelection
             ? EmjOperator.ListRoute.NativeSelect
             : EmjOperator.ListRoute.RegisteredEvent;
-        this.IdleGuard.Tick(this.AutoPlayer.Enabled, this.actuator.IsAddonOpen, DateTime.UtcNow);
-        // Do not turn an automatic addon click into a Control-click during the nudge.
-        if (!this.IdleGuard.IsKeyDown)
+        // The operator acts first and the anti-idle press goes last, so a synthetic keystroke
+        // is never delivered in the moments before a dispatch: both run on this thread, in this
+        // order, every frame. The press is still skipped while automation is mid-action, and
+        // automation still stands aside for a genuinely held key - but not for a release that
+        // cannot be delivered, which used to freeze a match indefinitely.
+        if (!this.IdleGuard.BlocksAutomation)
         {
             this.AutoPlayer.Tick(this.Reader.Current);
             this.Queuer.Tick(this.AutoPlayer.InMatch);
         }
+
+        this.IdleGuard.Tick(this.AutoPlayer.Enabled, this.actuator.IsAddonOpen, DateTime.UtcNow);
     }
 
     private string CalibrationPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "tenpai_calibration.csv");
