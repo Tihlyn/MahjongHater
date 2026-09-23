@@ -291,17 +291,23 @@ public sealed class EventTracker
 
         switch (type)
         {
-            case 6 when IsSlotRamp(f): // riichi accepted: "here are the slots you may discard"
+            case 6 when IsSlotRamp(f): // the state the game enters when a riichi is accepted
             {
                 // THE acknowledgement of a riichi declaration, and the one signal that says
                 // the self-declare prompt is resolved.
                 //
-                // Measured live 2026-09-23. Answering a Riichi window with [11, row] makes
-                // the game fire this SYNCHRONOUSLY inside our own callback: [1] = how many
-                // hand slots are still legal to discard, then a plain 0,1,2,... ramp naming
-                // them. It appeared exactly twice in that session's log, both times
-                // immediately after a [11, row] answering a Riichi window, and never
-                // otherwise - an ordinary turn discards freely and carries no ramp.
+                // MEASURED, live 2026-09-23: answering a Riichi window with [11, row] makes
+                // the game fire a type-6 carrying [1]=12 then a plain 0,1,2,...,11 ramp,
+                // SYNCHRONOUSLY inside our own callback. It appeared exactly twice in that
+                // session's log, both times immediately after a [11, row] answering a Riichi
+                // window, and never otherwise. Reading the live addon while the bug was
+                // happening showed the same shape as the table's current state.
+                //
+                // NOT measured: what the ramp MEANS. "12 legal discard slots" is the obvious
+                // reading, but a contiguous 0..11 is equally consistent with "the first 12 of
+                // something", and no experiment has distinguished them. Nothing here depends
+                // on the answer - the shape is being used as a state marker, not decoded -
+                // and it must not be decoded as slot legality until that is settled.
                 //
                 // Nothing else closes this window. A riichi prompt is NOT followed by a
                 // turn advance, a discard, a meld or a score event, and the panel stays on
@@ -309,8 +315,7 @@ public sealed class EventTracker
                 // "Riichi / Pass" rows remain visible and readable the whole time. Before
                 // this case existed the plugin saw its own answer go unacknowledged, timed
                 // out, and declared riichi a second time.
-                var slots = f.Int(1);
-                this.Note($"riichi accepted: the game offers {slots} legal discard slot(s)");
+                this.Note($"riichi accepted (type-6, {f.Int(1)}-wide slot ramp; the ramp's meaning is unverified)");
                 this.ClearCallWindow("riichi accepted (type-6 discard selection)");
                 break;
             }
@@ -751,10 +756,11 @@ public sealed class EventTracker
 
     private static bool IsOption(string s) => s is "Chi" or "Pon" or "Kan" or "Ron" or "Riichi" or "Tsumo";
 
-    // [1] = a slot count, then [2..] a plain 0,1,2,... ramp naming those slots. The same shape
-    // the type-19 decode warns about, here as the thing being looked for rather than guarded
-    // against: on a type-6 it is the game listing the hand slots a riichi hand may discard.
-    // Requires the full ramp, so a frame that merely starts 0,1 does not qualify.
+    // [1] = a count, then [2..] a plain 0,1,2,... ramp that long. The same shape the type-19
+    // decode warns about, here as the thing being looked for rather than guarded against: on a
+    // type-6 it is the state a riichi declaration puts the game into. Requires the FULL ramp,
+    // so a frame that merely starts 0,1 does not qualify - closing a live window on a
+    // coincidence would drop a prompt the game is still offering.
     private static bool IsSlotRamp(AtkFrame f)
     {
         if (!f.IsInt(1))
