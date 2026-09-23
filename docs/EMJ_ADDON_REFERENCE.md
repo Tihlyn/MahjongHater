@@ -108,11 +108,26 @@ fitting shape skips the chooser. No auto-pick timer (it waited ~2 min).
 
 ### Recap and results
 
-- Round recap "Next": plain addon-level button **NodeId `97`** (`ButtonClick` param 7, listener =
-  addon) — `nodes.recapNext`.
-- End of match: after the last win screen the results panel has no `Next` (`97` hidden); only
-  **"End match"** remains (state code 27, empty hand, final scores). Whether it raises a
-  `SelectYesno` is handled but not yet observed.
+How well each of these is actually identified, because it is not uniform — the call-window
+lane was rebuilt on the game's own statements (option codes, row counts) and this one has not
+been:
+
+| Signal | What it really is | Trust |
+|---|---|---|
+| A match is over | `EmjTotalResult` / `EmjRankResult` open and visible | **strong** — addon names are stable identifiers |
+| A round ended | state code 29 / 32 / 27, and the type-29 (`[5]` "Draw", per-seat deltas) and type-32 (winner, round, fu/han, points) events | **strong** — the game's own payload, decoded |
+| `GamePhase.RoundEnd` | the above **or** `WinDeclared`, which is our own belief that a win we clicked landed | **mixed** — the second half is not the game talking |
+| Round recap "Next" | **NodeId `97`**, `ButtonClick` param 7, listener = addon (`nodes.recapNext`) | structural, but the button's own text has never been read |
+| "End match" | an **English string search** over the node pool | **weak** — locale-dependent, and panel text outlives its prompt, exactly the phantom that call windows suffered from |
+| Its confirmation | a `SelectYesno` | was handled **speculatively and never observed**; the prompt wording is still unknown |
+
+Consequences already fixed: "End match" is only pressed while a result addon is on screen, and
+a `SelectYesno` is answered only within six seconds of our own End match click (before that it
+confirmed *any* visible Yes/No, which forfeits a live duty). Still open: node 97 is pressed
+without reading it, and leaving still depends on an English label. `EmjActuator.DescribeRecap`
+now logs the state code, the result screen, node 97's addon-binding **and its text**, plus the
+panel texts, once per recap entry — those lines are how the label gets replaced by a
+structural target and how the confirmation's real wording gets learned.
 
 ### Text nodes the reader uses
 

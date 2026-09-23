@@ -345,10 +345,20 @@ internal static unsafe class EmjOperator
         => IsChainVisible(addon, node, out _)
            && FindChainEventCore(node, AtkEventType.ButtonClick, (nint)(AtkEventListener*)addon, requireVisible: true, 0, out _) != null;
 
-    // Raw addon callback with int values — for handlers wired at the callback layer
-    // (the Duty Finder's Commence button, for one).
-    public static string FireCallback(AtkUnitBase* addon, params int[] values)
+    // Raw addon callback with int values. This is the addon's real command channel, not a
+    // simulated mouse: the 2026-09-23 capture recorded the game itself sending [7, slot] to
+    // discard, [11, row] to answer a call and [14] to advance a recap
+    // (docs/research/ADDON_PROTOCOL_2026_09_23.md).
+    //
+    // `updateState` is FireCallback's third argument, and the game passes TRUE for every
+    // callback a UI action produces — all 96 discards, all 22 call rows and all 9 recap
+    // advances in the capture carried it, while only the close/dismiss notifications carried
+    // false. It defaults to true here for that reason; the Duty Finder's Commence path keeps
+    // passing false because that is what it was verified with.
+    public static string FireCallback(AtkUnitBase* addon, bool updateState, params int[] values)
     {
+        if (addon == null)
+            return "no addon";
         var vals = stackalloc AtkValue[values.Length];
         for (var i = 0; i < values.Length; i++)
         {
@@ -356,9 +366,12 @@ internal static unsafe class EmjOperator
             vals[i].Int = values[i];
         }
 
-        addon->FireCallback((uint)values.Length, vals, false);
-        return $"callback [{string.Join(", ", values)}]";
+        addon->FireCallback((uint)values.Length, vals, updateState);
+        return $"callback [{string.Join(", ", values)}] updateState={updateState}";
     }
+
+    public static string FireCallback(AtkUnitBase* addon, params int[] values)
+        => FireCallback(addon, false, values);
 
     // ────────────────────────────────────────── HELPERS ─────────────────────────────────────────
 

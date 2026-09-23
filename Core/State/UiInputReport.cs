@@ -63,6 +63,24 @@ internal static unsafe class UiInputReport
                       + $"collisionNodes={addon->CollisionNodeListCount} hostId={addon->HostId} parentId={addon->ParentId}");
         }
 
+        // The decisive measurement when focus and visibility both look healthy: does the
+        // game's own hit test put the cursor on the table at all? A null or foreign
+        // intersecting node while the pointer is over a tile means clicks never reach the
+        // addon, and no amount of addon state will explain it.
+        lines.Add("-- what the game thinks the cursor is over --");
+        var collision = stage->AtkCollisionManager;
+        if (collision == null)
+        {
+            lines.Add("AtkCollisionManager unavailable");
+        }
+        else
+        {
+            var hovered = collision->IntersectingCollisionNode;
+            lines.Add($"intersecting collision node: {(hovered == null ? "NONE - the game is not hit-testing anything under the cursor" : $"id {hovered->AtkResNode.NodeId}, visible={hovered->AtkResNode.IsVisible()}")}");
+        }
+
+        lines.Add($"cursor type={stage->AtkCursor.Type}");
+
         lines.Add("-- other units that gate or overlay input --");
         var all = &manager->AtkUnitManager.AllLoadedUnitsList;
         var noted = 0;
@@ -74,12 +92,17 @@ internal static unsafe class UiInputReport
             var name = unit->NameString;
             if (name == tableAddon || !Interesting.Contains(name))
                 continue;
-            // An OPEN unit that is not visible is the one worth shouting about: it can still
-            // sit in the input path while the player sees nothing to close.
+            // ShowHideFlags bit 0 is the unit telling us it has hidden ITSELF, which is the
+            // resting state of every menu that is merely loaded - ContextMenu and Talk sit
+            // like that all match. Only a unit that is invisible WITHOUT having asked to be
+            // is worth pointing at, so the marker does not cry wolf on normal background UI.
+            var restingHidden = (unit->ShowHideFlags & 1) != 0;
             lines.Add($"{name}: visible={unit->IsVisible} visibilityFlags=0x{unit->VisibilityFlags:X2} "
                       + $"showHide=0x{unit->ShowHideFlags:X2} depthLayer={unit->DepthLayer} "
                       + $"collisionNodes={unit->CollisionNodeListCount}"
-                      + (unit->IsVisible ? string.Empty : "   <-- OPEN BUT INVISIBLE"));
+                      + (unit->IsVisible ? string.Empty
+                         : restingHidden ? "   (hidden by itself: normal resting state)"
+                         : "   <-- OPEN, INVISIBLE, AND NOT HIDDEN BY ITSELF"));
             noted++;
         }
 

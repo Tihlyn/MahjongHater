@@ -1,8 +1,43 @@
-# Changelog
+﻿# Changelog
 
 Notable changes are recorded here using the Keep a Changelog format and semantic versioning.
 
 ## Unreleased
+
+### Changed
+
+- The Emj addon's input protocol is now recorded rather than guessed. A full match played by
+  hand with Cartographer recording identified the addon's real command channel - `[7, slot]`
+  discards, `[11, row]` answers a call window, `[14]` advances a recap - each paired with the
+  event a human action produced, plus the notifications the addon fires itself and which must
+  never be replayed. `Core/Operate/EmjProtocol.cs` codifies the map with its evidence;
+  docs/research/ADDON_PROTOCOL_2026_09_23.md has the capture.
+- Ending a finished match uses the control the game actually uses:
+  `EmjTotalResult` node 26. The plugin had been searching the **Emj** addon for the English
+  text "End match", which is in a different addon entirely, and handling a confirmation dialog
+  that the capture shows never appears at the end of a match.
+- `FireCallback` takes `updateState`. Every UI-originated callback in the capture carried
+  true; only close/dismiss notifications carried false.
+
+### Fixed
+
+- Auto play no longer confirms a Yes/No dialog it did not raise. While it believed a match
+  was ending it clicked Yes on ANY visible `SelectYesno`, without reading what was being
+  asked - so the game's own inactivity warning, a mid-match "leave the duty?", or any other
+  prompt would have been confirmed on the player's behalf, forfeiting the duty and taking
+  the penalty. A confirmation is now answered only within six seconds of our own "End match"
+  click, once; anything else is left alone and its exact wording is logged.
+- "End match" is only pressed while the game has a match-result screen open
+  (`EmjTotalResult` / `EmjRankResult`). A visible button label is not evidence that the match
+  has ended, and pressing it mid-match forfeits the duty.
+- The recap surface is now read rather than assumed: on entering a recap the plugin logs the
+  state code, which result screen the game has open, whether the recap button is really there
+  and addon-bound, **what that button says**, and the panel's texts. The controls were
+  originally identified by trial and error - node 97 is pressed without reading it and "End
+  match" is an English string search - and these lines are what will replace the label with a
+  structural target (docs/EMJ_ADDON_REFERENCE.md, "Recap and results").
+- The recap path records why it believes the round is over - a win we declared that has not
+  settled, or the game's own state code - so a recap that appears mid-match explains itself.
 
 ## [2.3.0] - 2026-09-22
 

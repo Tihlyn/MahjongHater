@@ -59,6 +59,7 @@ public sealed class AutoPlayer
     private DateTime lastChangeUtc;
     private DateTime lastRecapClickUtc;
     private string? lastRecapLine;
+    private string? lastRecapReason;
 
     private bool stalled;
     private DateTime stallSinceUtc;
@@ -143,12 +144,14 @@ public sealed class AutoPlayer
             this.lastChangeUtc = now;
             this.stalled = false;
             this.recoveryStep = 0;
+            if (state.Phase != GamePhase.RoundEnd)
+                this.lastRecapReason = null;
         }
 
         if (state.Phase == GamePhase.RoundEnd)
         {
             this.pendingFingerprint = null;
-            this.HandleRecap(now);
+            this.HandleRecap(state, now);
             return;
         }
 
@@ -329,8 +332,27 @@ public sealed class AutoPlayer
         _ => true,
     };
 
-    private void HandleRecap(DateTime now)
+    private void HandleRecap(StateSnapshot state, DateTime now)
     {
+        // Say WHY we think the round is over the first time we think it. A recap that appears
+        // while the match is still running is the expensive kind of wrong - it ends with a
+        // duty forfeit - and "WinDeclared with the table still up" reads very differently
+        // from "the game moved to its own score state".
+        var because = this.reader.Tracker.WinDeclared
+            ? $"a win we declared has not been settled yet (state {state.RawStateCode})"
+            : $"the game is in state {state.RawStateCode}";
+        if (because != this.lastRecapReason)
+        {
+            this.lastRecapReason = because;
+            this.Record($"round recap: {because}");
+            // Read the surface instead of assuming it: which result screen the game has up,
+            // whether the recap control is really there and addon-bound, and what each
+            // control SAYS. The labels these print are how the English string search gets
+            // replaced by something structural.
+            foreach (var surface in this.actuator.DescribeRecap(state.RawStateCode))
+                this.Record($"  recap surface: {surface}");
+        }
+
         this.Status = "Round recap";
         if (now - this.lastRecapClickUtc < RecapClickEvery)
             return;
