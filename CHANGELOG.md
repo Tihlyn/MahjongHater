@@ -1,8 +1,10 @@
-﻿# Changelog
+# Changelog
 
 Notable changes are recorded here using the Keep a Changelog format and semantic versioning.
 
 ## Unreleased
+
+## [3.0.0] - 2026-09-23
 
 ### Fixed
 
