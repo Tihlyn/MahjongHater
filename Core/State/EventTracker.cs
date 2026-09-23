@@ -545,6 +545,20 @@ public sealed class EventTracker
         // so no time-based clear either. The edge only opens when a fresh opponent discard
         // names the tile; otherwise a stale "Pon" at cold start would become a phantom call.
         var labels = promptLabels.Select(l => l.TrimEnd('!')).Where(l => l is "Chi" or "Pon" or "Kan" or "Ron" or "Riichi" or "Tsumo").ToList();
+
+        // The game never offers riichi to a player who has already declared it, so a
+        // label-edge "Riichi" while we are in riichi is the panel's leftover text and nothing
+        // else. It kept its rows visible under the round recap after a riichi on 2026-09-23
+        // and re-opened a phantom self-declare on EVERY turn advance - 219 label-edge windows
+        // in one session - each flipping the phase to SelfDeclare and adding LegalAction.Riichi
+        // for the ~40 ms before the next type-5 cleared it, which is long enough for the policy
+        // to be asked to declare a riichi we are already in.
+        //
+        // Only that one label is dropped: a riichi hand can still be offered Tsumo or a
+        // concealed Kan, and those labels are left to open a window as before.
+        if (labels.Count > 0 && (s.Seats[0].RiichiDiscardIndex is not null || this.riichiDeclared))
+            labels.RemoveAll(l => l == "Riichi");
+
         var signature = string.Join(",", labels);
         if (labels.Count == 0)
         {

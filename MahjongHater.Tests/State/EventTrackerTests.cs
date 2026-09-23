@@ -437,6 +437,37 @@ public class EventTrackerTests
         Assert.True(t.CallWindowGeneration > first);
     }
 
+    // After a riichi the panel keeps its "Riichi"/"Pass" rows visible - on 2026-09-23 they sat
+    // under the round recap - and the label edge re-opened a phantom self-declare on every turn
+    // advance, 219 times in one session. The game never offers riichi to a player already in
+    // it, so that label is dropped while we are in riichi.
+    [Fact]
+    public void A_riichi_label_is_ignored_once_we_are_already_in_riichi()
+    {
+        var t = new EventTracker();
+        var seated = StructFixture.Decoded("34m788m111p789p99s", "5m", riichiIndices: [3, 255, 255, 255]);
+        t.OnTick(seated, ["Riichi", "Pass"], T0);
+        Assert.False(t.CallWindowActive);
+
+        // ...and the same panel text on a hand that is NOT in riichi still opens one.
+        var free = new EventTracker();
+        free.OnTick(StructFixture.Decoded("34m788m111p789p99s", "5m"), ["Riichi", "Pass"], T0);
+        Assert.True(free.CallWindowActive);
+        Assert.Equal(["Riichi"], free.CallOptions);
+    }
+
+    // A riichi hand can still be offered Tsumo or a concealed Kan, so only the impossible
+    // label is dropped - the rest still opens a window.
+    [Fact]
+    public void A_riichi_hand_can_still_be_offered_tsumo()
+    {
+        var t = new EventTracker();
+        var seated = StructFixture.Decoded("44m77m3p55p556s6699s", "3p", riichiIndices: [3, 255, 255, 255]);
+        t.OnTick(seated, ["Riichi", "Tsumo", "Pass"], T0);
+        Assert.True(t.CallWindowActive);
+        Assert.Equal(["Tsumo"], t.CallOptions);
+    }
+
     [Fact]
     public void Notes_are_kept_for_stall_dumps()
     {

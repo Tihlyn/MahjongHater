@@ -4,6 +4,16 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+### Fixed
+
+- A "Riichi" label is ignored once we are already in riichi. The panel keeps its Riichi/Pass
+  rows visible after a declaration - they sit under the round recap - and the label edge
+  re-opened a phantom self-declare window on every turn advance, 219 of them in one session,
+  each flipping the phase to SelfDeclare and adding `LegalAction.Riichi` for the ~40 ms before
+  the next turn advance cleared it. That is long enough to ask the policy to declare a riichi
+  it is already in. Only that one label is dropped: a riichi hand can still be offered Tsumo
+  or a concealed kan.
+
 ### Changed
 
 - Auto play now plays through the addon's own command channel instead of synthesising mouse
