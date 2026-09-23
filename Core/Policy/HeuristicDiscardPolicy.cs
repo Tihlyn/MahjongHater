@@ -46,6 +46,8 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
             if (state.OurRiichi && !TileHelpers.SameKind(option.DiscardTile, state.DrawnTile!.Value))
                 continue;
             var tile = state.OurRiichi ? state.DrawnTile!.Value : option.DiscardTile;
+            if (!state.CanDiscard(tile))
+                continue;
             var survival = 1d;
             for (var seat = 1; seat <= 3; seat++)
                 survival *= 1 - opponents.TenpaiProbability(seat) * opponents.Danger(tile, seat);

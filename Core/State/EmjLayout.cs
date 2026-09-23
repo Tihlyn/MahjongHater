@@ -153,7 +153,7 @@ public sealed class EmjLayout
                 Draw: codes?.Draw ?? 5,
                 OurTurn: codes?.OurTurn ?? 6,
                 Discard: codes?.Discard ?? 8,
-                Riichi: codes?.Riichi ?? 12,
+                DiscardHighlightReset: codes?.DiscardHighlightReset ?? 12,
                 Meld: codes?.Meld ?? 13,
                 OthersTurn: codes?.OthersTurn ?? 15,
                 CallPrompt: codes?.CallPrompt ?? 19,
@@ -378,7 +378,7 @@ public sealed class EmjLayout
         [JsonPropertyName("draw")] public int? Draw { get; set; }
         [JsonPropertyName("ourTurn")] public int? OurTurn { get; set; }
         [JsonPropertyName("discard")] public int? Discard { get; set; }
-        [JsonPropertyName("riichi")] public int? Riichi { get; set; }
+        [JsonPropertyName("discardHighlightReset")] public int? DiscardHighlightReset { get; set; }
         [JsonPropertyName("meld")] public int? Meld { get; set; }
         [JsonPropertyName("othersTurn")] public int? OthersTurn { get; set; }
         [JsonPropertyName("callPrompt")] public int? CallPrompt { get; set; }
@@ -410,7 +410,7 @@ public sealed class EmjLayout
 
 // AtkValues[0] values (docs/EMJ_STRUCT.md, "State codes seen").
 public readonly record struct StateCodeTable(
-    int Deal, int Draw, int OurTurn, int Discard, int Riichi, int Meld, int OthersTurn,
+    int Deal, int Draw, int OurTurn, int Discard, int DiscardHighlightReset, int Meld, int OthersTurn,
     int CallPrompt, int PostMeldRefresh, int CallWindowOpened, int CallOptions, int PostWin, int Score, int Win);
 
 // Node ids / Cartographer-style paths ("1/46/104/3" = NodeIds root→…→list) the operator

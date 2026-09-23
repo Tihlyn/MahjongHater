@@ -141,7 +141,8 @@ public sealed class DecisionPolicy : IPolicy
         }
 
         ct.ThrowIfCancellationRequested();
-        var candidates = this.discards.Rank(state, this.opponents, ct);
+        IReadOnlyList<DiscardCandidate> candidates = this.discards.Rank(state, this.opponents, ct)
+            .Where(c => state.CanDiscard(c.Tile) && (!state.OurRiichi || c.Tile == state.DrawnTile)).ToArray();
         ct.ThrowIfCancellationRequested();
         if (candidates.Count == 0)
         {
@@ -151,6 +152,14 @@ public sealed class DecisionPolicy : IPolicy
         }
 
         var best = candidates[0];
+        if (state.OurRiichi)
+        {
+            steps.Add(new Reason("riichi", "Riichi is committed: only the drawn tile may be discarded. The game may discard it automatically."));
+            return new ActionChoice(ActionKind.Discard, best.Tile, null, $"Riichi locked: discard {best.Tile}.", steps.ToArray(), candidates)
+            {
+                Hand = new HandSummary(best.ShantenAfter, best.Ukeire, best.Waits),
+            };
+        }
         steps.Add(new Reason("discard", $"Best attack discard {best.Tile}: {best.ShantenAfter}-shanten, {best.Ukeire} live improving tiles."));
         PushFoldStance stance;
         if (this.weights.DefenseModel == DefenseModel.V2)

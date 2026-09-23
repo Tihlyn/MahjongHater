@@ -9,6 +9,27 @@ namespace MahjongHater.Tests.Policy;
 public class DecisionPolicyTests
 {
     [Fact]
+    public void Game_restricted_discards_override_attack_ranking()
+    {
+        var state = Snap() with { DiscardableTiles = [Tile.Parse("1z")] };
+        var policy = new DecisionPolicy(discards: new FixedDiscards(Candidate("3m"), Candidate("1z")));
+        var result = policy.Choose(state, default);
+        Assert.Equal(Tile.Parse("1z"), result.Tile);
+        Assert.Single(result.Candidates);
+    }
+
+    [Fact]
+    public void Committed_riichi_cannot_fold_away_from_drawn_tile()
+    {
+        var state = Seat(Snap(), riichi: true) with { OurRiichi = true, DrawnTile = Tile.Parse("1z") };
+        var policy = new DecisionPolicy(discards: new FixedDiscards(Candidate("3m", risk: 0), Candidate("1z", risk: 0.9)));
+        var result = policy.Choose(state, default);
+        Assert.Equal(Tile.Parse("1z"), result.Tile);
+        Assert.DoesNotContain(result.Steps, s => s.Stage == "push/fold");
+        Assert.Contains("Riichi locked", result.Summary);
+    }
+
+    [Fact]
     public void Fold_selects_safest_candidate_even_if_it_worsens_shanten()
     {
         var state = Seat(Snap(), riichi: true);

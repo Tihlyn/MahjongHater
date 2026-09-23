@@ -6,6 +6,21 @@ namespace MahjongHater.Tests.State;
 
 public class SnapshotBuilderTests
 {
+    [Fact]
+    public void Native_discard_restrictions_change_sequence_and_analysis_identity()
+    {
+        var b = new SnapshotBuilder();
+        var t = new EventTracker();
+        var d = StructFixture.Decoded("123m456p789s1122z", "3z");
+        t.OnTick(d, T0);
+        var first = b.Build(d, t, Layout, RulesetOptions.Default, [Tile.Parse("1m"), Tile.Parse("3z")]);
+        var restricted = b.Build(d, t, Layout, RulesetOptions.Default, [Tile.Parse("3z")]);
+        Assert.True(restricted.Sequence > first.Sequence);
+        Assert.NotEqual(AnalysisService.ComputeFingerprint(first), AnalysisService.ComputeFingerprint(restricted));
+        var disabled = b.Build(d, t, Layout, RulesetOptions.Default, []);
+        Assert.False(disabled.Can(LegalAction.Discard));
+    }
+
     private static readonly DateTime T0 = new(2026, 9, 18, 20, 0, 0, DateTimeKind.Utc);
     private static readonly EmjLayout Layout = StructFixture.Layout;
 

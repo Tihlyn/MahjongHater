@@ -8,6 +8,15 @@ namespace MahjongHater.Tests.Operate;
 // and enforce the one rule that makes the map safe to act on: notifications are not commands.
 public class EmjProtocolTests
 {
+    [Theory]
+    [InlineData(32, 1, false)]
+    [InlineData(32, 0, false)]
+    [InlineData(29, 1, false)]
+    [InlineData(29, 0, true)]
+    [InlineData(6, 0, false)]
+    public void Recap_waits_for_scoring_and_native_input_release(int state, int blockers, bool expected)
+        => Assert.Equal(expected, EmjProtocol.CanAdvanceRecap(state, blockers));
+
     [Fact]
     public void Commands_carry_the_heads_the_capture_recorded()
     {

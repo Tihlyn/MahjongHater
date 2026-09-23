@@ -12,7 +12,8 @@ public sealed class SnapshotBuilder
 
     public StateSnapshot Previous => this.previous;
 
-    public StateSnapshot Build(DecodedStruct s, EventTracker t, EmjLayout layout, RulesetOptions ruleset)
+    public StateSnapshot Build(DecodedStruct s, EventTracker t, EmjLayout layout, RulesetOptions ruleset,
+        IReadOnlyList<Tile>? discardableTiles = null)
     {
         var notes = new List<string>(4);
         var seats = new SeatState[4];
@@ -131,6 +132,8 @@ public sealed class SnapshotBuilder
 
         if (phase == GamePhase.OurTurn || (selfDeclare && totalClosed == 14 && !t.WinAnswerPending))
             legal |= LegalAction.Discard;
+        if (discardableTiles is { Count: 0 })
+            legal &= ~LegalAction.Discard;
 
         var countsMapped = s.Seats.Any(x => x.DiscardCount is not null);
         var wall = s.WallRemaining
@@ -169,6 +172,7 @@ public sealed class SnapshotBuilder
             CallWindowConfirmed = t.CallWindowActive,
             AwaitingOurWin = t.WinAnswerPending,
             AnswerPending = t.Answer is not null,
+            DiscardableTiles = discardableTiles?.ToArray(),
         };
 
         var key = ContentKey(snapshot);
@@ -330,6 +334,7 @@ public sealed class SnapshotBuilder
           .Append('|').Append((int)s.Legal).Append('|').Append(s.CallTile).Append(s.CallFromSeat)
           .Append('|').Append(string.Join(",", s.CallOptions)).Append('|').Append(s.LayoutHealthy ? 1 : 0)
           .Append('|').Append(s.CallShapes.Count)
+          .Append('|').Append(s.DiscardableTiles == null ? "unknown" : string.Join(",", s.DiscardableTiles))
           .Append('|').Append(string.Join(";", s.Notes));
         return sb.ToString();
     }

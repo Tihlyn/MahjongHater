@@ -46,14 +46,21 @@ internal sealed unsafe class EmjStructReader
         if (addon == null || addon->AtkValues == null)
             return AtkFrame.OfInts();
 
-        var count = (int)addon->AtkValuesCount;
+        return CopyAtkValues(addon->AtkValues, addon->AtkValuesCount);
+    }
+
+    public static AtkFrame CopyAtkValues(AtkValue* values, uint valueCount)
+    {
+        if (values == null || valueCount == 0)
+            return AtkFrame.OfInts();
+        var count = (int)Math.Min(valueCount, (uint)int.MaxValue);
         var n = Math.Min(count, AtkFrame.MaxCopied);
         var ints = new int[n];
         var strings = new string?[n];
         var isInt = new bool[n];
         for (var i = 0; i < n; i++)
         {
-            ref var v = ref addon->AtkValues[i];
+            ref var v = ref values[i];
             switch (v.Type)
             {
                 case AtkValueType.Int:

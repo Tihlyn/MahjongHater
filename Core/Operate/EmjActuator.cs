@@ -127,9 +127,7 @@ public sealed unsafe class EmjActuator
         // Captured before the native handler runs: it may open the next prompt inside
         // ReceiveEvent, and the answer belongs to THIS window, not to whatever is open after.
         var generation = tracker.CallWindowGeneration;
-        // The row index comes from the live item table (CallRowResolver); the game answers its
-        // own call list with [11, row], so that index is sent directly rather than simulated.
-        var dispatch = EmjOperator.FireCommand(addon, $"call \"{option}\"", EmjProtocol.SelectCallRow(choice.Index));
+        var dispatch = EmjOperator.SelectRow(addon, listNode, choice.Index, $"call \"{option}\"");
         if (!dispatch.Sent)
             return OperateResult.Fail($"'{option}': {dispatch.Detail}");
 
@@ -175,20 +173,19 @@ public sealed unsafe class EmjActuator
             return OperateResult.Fail($"{tile} is not in the hand or its slot is not on screen");
 
         // Read before dispatch: a handler may rebuild the slot nodes.
-        var index = slots.FindIndex(sl => sl.NodePtr == (nint)target);
+        var index = EmjOperator.DiscardSlot(addon, target);
         var nodeId = target->NodeId;
         if (!EmjOperator.HasAddonBoundActivation(addon, target))
             return OperateResult.Fail($"slot {index} ({tile}, node {nodeId}) has no addon-bound activation — not discardable right now");
 
         // The slot index and the callback's argument are the same number: the game's own
         // ButtonClick param is slot+15 and it emits [7, slot] (2026-09-23 capture).
-        var dispatch = EmjOperator.FireCommand(addon, $"discard slot {index} ({tile})", EmjProtocol.DiscardSlot(index));
+        var dispatch = EmjOperator.ActivateButton(addon, target);
         if (!dispatch.Sent)
             return OperateResult.Fail($"slot {index} ({tile}, node {nodeId}): {dispatch.Detail}");
-        var detail = $"{dispatch.Detail} [node {nodeId} was clickable]";
+        var detail = $"discard slot {index} ({tile}): {dispatch.Detail} [node {nodeId}]";
         this.reader.Tracker.Note($"op {detail}");
-        // NOT a node activation: nothing was clicked, so an unacknowledged discard says
-        // nothing about the click style and must never escalate to the hover cycle.
+        // Native semantic dispatch never escalates to synthetic hover.
         return OperateResult.Sent(detail);
     }
 
@@ -203,7 +200,7 @@ public sealed unsafe class EmjActuator
         if (node == null)
             return OperateResult.Fail($"node {path} not found");
 
-        var dispatch = EmjOperator.ClickNode(addon, node);
+        var dispatch = EmjOperator.ActivateButton(addon, node);
         if (!dispatch.Sent)
             return OperateResult.Fail($"node {path}: {dispatch.Detail}");
         var detail = $"click {path}: {dispatch.Detail}";
@@ -222,12 +219,14 @@ public sealed unsafe class EmjActuator
         if (this.BlockedByDialog() is { } blocked)
             return blocked;
 
-        // Node 97 still decides WHETHER a recap is up - the game removes its addon-bound
-        // activation otherwise - but the advance itself is the command the button emits, [14].
+        // Node 97 is already visible during the win animation (state 32). Advancing
+        // there strands NumBlockingAddons: only the completed recap is eligible.
         var next = EmjScanner.FindNodeById(addon, RecapNextNodeId);
         if (next != null && EmjOperator.HasAddonBoundActivation(addon, next))
         {
-            var dispatch = EmjOperator.FireCommand(addon, "recap Next", EmjProtocol.AdvanceRecap());
+            if (!EmjProtocol.CanAdvanceRecap(this.reader.LastFrame?.StateCode ?? -1, addon->NumBlockingAddons))
+                return OperateResult.Fail("waiting for the completed scoring recap");
+            var dispatch = EmjOperator.ActivateButton(addon, next);
             if (dispatch.Sent)
             {
                 var detail = $"{dispatch.Detail} [node {RecapNextNodeId} was clickable]";
@@ -426,7 +425,7 @@ public sealed unsafe class EmjActuator
         if (!EmjOperator.HasAddonBoundActivation(result, close))
             return OperateResult.Fail($"{name} node {EmjProtocol.ResultCloseNodeId} is not clickable right now");
 
-        var dispatch = EmjOperator.ClickNode(result, close);
+        var dispatch = EmjOperator.ActivateButton(result, close);
         if (!dispatch.Sent)
             return OperateResult.Fail($"{name} close: {dispatch.Detail}");
         var detail = $"{name} close (node {EmjProtocol.ResultCloseNodeId}): {dispatch.Detail}";
@@ -470,12 +469,13 @@ public sealed unsafe class EmjActuator
         if (index < 0 || index >= state.CallShapes.Count)
             return OperateResult.Fail($"shape {string.Join(" ", wanted.Tiles)} is not among the offered {state.CallShapes.Count} shapes");
 
-        // The chooser emits [12, shapeIndex]; the index is the order the shapes arrived in the
-        // state-25 values, which is the order CallShapes preserves (2026-09-23 capture).
+        // Use the registered shape handler so the game also stops its chooser timer.
         var generation = this.reader.Tracker.CallWindowGeneration;
         var addon = this.GetAddon();
-        var dispatch = EmjOperator.FireCommand(addon, $"chi shape {index} ({string.Join(" ", wanted.Tiles)})",
-            EmjProtocol.PickChiShape(index));
+        if (index >= this.reader.Layout.Nodes.ChiShapeButtons.Length)
+            return OperateResult.Fail($"no mapped button for chi shape {index}");
+        var button = EmjScanner.FindNodeByPath(addon, this.reader.Layout.Nodes.ChiShapeButtons[index]);
+        var dispatch = EmjOperator.ActivateButton(addon, button);
         if (!dispatch.Sent)
             return OperateResult.Fail(dispatch.Detail);
         this.reader.Tracker.Note($"op {dispatch.Detail}");
@@ -483,10 +483,8 @@ public sealed unsafe class EmjActuator
         return OperateResult.Sent($"{dispatch.Detail} (window #{generation})");
     }
 
-    // The chooser's cancel button backs out of the shape list (state 25's own "Pass"). No
-    // cancel was ever performed during the capture, so the callback it emits is unknown and
-    // this stays a click on the measured button (chooser node 11, ButtonClick param 8) rather
-    // than a guessed command.
+    // Native chooser cancel: ButtonClick param 8 emits callback [13] and restores
+    // the controls (statically verified in the 2026-09-23 client).
     private OperateResult CancelChiShape()
         => this.AnswerChooser(this.reader.Layout.Nodes.ChiShapeCancel, "chi shape cancel");
 

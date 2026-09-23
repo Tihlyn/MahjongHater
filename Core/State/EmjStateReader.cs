@@ -2,6 +2,7 @@ using Dalamud.Game.Addon.Lifecycle;
 using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using MahjongHater.Core.Operate;
 
 namespace MahjongHater.Core.State;
 
@@ -117,7 +118,9 @@ public sealed unsafe class EmjStateReader : IDisposable
             if (++this.ticks % WindScanInterval == 0)
                 this.ScanWinds(addon);
 
-            this.Current = this.builder.Build(decoded, this.tracker, this.Layout, new RulesetOptions(this.configuration.Kuitan, (int)this.configuration.GameLength));
+            this.Current = this.builder.Build(decoded, this.tracker, this.Layout,
+                new RulesetOptions(this.configuration.Kuitan, (int)this.configuration.GameLength),
+                this.ReadDiscardableTiles(addon));
             this.LogHealthChanges(this.Current);
             if (this.Current is { Phase: not (GamePhase.RoundEnd or GamePhase.NotInGame), Hand.Count: >= 13 })
                 this.lastHandInPlay = this.Current.Hand;
@@ -291,10 +294,11 @@ public sealed unsafe class EmjStateReader : IDisposable
     {
         try
         {
-            var addon = (AtkUnitBase*)args.Addon.Address;
-            if (addon == null || addon->AtkValues == null || addon->AtkValuesCount < 22)
+            if (args is not AddonRefreshArgs refresh || refresh.AtkValues == 0 || refresh.AtkValueCount == 0)
                 return;
-            this.tracker.OnRefresh(EmjStructReader.CopyAtkValues(addon));
+            // The persistent array retains the previous recap's tail (109 entries).
+            // A two-value refresh is only two values, not another scoring reveal.
+            this.tracker.OnRefresh(EmjStructReader.CopyAtkValues((AtkValue*)refresh.AtkValues, refresh.AtkValueCount));
         }
         catch (Exception ex)
         {
@@ -426,33 +430,35 @@ public sealed unsafe class EmjStateReader : IDisposable
     // the policy's choice), then same kind; the draw wins ties as the natural discard.
     public AtkResNode* FindSlotNodeForTile(AtkUnitBase* addon, Tile wanted, List<ScannedTileSlot>? slots = null)
     {
-        var decoded = this.LastDecoded;
-        if (decoded == null)
+        if (this.LastFrame == null || this.LastDecoded == null)
             return null;
-
         slots ??= EmjScanner.ScanHandSlots(addon);
-        var drawId = (uint)this.Layout.Nodes.HandSlotDraw;
-        var drawPtr = slots.FirstOrDefault(sl => sl.NodeId == drawId).NodePtr; // 0 when absent
-        var closedSlots = slots.Where(sl => sl.NodeId != drawId).ToList();
-        var closed = decoded.ClosedTiles;
-
-        AtkResNode* Closed(Func<Tile, bool> match)
+        // Prefer the drawn copy, but never derive its identity from a compacted list.
+        foreach (var slot in slots.AsEnumerable().Reverse())
         {
-            for (var i = closed.Count - 1; i >= 0; i--)
-                if (match(closed[i]) && i < closedSlots.Count)
-                    return (AtkResNode*)closedSlots[i].NodePtr;
-            return null;
+            var node = (AtkResNode*)slot.NodePtr;
+            var index = EmjOperator.DiscardSlot(addon, node);
+            if (index >= 0 && index < this.LastFrame.HandSlots.Length
+                && EmjLayout.TryDecodeTile(this.LastFrame.HandSlots[index], this.LastDecoded.EffectiveIconBase, out var tile)
+                && tile.Equals(wanted))
+                return node;
         }
+        return null;
+    }
 
-        var drawn = decoded.DrawnTile;
-        if (drawn is { } d && d.Equals(wanted) && drawPtr != 0)
-            return (AtkResNode*)drawPtr;
-        var exact = Closed(t => t.Equals(wanted));
-        if (exact != null)
-            return exact;
-        if (drawn is { } d2 && TileHelpers.SameKind(d2, wanted) && drawPtr != 0)
-            return (AtkResNode*)drawPtr;
-        return Closed(t => TileHelpers.SameKind(t, wanted));
+    private List<Tile> ReadDiscardableTiles(AtkUnitBase* addon)
+    {
+        var result = new List<Tile>(14);
+        if (this.LastFrame == null || this.LastDecoded == null || !EmjOperator.CanReceiveInput(addon, out _))
+            return result;
+        foreach (var slot in EmjScanner.ScanHandSlots(addon))
+        {
+            var index = EmjOperator.DiscardSlot(addon, (AtkResNode*)slot.NodePtr);
+            if (index >= 0 && index < this.LastFrame.HandSlots.Length
+                && EmjLayout.TryDecodeTile(this.LastFrame.HandSlots[index], this.LastDecoded.EffectiveIconBase, out var tile))
+                result.Add(tile);
+        }
+        return result;
     }
 
     private AtkUnitBase* GetAddon()

@@ -2,39 +2,58 @@ using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace MahjongHater.Core.Operate;
 
-// Fires the same AtkEvents the game's input pipeline would deliver, so the auto player
-// can operate the Emj addon (discard, call, confirm) without a human at the screen.
-//
-// Firing strategy: reuse the events REGISTERED on the target node (correct Listener,
-// Param, Target already wired by the game) and deliver exactly one semantic activation
-// per click — ButtonClick > MouseClick > MouseDown+MouseUp — to avoid the double-fire a
-// full down/up/click volley causes on component buttons. List rows never go down that
-// path: they have their own guarded, list-shaped route (SelectRow).
-//
-// THREE RULES, all from confirmed 2026-09-22 defects
-// (docs/research/CALL_WINDOW_AUDIT_2026_09_22.md, ADDON_INTERACTION_PLAN_2026_09_22.md):
-//
-//  1. NOTHING IS GUESSED. Every entry point resolves a target or returns a Dispatch with
-//     Sent=false and the guard that refused. There is no synthetic click, no row 0
-//     fallback and no dispatch at a node whose ancestors are hidden — the old code did
-//     all three, and answered "Pass" to a finished window's leftover rows.
-//  2. SCALARS ARE COPIED BEFORE DISPATCH. A handler may rebuild the UI inside
-//     ReceiveEvent, so event type, param, listener and node id are read first and the
-//     event/node pointers are never touched again afterwards.
-//  3. HOVER IS NEVER LEFT SET. Until 2026-09-22 every click was preceded by the node's
-//     MouseOver and nothing ever sent MouseOut, so the agent kept treating a hand slot as
-//     hovered after the tile had left the hand; the game then crashed refreshing that
-//     slot's tooltip string inside AgentEmj.Update (three crashes in 376 clicks,
-//     docs/research/LIVE_ISSUES_2026_09_22.md). The default is Activation: no hover at
-//     all. HoverCycle is opt-in and now requires MouseOver and MouseOut to be REGISTERED
-//     ON THE SAME HOLDER with the same listener — a pair, not two unrelated events — and
-//     both are sent before the activation, while the node is still valid. A synthetic
-//     MouseOut aimed at the addon is never invented.
-//
-// Framework-thread only. The event wiring itself was verified live in the 2026-07/09
-// sessions (docs/EMJ_ADDON_REFERENCE.md, "Operating the addon").
+// Framework-thread native UI dispatch. Emj uses ActivateButton/SelectRow so its
+// own handlers perform control, timer and focus cleanup. Events are copied before
+// dispatch: handlers may mutate the event and rebuild the original node tree.
+// Generic ClickNode remains for Duty Finder controls. Emj never synthesizes hover.
 internal static unsafe class EmjOperator
 {
+    // Use the game's handler, including its UI cleanup. A bare callback only reaches
+    // the agent and skips the Emj control/timer/focus transitions around it.
+    public static Dispatch ActivateButton(AtkUnitBase* addon, AtkResNode* node)
+    {
+        if (!CanReceiveInput(addon, out var why))
+            return Dispatch.Reject(why);
+        if (!IsChainVisible(addon, node, out why))
+            return Dispatch.Reject(why);
+        var evt = FindChainEventCore(node, AtkEventType.ButtonClick,
+            (nint)(AtkEventListener*)addon, true, 0, out var holder);
+        if (evt == null)
+            return Dispatch.Reject("no visible addon-bound ButtonClick");
+        var fired = new List<string>(1);
+        FireChain(addon, (AtkResNode*)holder, evt, fired);
+        return Dispatch.Fired(string.Join("; ", fired));
+    }
+
+    public static bool CanReceiveInput(AtkUnitBase* addon, out string why)
+    {
+        why = addon == null ? "addon is closed"
+            : !addon->IsVisible ? "addon is hidden"
+            : addon->ShouldIgnoreInputs() ? "game is blocking addon input (animation or modal)"
+            : string.Empty;
+        return why.Length == 0;
+    }
+
+    // The registered discard parameter is the raw struct slot + 15. It remains
+    // correct when melds leave holes in the visual/decoded hand arrays.
+    public static int DiscardSlot(AtkUnitBase* addon, AtkResNode* node)
+    {
+        if (!IsChainVisible(addon, node, out _))
+            return -1;
+        var evt = FindChainEventCore(node, AtkEventType.ButtonClick,
+            (nint)(AtkEventListener*)addon, true, 0, out _);
+        return evt != null && evt->Param is >= 15 and <= 28 ? (int)evt->Param - 15 : -1;
+    }
+
+    // ReceiveEvent sets Handled on its argument. Never pass the registration itself:
+    // the real dispatcher also uses a temporary event, not the node's chain record.
+    internal static AtkEvent CopyForDispatch(AtkEvent registration)
+    {
+        registration.NextEvent = null;
+        registration.State = new AtkEventState { EventType = registration.State.EventType };
+        return registration;
+    }
+
     public enum ClickStyle
     {
         Activation,   // the activation chain alone (default: cannot leave hover state behind)
@@ -277,23 +296,18 @@ internal static unsafe class EmjOperator
         return Dispatch.Fired($"node {nodeId}: {string.Join("; ", fired)}");
     }
 
-    // Commits a list row by index.
-    //
-    // NOT the call-window path. Call windows are answered with the addon's own [11, row]
-    // command through EmjActuator.AnswerCall; this is only reachable from ClickNode, i.e.
-    // from the debug click-by-path command and from result/queue addons. A configuration
-    // toggle used to advertise a choice between this and a native SelectItem for call rows,
-    // which was a dead control: AnswerCall has not gone through here since the protocol was
-    // measured, so the "comparison" compared nothing. Removed 2026-09-23.
-    //
-    // Every precondition is re-checked against the LIVE item table immediately before
-    // dispatch: the list is a component, on screen with all its ancestors, the index is
-    // inside the table, and the row owns a renderer. The payload is
-    // zeroed and list-shaped, because AtkEventData is a union whose MouseData.PosX/PosY
-    // overlap ListItemData.ListItemRenderer at offset 0 — a mouse payload leaves screen
-    // coordinates in a POINTER field.
+    // Enter the addon's list handler with a validated index and a list-shaped
+    // payload. Mouse coordinates overlap a pointer in this union and cannot be used.
     public static Dispatch SelectRow(AtkUnitBase* addon, AtkResNode* listNode, int index, string what)
     {
+        if (!CanReceiveInput(addon, out var blocked))
+            return Dispatch.Reject($"{what}: {blocked}");
+        var rows = Rows(listNode, out var unreadable);
+        if (unreadable.Length > 0)
+            return Dispatch.Reject($"{what}: {unreadable}");
+        var row = rows.FirstOrDefault(r => r.Index == index);
+        if (!row.HasRenderer || !row.Enabled || row.EnabledDisputed)
+            return Dispatch.Reject($"{what}: row {index} is not enabled and renderer-backed");
         if (addon == null || listNode == null)
             return Dispatch.Reject($"{what}: no call list");
         var listId = listNode->NodeId;
@@ -315,7 +329,7 @@ internal static unsafe class EmjOperator
             return Dispatch.Reject($"{what}: row {index}'s renderer has no owner node");
 
         var chain = FindChainEvent(listNode, AtkEventType.ListItemClick);
-        if (chain == null)
+        if (chain == null || chain->Listener != (AtkEventListener*)addon)
             return Dispatch.Reject($"{what}: list {listId} has no registered ListItemClick");
 
         // Copy everything the log needs BEFORE the handler can rebuild the tree.
@@ -328,7 +342,8 @@ internal static unsafe class EmjOperator
         var data = default(AtkEventData);
         data.ListItemData.ListItemRenderer = renderer;
         data.ListItemData.SelectedIndex = index;
-        listener->ReceiveEvent(type, param, chain, &data);
+        var dispatched = CopyForDispatch(*chain);
+        listener->ReceiveEvent(type, param, &dispatched, &data);
         return Dispatch.Fired(detail);
     }
 
@@ -343,43 +358,10 @@ internal static unsafe class EmjOperator
         => IsChainVisible(addon, node, out _)
            && FindChainEventCore(node, AtkEventType.ButtonClick, (nint)(AtkEventListener*)addon, requireVisible: true, 0, out _) != null;
 
-    // Sends one of the addon's own commands (EmjProtocol). This is what the game does when a
-    // human plays: the click is only how the cursor reaches the handler, and the handler's job
-    // is to fire this. A notification head is refused outright - the addon emits those about
-    // itself, and replaying one as input is how another plugin parked the addon in state 32.
-    //
-    // The pointer handshake [15, icon] that precedes a HUMAN discard is deliberately NOT sent,
-    // because discards land without it across whole live matches. The two reasons previously
-    // given here were both wrong: the "game fires [7, slot] with no handshake during riichi"
-    // observation does not exist (all 100 discards in the capture are paired; the four
-    // exceptions were a millisecond-rounding artifact), and "it would reproduce the sequence
-    // that preceded the table going unclickable" is a single correlation, not a cause.
-    public static Dispatch FireCommand(AtkUnitBase* addon, string what, params int[] values)
-    {
-        if (addon == null)
-            return Dispatch.Reject($"{what}: Emj addon not open");
-        if (values.Length == 0)
-            return Dispatch.Reject($"{what}: no command values");
-        if (EmjProtocol.IsNotification(values[0]))
-            return Dispatch.Reject($"{what}: [{string.Join(",", values)}] is a notification the addon sends about itself, not a command");
-
-        var detail = $"{what}: callback [{string.Join(",", values)}]";
-        FireCallback(addon, updateState: true, values);
-        return Dispatch.Fired(detail);
-    }
-
-    // Raw addon callback with int values. This is the addon's real command channel, not a
-    // simulated mouse: the 2026-09-23 capture recorded the game itself sending [7, slot] to
-    // discard, [11, row] to answer a call and [14] to advance a recap
-    // (docs/research/ADDON_PROTOCOL_2026_09_23.md).
-    //
-    // `updateState` is FireCallback's third argument, and the game passes TRUE for every
-    // callback a UI action produces — all 100 discards, all 30 call rows and all 10 recap
-    // advances in the capture carried it, while only the [-2] close carried false. It defaults
-    // to true here for that reason; the Duty Finder's Commence path keeps passing false because
-    // that is what it was verified with. Upstream names this argument `close`, so treat the
-    // measured value per operation as the authority rather than either name.
-    public static string FireCallback(AtkUnitBase* addon, bool updateState, params int[] values)
+    // Duty Finder's measured callback route. Emj actions use native handlers above.
+    // The third argument really is close: disassembly shows conditional Hide/Close
+    // after the agent returns. It is not a generic "update UI state" flag.
+    public static string FireCallback(AtkUnitBase* addon, bool close, params int[] values)
     {
         if (addon == null)
             return "no addon";
@@ -390,8 +372,8 @@ internal static unsafe class EmjOperator
             vals[i].Int = values[i];
         }
 
-        addon->FireCallback((uint)values.Length, vals, updateState);
-        return $"callback [{string.Join(", ", values)}] updateState={updateState}";
+        addon->FireCallback((uint)values.Length, vals, close);
+        return $"callback [{string.Join(", ", values)}] close={close}";
     }
 
     public static string FireCallback(AtkUnitBase* addon, params int[] values)
@@ -478,7 +460,8 @@ internal static unsafe class EmjOperator
         var toAddon = listener == (AtkEventListener*)addon;
         fired.Add($"{type} param={param}{(toAddon ? " →addon" : " →component")}");
         var data = BuildMouseData(node);
-        listener->ReceiveEvent(type, param, evt, &data);
+        var dispatched = CopyForDispatch(*evt);
+        listener->ReceiveEvent(type, param, &dispatched, &data);
     }
 
     private static AtkEventData BuildMouseData(AtkResNode* node)
@@ -531,6 +514,9 @@ internal static unsafe class EmjOperator
     {
         holder = 0;
         if (node == null || depth > 6)
+            return null;
+
+        if (requireVisible && !node->IsVisible())
             return null;
 
         if (!requireVisible || node->IsVisible())

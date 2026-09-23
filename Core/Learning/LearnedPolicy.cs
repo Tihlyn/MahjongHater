@@ -43,6 +43,7 @@ public sealed class LearnedPolicy(IPolicy fallback, LearnedModel network, Policy
         var result = new List<SimAction>();
         foreach (var tile in state.Hand.Distinct().Order())
         {
+            if (!state.CanDiscard(tile)) continue;
             result.Add(SimAction.Make(SimActionKind.Discard, tile));
             if (state.Can(LegalAction.Riichi) && state.Us.Score >= 1000 && state.WallRemaining >= 4)
             {

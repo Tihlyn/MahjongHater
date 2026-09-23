@@ -1,20 +1,32 @@
-﻿using Dalamud.Plugin.Services;
+using Dalamud.Bindings.ImGui;
+using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace MahjongHater.Core.State;
 
 // Why the game may not be taking mouse input on the table, captured while it is happening.
 //
-// The table going unselectable while auto play keeps working is the signature of a broken
-// INPUT path with a healthy addon: our operator dispatches AtkEvents straight to the
-// addon's listeners and never touches focus, hit-testing or the message pump, so it is
-// unaffected by anything that stops real clicks arriving.
+// Rewritten 2026-09-23 after the live session that settled what this bug is NOT. With the
+// table unclickable and focus gone:
+//   * disabling the plugin entirely did not restore either, so nothing of ours is holding
+//     input while it is broken;
+//   * a Cartographer-injected ListItemClick still worked, and auto play still played the
+//     match, so the ADDON is alive and its handlers are fine;
+//   * the prompt was structurally intact - list visible, ListItemClick bound to the addon,
+//     every row carrying MouseDown/MouseUp/MouseClick collision;
+//   * no modal, no invisible gating unit, and IdleGuard never fired all session.
+// The break is therefore in the game's own input layer, between the mouse and an addon that
+// is perfectly willing to be clicked, and it persists.
 //
-// Nothing here changes game state. It answers the three questions that separate the
-// candidates: is another unit holding focus or sitting in front of the table (including a
-// unit that is open but invisible - the shape a hidden Duty Finder leaves behind), is the
-// table itself still visible and collidable, and is Dalamud's own ImGui layer swallowing
-// the mouse before the game ever sees it.
+// So this stopped being a list of suspects and became a measurement of that layer, on ONE
+// frame, because the audit was right that an empty focus list alone proves nothing. The
+// question it has to answer is which of these is true at the moment the table is dead:
+// nobody holds focus; the table has fallen out of the depth-layer lists the game hit-tests;
+// the cursor is not where the game thinks it is; the hit test finds nothing or finds a node
+// belonging to something else; or Dalamud's ImGui layer is eating the mouse first.
+//
+// Nothing here changes game state.
 internal static unsafe class UiInputReport
 {
     // Units worth naming even when they are not focused: they overlay or gate the table.
@@ -27,7 +39,7 @@ internal static unsafe class UiInputReport
 
     public static List<string> Build(IGameGui gameGui, string tableAddon)
     {
-        var lines = new List<string>(24);
+        var lines = new List<string>(40);
         var stage = AtkStage.Instance();
         if (stage == null)
         {
@@ -42,32 +54,79 @@ internal static unsafe class UiInputReport
             return lines;
         }
 
+        var units = &manager->AtkUnitManager;
+        var ptr = gameGui.GetAddonByName(tableAddon);
+        var table = ptr.IsNull ? null : (AtkUnitBase*)ptr.Address;
+
         lines.Add("-- focus --");
-        var focused = &manager->AtkUnitManager.FocusedUnitsList;
-        lines.Add($"focused units ({focused->Count}): [{string.Join(", ", Names(focused))}]");
-        lines.Add($"table '{tableAddon}' has focus: {Names(focused).Any(n => n == tableAddon)}");
+        var focused = &units->FocusedUnitsList;
+        var focusNames = Names(focused);
+        lines.Add($"focused units ({focused->Count}): [{string.Join(", ", focusNames)}]");
+        lines.Add($"table '{tableAddon}' has focus: {focusNames.Contains(tableAddon)}");
+        lines.Add($"AtkUnitManager.Flags=0x{units->Flags:X2}");
+
+        // THE membership test. The game hit-tests the depth-layer lists, not "every loaded
+        // unit": a unit that is visible, ready and collidable but absent from all thirteen is
+        // simply never considered for a click, which looks exactly like a dead window and
+        // would survive anything the plugin does or stops doing.
+        lines.Add("-- depth-layer membership (what the game hit-tests) --");
+        var found = new List<string>(2);
+        var depthCounts = new List<string>(13);
+        for (var layer = 1; layer <= 13; layer++)
+        {
+            var list = DepthLayer(units, layer);
+            if (list == null)
+                continue;
+            depthCounts.Add($"L{layer}:{list->Count}");
+            for (var i = 0; i < list->Count && i < 128; i++)
+            {
+                var unit = list->Entries[i].Value;
+                if (unit != null && unit->NameString == tableAddon)
+                    found.Add($"layer {layer} index {i}");
+            }
+        }
+
+        lines.Add($"layer counts: {string.Join(" ", depthCounts)}");
+        lines.Add(found.Count > 0
+            ? $"'{tableAddon}' is in: {string.Join(", ", found)}"
+            : $"'{tableAddon}' IS IN NO DEPTH LAYER — the game never hit-tests it, so no click can reach it");
 
         lines.Add("-- the table --");
-        var ptr = gameGui.GetAddonByName(tableAddon);
-        if (ptr.IsNull)
+        if (table == null)
         {
             lines.Add($"'{tableAddon}' is not open");
         }
         else
         {
-            var addon = (AtkUnitBase*)ptr.Address;
-            lines.Add($"open=true visible={addon->IsVisible} rootVisible={(addon->RootNode != null && addon->RootNode->IsVisible())} "
-                      + $"ready={addon->IsFullyLoaded()} visibilityFlags=0x{addon->VisibilityFlags:X2} "
-                      + $"showHide=0x{addon->ShowHideFlags:X2} depthLayer={addon->DepthLayer} drawOrder={addon->DrawOrderIndex}");
-            lines.Add($"position=({addon->X},{addon->Y}) scale={addon->Scale:0.##} "
-                      + $"collisionNodes={addon->CollisionNodeListCount} hostId={addon->HostId} parentId={addon->ParentId}");
+            lines.Add($"open=true visible={table->IsVisible} rootVisible={(table->RootNode != null && table->RootNode->IsVisible())} "
+                      + $"ready={table->IsFullyLoaded()} uldState={table->UldManager.LoadedState} "
+                      + $"visibilityFlags=0x{table->VisibilityFlags:X2} showHide=0x{table->ShowHideFlags:X2} "
+                      + $"depthLayer={table->DepthLayer} drawOrder={table->DrawOrderIndex}");
+            lines.Add($"rect=({table->X},{table->Y}) {table->GetScaledWidth(true)}x{table->GetScaledHeight(true)} "
+                      + $"scale={table->Scale:0.##} collisionNodes={table->CollisionNodeListCount} "
+                      + $"hostId={table->HostId} parentId={table->ParentId}");
+            lines.Add($"input blockers={table->NumBlockingAddons} shouldIgnoreInputs={table->ShouldIgnoreInputs()}");
         }
 
-        // The decisive measurement when focus and visibility both look healthy: does the
-        // game's own hit test put the cursor on the table at all? A null or foreign
-        // intersecting node while the pointer is over a tile means clicks never reach the
-        // addon, and no amount of addon state will explain it.
-        lines.Add("-- what the game thinks the cursor is over --");
+        // Same-frame pointer evidence. The audit's point stands: a null intersection proves
+        // nothing on its own, because the cursor may simply be elsewhere. The cursor position
+        // against the table's own rectangle is what makes the intersection readable.
+        lines.Add("-- the pointer, this frame --");
+        var input = UIInputData.Instance();
+        if (input == null)
+        {
+            lines.Add("UIInputData unavailable");
+        }
+        else
+        {
+            var cx = input->CursorInputs.PositionX;
+            var cy = input->CursorInputs.PositionY;
+            var inside = table != null
+                         && cx >= table->X && cx <= table->X + table->GetScaledWidth(true)
+                         && cy >= table->Y && cy <= table->Y + table->GetScaledHeight(true);
+            lines.Add($"cursor=({cx},{cy}) insideTableRect={(table == null ? "n/a" : inside.ToString())}");
+        }
+
         var collision = stage->AtkCollisionManager;
         if (collision == null)
         {
@@ -76,13 +135,30 @@ internal static unsafe class UiInputReport
         else
         {
             var hovered = collision->IntersectingCollisionNode;
-            lines.Add($"intersecting collision node: {(hovered == null ? "NONE - the game is not hit-testing anything under the cursor" : $"id {hovered->AtkResNode.NodeId}, visible={hovered->AtkResNode.IsVisible()}")}");
+            lines.Add(hovered == null
+                ? "intersecting collision node: NONE — the game's hit test finds nothing under the cursor"
+                : $"intersecting collision node: id {hovered->AtkResNode.NodeId} visible={hovered->AtkResNode.IsVisible()}");
         }
 
         lines.Add($"cursor type={stage->AtkCursor.Type}");
 
+        // If Dalamud wants the mouse, the game never sees the click at all — and this is OUR
+        // layer, so it is the one candidate here that we could be responsible for.
+        try
+        {
+            var io = ImGui.GetIO();
+            lines.Add($"ImGui wantCaptureMouse={io.WantCaptureMouse} wantCaptureKeyboard={io.WantCaptureKeyboard}");
+        }
+        catch (Exception ex)
+        {
+            lines.Add($"ImGui IO unavailable ({ex.GetType().Name})");
+        }
+
+        var module = RaptureAtkModule.Instance();
+        lines.Add(module == null ? "RaptureAtkModule unavailable" : $"uiVisible={module->IsUiVisible}");
+
         lines.Add("-- other units that gate or overlay input --");
-        var all = &manager->AtkUnitManager.AllLoadedUnitsList;
+        var all = &units->AllLoadedUnitsList;
         var noted = 0;
         for (var i = 0; i < all->Count && i < 256; i++)
         {
@@ -112,10 +188,9 @@ internal static unsafe class UiInputReport
     }
 
     // A one-line signature of everything that could be standing between the player's mouse
-    // and the table: who holds focus, and which of the gating units are open. Logged only
-    // when it CHANGES, so a session shows the moment something appeared and never left.
-    // Restricted to the list above on purpose - plenty of ordinary HUD units sit open and
-    // invisible all match, and reporting those would bury the one that matters.
+    // and the table. Logged only when it CHANGES, so a session shows the moment something
+    // appeared and never left. Depth-layer membership is in here because its disappearance is
+    // the event we most want stamped with a time.
     public static string Blockers(IGameGui gameGui, string tableAddon)
     {
         var stage = AtkStage.Instance();
@@ -123,9 +198,10 @@ internal static unsafe class UiInputReport
         if (manager == null)
             return "unavailable";
 
-        var focused = string.Join("+", Names(&manager->AtkUnitManager.FocusedUnitsList));
+        var units = &manager->AtkUnitManager;
+        var focused = string.Join("+", Names(&units->FocusedUnitsList));
         var open = new List<string>(4);
-        var all = &manager->AtkUnitManager.AllLoadedUnitsList;
+        var all = &units->AllLoadedUnitsList;
         for (var i = 0; i < all->Count && i < 256; i++)
         {
             var unit = all->Entries[i].Value;
@@ -136,11 +212,48 @@ internal static unsafe class UiInputReport
                 open.Add(name + (unit->IsVisible ? string.Empty : "(invisible)"));
         }
 
+        var layer = -1;
+        for (var l = 1; l <= 13 && layer < 0; l++)
+        {
+            var list = DepthLayer(units, l);
+            for (var i = 0; list != null && i < list->Count && i < 128; i++)
+            {
+                var unit = list->Entries[i].Value;
+                if (unit != null && unit->NameString == tableAddon)
+                {
+                    layer = l;
+                    break;
+                }
+            }
+        }
+
         var ptr = gameGui.GetAddonByName(tableAddon);
         var tableVisible = !ptr.IsNull && ((AtkUnitBase*)ptr.Address)->IsVisible;
         return $"focus=[{(focused.Length == 0 ? "none" : focused)}] table={(ptr.IsNull ? "closed" : tableVisible ? "visible" : "INVISIBLE")}"
+               + $" inputBlockers={(ptr.IsNull ? "n/a" : ((AtkUnitBase*)ptr.Address)->NumBlockingAddons.ToString())}"
+               + $" depthLayer={(layer < 0 ? "NONE" : layer.ToString())}"
                + $" others=[{string.Join(", ", open)}]";
     }
+
+    // The thirteen lists are separate named fields rather than an array, so the mapping is
+    // written out once here instead of at both call sites.
+    private static AtkUnitList* DepthLayer(AtkUnitManager* units, int layer) => layer switch
+    {
+        1 => &units->DepthLayerOneList,
+        2 => &units->DepthLayerTwoList,
+        3 => &units->DepthLayerThreeList,
+        4 => &units->DepthLayerFourList,
+        5 => &units->DepthLayerFiveList,
+        6 => &units->DepthLayerSixList,
+        7 => &units->DepthLayerSevenList,
+        8 => &units->DepthLayerEightList,
+        9 => &units->DepthLayerNineList,
+        10 => &units->DepthLayerTenList,
+        11 => &units->DepthLayerElevenList,
+        12 => &units->DepthLayerTwelveList,
+        13 => &units->DepthLayerThirteenList,
+        _ => null,
+    };
 
     private static List<string> Names(AtkUnitList* list)
     {

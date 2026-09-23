@@ -77,7 +77,8 @@ public sealed class IncrementalStateKey
         [
             Json(new { Schema = 1, profile }),
             Json(new { Hand = Tiles(s.Hand.Order()), Draw = s.DrawnTile?.ToString(), Melds = Melds(s.OurMelds), s.OurRiichi }),
-            Json(new { s.Phase, s.Legal, Call = s.CallTile?.ToString(), s.CallFromSeat, Shapes = Melds(s.CallShapes) }),
+            Json(new { s.Phase, s.Legal, Call = s.CallTile?.ToString(), s.CallFromSeat, Shapes = Melds(s.CallShapes) })
+                + (s.DiscardableTiles == null ? string.Empty : "|discardable:" + Tiles(s.DiscardableTiles.Order())),
             Json(new { s.RoundWind, s.SeatWind, s.DealerSeat, s.WallRemaining, s.Honba, s.RiichiSticks, s.HandNumber, s.Ruleset, s.LayoutHealthy }),
             Json(new { Dora = Tiles(s.DoraIndicators), Ura = Tiles(s.UraDoraIndicators) }),
             Json(s.Seats.Select(seat => new { seat.Seat, Discards = Tiles(seat.Discards), Melds = Melds(seat.Melds),

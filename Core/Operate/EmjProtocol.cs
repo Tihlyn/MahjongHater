@@ -20,6 +20,10 @@ namespace MahjongHater.Core.Operate;
 // named so they can never be mistaken for commands.
 public static class EmjProtocol
 {
+    // The Next node exists before the scoring animation releases its input block.
+    public static bool CanAdvanceRecap(int stateCode, int inputBlockers)
+        => stateCode == 29 && inputBlockers == 0;
+
     // ─────────────────────────────── commands ───────────────────────────────
 
     // [7, slot] — discard. Paired with ButtonClick param=slot+15 on node 9, 100 times out of

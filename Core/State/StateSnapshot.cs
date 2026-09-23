@@ -123,6 +123,12 @@ public sealed record StateSnapshot(
     // unacknowledged with the window still up. Neither is inferred from having dispatched.
     public bool AnswerPending { get; init; }
 
+    // Null for offline observations; live reads contain only tiles with an active
+    // native discard handler. This includes riichi/kuikae restrictions and animations.
+    public IReadOnlyList<Tile>? DiscardableTiles { get; init; }
+
+    public bool CanDiscard(Tile tile) => this.DiscardableTiles == null || this.DiscardableTiles.Contains(tile);
+
     public SeatState Us => this.Seats[0];
 
     public bool IsOpen => this.OurMelds.Any(m => m.IsOpen);

@@ -36,7 +36,7 @@
   },
   "seatPanels": { "base": ["0x0238", "0x0518", "0x07F8", "0x0AD8"], "size": "0x02E0" },
   "atkValues": { "stateCode": 0, "wallCount": 1 },
-  "stateCodes": { "deal": 2, "draw": 5, "ourTurn": 6, "discard": 8, "riichi": 12, "meld": 13, "othersTurn": 15, "callPrompt": 19, "postMeldRefresh": 21, "callWindowOpened": 22, "callOptions": 23, "postWin": 27, "score": 29, "win": 32 },
+  "stateCodes": { "deal": 2, "draw": 5, "ourTurn": 6, "discard": 8, "discardHighlightReset": 12, "meld": 13, "othersTurn": 15, "callPrompt": 19, "postMeldRefresh": 21, "callWindowOpened": 22, "callOptions": 23, "postWin": 27, "score": 29, "win": 32 },
   "nodes": {
     "handSlotFirst": 134, "handSlotDraw": 135, "handSlotButton": 9,
     "callList": "1/46/104/3", "recapNext": 97,
