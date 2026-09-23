@@ -6,6 +6,14 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ### Fixed
 
+- An added kan on our own pon is no longer invisible to the policy. The game offers a single
+  "Kan" option code without saying which kind it is, and a self-declare Kan was mapped to
+  `AnKan` alone - which `CallPolicy` looks for as four copies in the *closed hand*, finding
+  three of them sitting in the meld. No kan option was generated at all and the turn fell
+  through to a discard: on 2026-09-23 the plugin ponned 4z, drew the fourth 4z, was offered
+  the added kan, and discarded that 4z. A self-declare Kan now marks both kinds legal and
+  `CallPolicy` works out which the hand supports.
+
 - Auto play no longer skips the round recap. `RecapClickEvery` throttled repeat presses but
   never the first, so `[14]` went out in the same millisecond the win screen appeared. That was
   harmless while the click was unreliable and instantly destructive once the callback started

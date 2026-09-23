@@ -108,7 +108,15 @@ public sealed class SnapshotBuilder
                 {
                     "Pon" => LegalAction.Pon,
                     "Chi" => LegalAction.Chi,
-                    "Kan" => selfDeclare ? LegalAction.AnKan : LegalAction.MinKan,
+                    // The game offers one "Kan" option code and does not say WHICH kan. On our
+                    // own turn that is either a concealed kan (four in hand) or an added kan on
+                    // an existing pon, and mapping it to AnKan alone made every added kan
+                    // invisible: CallPolicy looks for four copies in the closed hand, finds
+                    // three of them sitting in a meld, offers nothing, and the turn falls
+                    // through to a discard. On 2026-09-23 that discarded the fourth 4z of our
+                    // own pon. Both kinds are marked legal and CallPolicy works out which the
+                    // hand actually supports.
+                    "Kan" => selfDeclare ? LegalAction.AnKan | LegalAction.ShouMinKan : LegalAction.MinKan,
                     "Ron" => LegalAction.Ron,
                     "Riichi" => LegalAction.Riichi,
                     "Tsumo" => LegalAction.Tsumo,
