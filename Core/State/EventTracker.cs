@@ -190,6 +190,17 @@ public sealed class EventTracker
         this.Note($"answer \'{option}\' sent for window #{generation}; waiting for the game to act on it");
     }
 
+    // A new prompt replacing the one we answered IS the game acting on that answer - most
+    // visibly when accepting Chi raises its shape chooser 7 ms later. Every path that advances
+    // the generation goes through here, so the answer that caused the new window is confirmed
+    // by it instead of being orphaned on the old generation and timing out with a false
+    // "the game never acted on it" (observed live 2026-09-23, 13:31:42).
+    private void AdvanceCallWindowGeneration(string because)
+    {
+        this.ResolvePendingAnswer(this.callWindowGeneration, because);
+        this.callWindowGeneration++;
+    }
+
     // An answer stops being pending only on an observation. The game closing the window it
     // targeted is that observation; anything else leaves it pending until it times out.
     private void ResolvePendingAnswer(long generation, string because)
@@ -280,6 +291,30 @@ public sealed class EventTracker
 
         switch (type)
         {
+            case 6 when IsSlotRamp(f): // riichi accepted: "here are the slots you may discard"
+            {
+                // THE acknowledgement of a riichi declaration, and the one signal that says
+                // the self-declare prompt is resolved.
+                //
+                // Measured live 2026-09-23. Answering a Riichi window with [11, row] makes
+                // the game fire this SYNCHRONOUSLY inside our own callback: [1] = how many
+                // hand slots are still legal to discard, then a plain 0,1,2,... ramp naming
+                // them. It appeared exactly twice in that session's log, both times
+                // immediately after a [11, row] answering a Riichi window, and never
+                // otherwise - an ordinary turn discards freely and carries no ramp.
+                //
+                // Nothing else closes this window. A riichi prompt is NOT followed by a
+                // turn advance, a discard, a meld or a score event, and the panel stays on
+                // screen while the game waits for the riichi discard - which is why the
+                // "Riichi / Pass" rows remain visible and readable the whole time. Before
+                // this case existed the plugin saw its own answer go unacknowledged, timed
+                // out, and declared riichi a second time.
+                var slots = f.Int(1);
+                this.Note($"riichi accepted: the game offers {slots} legal discard slot(s)");
+                this.ClearCallWindow("riichi accepted (type-6 discard selection)");
+                break;
+            }
+
             case 5: // turn advance: [1]=wall remaining, [2]=seat that draws next
                 if (f.Int(1) is > 0 and <= 70)
                     this.eventWallRemaining = f.Int(1);
@@ -443,7 +478,7 @@ public sealed class EventTracker
                 var fromSeat = this.callFromSeat >= 0 ? this.callFromSeat : this.answeredCallFromSeat;
                 this.answeredSignature = null;
                 this.callWindowActive = true;
-                this.callWindowGeneration++;
+                this.AdvanceCallWindowGeneration("the chi shape chooser replaced it");
                 this.callOptions = ["Chi"];
                 this.callShapes = shapes;
                 this.CallIsClaim = true;
@@ -694,7 +729,7 @@ public sealed class EventTracker
         }
 
         this.callWindowActive = true;
-        this.callWindowGeneration++;
+        this.AdvanceCallWindowGeneration($"a new window ({source}) replaced it");
         this.callOptions = options;
         this.CallIsClaim = isClaim;
         this.callTile = isClaim ? candidate : null;
@@ -715,6 +750,26 @@ public sealed class EventTracker
     };
 
     private static bool IsOption(string s) => s is "Chi" or "Pon" or "Kan" or "Ron" or "Riichi" or "Tsumo";
+
+    // [1] = a slot count, then [2..] a plain 0,1,2,... ramp naming those slots. The same shape
+    // the type-19 decode warns about, here as the thing being looked for rather than guarded
+    // against: on a type-6 it is the game listing the hand slots a riichi hand may discard.
+    // Requires the full ramp, so a frame that merely starts 0,1 does not qualify.
+    private static bool IsSlotRamp(AtkFrame f)
+    {
+        if (!f.IsInt(1))
+            return false;
+        var count = f.Int(1);
+        if (count is < 1 or > 14)
+            return false;
+        for (var i = 0; i < count; i++)
+        {
+            if (!f.IsInt(2 + i) || f.Int(2 + i) != i)
+                return false;
+        }
+
+        return true;
+    }
 
     // "40 Fu 3 Han" / "25 Fu 5 Han Mangan" - fu, han and the limit name the game applied.
     private static WinScreen? ParseWinScreen(AtkFrame f)
