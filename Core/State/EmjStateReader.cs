@@ -111,7 +111,7 @@ public sealed unsafe class EmjStateReader : IDisposable
             this.LastFrame = frame;
             this.LastDecoded = decoded;
 
-            this.tracker.OnTick(decoded, PromptLabels(addon));
+            this.tracker.OnTick(decoded);
 
             // Winds live in text nodes only (docs/EMJ_STRUCT.md, "Not in the struct").
             if (++this.ticks % WindScanInterval == 0)
@@ -418,7 +418,6 @@ public sealed unsafe class EmjStateReader : IDisposable
     // Visible texts of the call panel (Pon/Chi/Pass, Riichi/Tsumo/…). They persist after a
     // prompt closes and the list's item-table labels are always empty, so this is only the
     // tracker's fallback edge — the type-19/23 events are the real signal.
-    private static List<string> PromptLabels(AtkUnitBase* addon) => EmjScanner.ScanCallButtonTexts(addon);
 
     // Slot node holding a tile of the current hand, by struct semantics: the draw always
     // sits in the dedicated draw slot, closed tile i in the i-th non-draw slot by X.

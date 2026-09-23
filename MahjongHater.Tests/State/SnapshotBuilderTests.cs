@@ -9,10 +9,26 @@ public class SnapshotBuilderTests
     private static readonly DateTime T0 = new(2026, 9, 18, 20, 0, 0, DateTimeKind.Utc);
     private static readonly EmjLayout Layout = StructFixture.Layout;
 
-    private static StateSnapshot Build(SnapshotBuilder b, EventTracker t, DecodedStruct d, IReadOnlyList<string>? labels = null)
+    private static StateSnapshot Build(SnapshotBuilder b, EventTracker t, DecodedStruct d)
     {
-        t.OnTick(d, labels ?? [], T0);
+        t.OnTick(d, T0);
         return b.Build(d, t, Layout, RulesetOptions.Default);
+    }
+
+    // A call window as the game opens one: a type-23 whose row count matches its options,
+    // with the option codes in [2]/[3], the banner in [6] and the row labels from [7].
+    private static AtkFrame CallWindow(params string[] options)
+    {
+        var codes = options.Select(o => o switch
+        {
+            "Tsumo" => 1, "Ron" => 2, "Riichi" => 3, "Kan" => 4, "Pon" => 5, "Chi" => 6,
+            _ => throw new ArgumentOutOfRangeException(nameof(options), o, "not an option"),
+        }).ToArray();
+        var frame = AtkFrame.OfInts([23, options.Length + 1, codes.ElementAtOrDefault(0), codes.ElementAtOrDefault(1), .. new int[18]])
+            .WithString(6, options[0] + "!");
+        for (var i = 0; i < options.Length && i < 2; i++)
+            frame = frame.WithString(7 + i, options[i]);
+        return options.Length < 2 ? frame.WithString(8, "Pass") : frame;
     }
 
     [Fact]
@@ -59,7 +75,7 @@ public class SnapshotBuilderTests
     {
         var t = new EventTracker();
         var d = StructFixture.Decoded("123m456p789s1122z", null, stateCode: 15);
-        t.OnTick(d, [], T0);
+        t.OnTick(d, T0);
         t.OnRefresh(AtkFrame.OfInts(8, 3, StructFixture.IconOf(Tile.Parse("7z"), 76041)), T0);
         t.OnRefresh(AtkFrame.OfInts([23, 2, 5, 0, .. new int[18]]).WithString(6, "Pon!").WithString(7, "Pon").WithString(8, "Pass"), T0);
 
@@ -68,18 +84,19 @@ public class SnapshotBuilderTests
         Assert.Contains(s.Notes, n => n.Contains("offers Pon") && n.Contains("missing tiles"));
     }
 
-    // Provenance: only a prompt EVENT makes the offered actions authoritative. A window the
-    // panel text alone suggested is a guess, and the policy keeps its own gate for it.
+    // Provenance: a window exists only when a prompt EVENT opened one. Panel text used to
+    // open "label-only" windows that were then refused everywhere downstream; that path is
+    // gone, so an unconfirmed window is no longer a state the snapshot can be in.
     [Fact]
     public void Call_window_provenance_reaches_the_snapshot()
     {
         var t = new EventTracker();
         var d = StructFixture.Decoded("44m77m3p55p556s6699s", "3p");
-        var labelOnly = Build(new SnapshotBuilder(), t, d, ["Tsumo", "Pass"]);
-        Assert.False(labelOnly.CallWindowConfirmed);
+        var noEvent = Build(new SnapshotBuilder(), t, d);
+        Assert.False(noEvent.CallWindowConfirmed);
 
         var t2 = new EventTracker();
-        t2.OnTick(d, [], T0);
+        t2.OnTick(d, T0);
         t2.OnRefresh(AtkFrame.OfInts([23, 2, 1, 0, .. new int[18]]).WithString(6, "Tsumo!").WithString(7, "Tsumo").WithString(8, "Pass"), T0);
         var confirmed = t2.CallWindowActive ? new SnapshotBuilder().Build(d, t2, Layout, RulesetOptions.Default) : null;
         Assert.NotNull(confirmed);
@@ -116,7 +133,8 @@ public class SnapshotBuilderTests
         var hand = StructFixture.Decoded("22z34567m11p3459s", null, stateCode: 15);
         Build(b, t, hand);
         t.OnRefresh(AtkFrame.OfInts(8, 3, 76069), T0); // kamicha discards S
-        var s = Build(b, t, hand, ["Pon", "Pass"]);
+        t.OnRefresh(CallWindow("Pon"), T0);
+        var s = Build(b, t, hand);
         Assert.Equal(GamePhase.CallPrompt, s.Phase);
         Assert.True(s.Can(LegalAction.Pon));
         Assert.True(s.Can(LegalAction.Pass));
@@ -147,7 +165,8 @@ public class SnapshotBuilderTests
     {
         var t = new EventTracker();
         t.OnRefresh(AtkFrame.OfInts([5, 50, 0, .. new int[18]]), T0);   // the turn advances to us
-        var s = Build(new SnapshotBuilder(), t, StructFixture.Decoded("123m456p789s1122z", "3z"), ["Riichi", "Pass"]);
+        t.OnRefresh(CallWindow("Riichi"), T0);
+        var s = Build(new SnapshotBuilder(), t, StructFixture.Decoded("123m456p789s1122z", "3z"));
         Assert.Equal(GamePhase.SelfDeclare, s.Phase);
         Assert.Equal(14, s.Hand.Count);
         Assert.True(s.Can(LegalAction.Riichi));
@@ -173,20 +192,25 @@ public class SnapshotBuilderTests
     // An answered Tsumo/Ron parks the snapshot at RoundEnd (nothing legal) until the win
     // screen, so the auto player never discards from a hand the game is scoring.
     [Fact]
-    public void Answered_win_parks_the_snapshot_at_round_end()
+    public void Answered_win_suppresses_decisions_without_faking_the_phase()
     {
         var t = new EventTracker();
         var b = new SnapshotBuilder();
         var d = StructFixture.Decoded("44m77m3p55p556s6699s", "3p");
-        t.OnTick(d, [], T0);
+        t.OnTick(d, T0);
         t.OnRefresh(AtkFrame.OfInts([23, .. new int[21]]).WithString(6, "Tsumo!").WithString(7, "Tsumo").WithString(8, "Riichi"), T0);
         var before = Build(b, t, d);
         Assert.Equal(GamePhase.SelfDeclare, before.Phase);
         Assert.True(before.Can(LegalAction.Tsumo));
 
-        t.MarkCallAnswered(isWin: true, t.CallWindowGeneration);
+        t.NoteAnswerSent("Tsumo", isWin: true, t.CallWindowGeneration, T0);
         var after = Build(b, t, d);
-        Assert.Equal(GamePhase.RoundEnd, after.Phase);
+        // The phase still reports what the GAME is showing. Forcing it to RoundEnd here meant
+        // that sending a win made the plugin believe the round was over whether or not the
+        // game agreed, and the auto player then ran its recap handling against a live table.
+        Assert.Equal(GamePhase.SelfDeclare, after.Phase);
+        Assert.True(after.AwaitingOurWin);
+        Assert.True(after.AnswerPending);
         Assert.Equal(LegalAction.None, after.Legal);
     }
 

@@ -282,7 +282,7 @@ public sealed class MainWindow : Window
         using (Widgets.Card())
         {
             Widgets.Label("ADDON INTERACTION");
-            Widgets.Wrapped($"Click style: {Core.Operate.EmjOperator.Style} · call rows: {Core.Operate.EmjOperator.Route}");
+            Widgets.Wrapped($"Click style: {Core.Operate.EmjOperator.Style}");
             Widgets.Wrapped($"Last action: {player.LastDispatchStatus}");
             if (Widgets.ToggleRow("Allow the hover click style", "##hoverescalation", this.configuration.HoverEscalation))
             {
@@ -294,15 +294,6 @@ public sealed class MainWindow : Window
                 Widgets.Tooltip("Off: clicks are the activation chain alone. On: an activation the game ignored switches this match "
                     + "to a matched MouseOver+MouseOut before the click — the style that preceded three AgentEmj.Update crashes.");
 
-            if (Widgets.ToggleRow("Native list selection for call rows", "##nativelist", this.configuration.NativeListSelection))
-            {
-                this.configuration.NativeListSelection = !this.configuration.NativeListSelection;
-                this.configuration.Save();
-            }
-
-            if (ImGui.IsItemHovered())
-                Widgets.Tooltip("Off: the list's own registered ListItemClick, which the 2026-07/09 sessions verified. "
-                    + "On: AtkComponentList.SelectItem(index, dispatch) — a comparison route, unverified here.");
         }
     }
 

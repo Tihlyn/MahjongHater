@@ -56,13 +56,40 @@ public sealed class AutoPlayer
     private string? pendingFingerprint;
     private DateTime actAfterUtc;
 
-    // The last thing we actually delivered to the game, and the snapshot it was aimed at.
-    // Dispatch is not acceptance: this is what lets the journal say "sent and ignored"
-    // instead of reporting a click as a success (docs/research/STALL_2026_09_22.md).
-    private sealed record PendingDispatch(string What, long Sequence, DateTime SentUtc, bool NodeActivation);
+    // The last thing we actually delivered to the game, and enough of the state it was aimed
+    // at to recognise the game acting on it. Dispatch is not acceptance: this is what lets the
+    // journal say "sent and ignored" instead of reporting a click as a success
+    // (docs/research/STALL_2026_09_22.md).
+    //
+    // Acceptance used to be "the snapshot sequence changed". The sequence changes on every
+    // refresh the addon makes - another seat's discard, a timer, a score tick - so an answer
+    // the game ignored was acknowledged by the next unrelated frame, and the plugin moved on
+    // believing it had acted. What counts now is the specific change the action should cause.
+    private sealed record PendingDispatch(
+        string What, ActionKind Kind, long Sequence, long CallGeneration, int HandCount,
+        DateTime SentUtc, bool NodeActivation)
+    {
+        // The observation that this action landed - never merely that the game moved.
+        public bool WasAcceptedIn(StateSnapshot now, EventTracker tracker) => this.Kind switch
+        {
+            // A discard leaves our hand one tile shorter. (The draw that follows makes it 14
+            // again, so this is read on the frames between, which is where the game puts it.)
+            ActionKind.Discard => now.Hand.Count < this.HandCount,
+
+            // Everything else answers a call window: the game is done with it when the window
+            // we aimed at is gone or has been replaced by a newer one.
+            _ => !now.CallWindowConfirmed || tracker.CallWindowGeneration != this.CallGeneration,
+        };
+    }
 
     private PendingDispatch? pending;
+    private bool dispatchTimedOut;
     private double? lastAckMs;
+
+    // How long to wait for the specific change an action should cause before saying it never
+    // arrived. Long enough that a slow frame is not a false alarm; short enough that the retry
+    // ladder still gets to act inside a turn.
+    private static readonly TimeSpan DispatchTimeout = TimeSpan.FromSeconds(4);
 
     private long lastSequence = -1;
     private DateTime lastChangeUtc;
@@ -138,24 +165,52 @@ public sealed class AutoPlayer
             return;
         }
 
+        // Acceptance is action-specific and is checked every frame, not only when the
+        // sequence moves: the game acting on our answer and the sequence changing are
+        // different events, and conflating them is how a dispatch acknowledged itself.
+        if (this.pending is { } sentAction)
+        {
+            if (sentAction.WasAcceptedIn(state, this.reader.Tracker))
+            {
+                this.lastAckMs = (now - sentAction.SentUtc).TotalMilliseconds;
+                this.LastDispatchStatus = $"{sentAction.What} accepted after {this.lastAckMs:F0} ms";
+                this.Record($"{sentAction.What} accepted after {this.lastAckMs:F0} ms");
+                this.pending = null;
+                this.dispatchTimedOut = false;
+            }
+            else if (!this.dispatchTimedOut && now - sentAction.SentUtc > DispatchTimeout)
+            {
+                // Reported once, but the record is KEPT: the retry ladder runs later
+                // (RetryAfter) and needs to know the previous dispatch went unanswered, which
+                // is also what the hover escalation is allowed to act on. Clearing it here
+                // would have made every retry look like a first attempt.
+                this.dispatchTimedOut = true;
+                this.LastDispatchStatus = $"{sentAction.What} UNACKNOWLEDGED after {(now - sentAction.SentUtc).TotalSeconds:F1} s";
+                this.Record($"{sentAction.What} was dispatched {(now - sentAction.SentUtc).TotalSeconds:F1} s ago and the game "
+                            + "has not done the thing it should cause - treating it as not delivered");
+            }
+        }
+
         if (state.Sequence != this.lastSequence)
         {
             if (this.stalled)
                 this.Record($"stall ended after {(now - this.stallSinceUtc).TotalSeconds:F0} s (seq {this.lastSequence} → {state.Sequence})");
-            // The game moved after our dispatch: that, and only that, is acceptance.
-            if (this.pending is { } acked && acked.Sequence == this.lastSequence)
-            {
-                this.lastAckMs = (now - acked.SentUtc).TotalMilliseconds;
-                this.LastDispatchStatus = $"{acked.What} accepted after {this.lastAckMs:F0} ms";
-                this.pending = null;
-            }
-
             this.lastSequence = state.Sequence;
             this.lastChangeUtc = now;
             this.stalled = false;
             this.recoveryStep = 0;
             if (state.Phase != GamePhase.RoundEnd)
                 this.lastRecapReason = null;
+        }
+
+        // We answered a Tsumo/Ron and the game has not settled it. The phase still says what
+        // the game is showing, so this is a wait, not a recap: entering recap handling here
+        // used to press Next against a live table.
+        if (state.AwaitingOurWin)
+        {
+            this.pendingFingerprint = null;
+            this.Status = "Win answered, waiting for the game";
+            return;
         }
 
         if (state.Phase == GamePhase.RoundEnd)
@@ -243,18 +298,6 @@ public sealed class AutoPlayer
             return;
         }
 
-        // A window only the panel texts opened is a phantom (the texts persist after every
-        // prompt); answering it would fire a list click at a closed list. A genuinely missed
-        // event ends in a stall, and the recovery ladder passes it then. Our turn is still
-        // real, so a riichi on such a window becomes the plain discard it carries.
-        var labelOnly = this.reader.Tracker.CallWindowFromLabels;
-        if (labelOnly && choice.Kind is not (ActionKind.Discard or ActionKind.Riichi))
-        {
-            this.pendingFingerprint = null;
-            this.Status = $"Decision {choice.Kind} on a label-only window — not answering";
-            return;
-        }
-
         if (publication.Fingerprint == this.actedFingerprint)
         {
             this.pendingFingerprint = null;
@@ -265,7 +308,7 @@ public sealed class AutoPlayer
             }
 
             this.attempts++;
-            var unacknowledged = this.pending is { } sent && sent.Sequence == state.Sequence;
+            var unacknowledged = this.dispatchTimedOut;
             this.Record($"retry {this.attempts}/{MaxAttempts}: {choice.Kind} {choice.Tile?.ToString() ?? string.Empty} — "
                         + (unacknowledged
                             ? $"'{this.pending!.What}' was dispatched {(now - this.pending.SentUtc).TotalSeconds:F0} s ago and the game has not acknowledged it"
@@ -296,19 +339,21 @@ public sealed class AutoPlayer
         }
 
         this.actedAtUtc = now;
-        var downgraded = labelOnly && choice.Kind == ActionKind.Riichi;
-        var result = downgraded ? this.actuator.Discard(choice) : this.actuator.Execute(state, choice);
+        var result = this.actuator.Execute(state, choice);
         // "Sent" is the honest word: acceptance shows up later, as a snapshot change.
         this.Status = $"{(result.Ok ? "Sent" : "REFUSED")} {choice.Kind} {choice.Tile?.ToString() ?? string.Empty}";
-        var line = $"seq {state.Sequence} {state.Phase} → {choice.Kind}{(downgraded ? " (label-only window: discard without riichi)" : string.Empty)} {choice.Tile?.ToString() ?? string.Empty}" +
+        var line = $"seq {state.Sequence} {state.Phase} → {choice.Kind} {choice.Tile?.ToString() ?? string.Empty}" +
                    (choice.Call is { } meld ? $" [{string.Join(" ", meld.Tiles)}]" : string.Empty) +
                    $" | {choice.Summary} | {(result.Ok ? "sent" : "REFUSED")}: {result.Detail}";
         this.Record(line);
         this.LastDispatchStatus = result.Ok
             ? $"{choice.Kind} {choice.Tile?.ToString() ?? string.Empty} dispatched, waiting for the game".Replace("  ", " ")
             : $"{choice.Kind} refused: {result.Detail}";
+        this.dispatchTimedOut = false;
         if (result.Ok)
-            this.pending = new PendingDispatch($"{choice.Kind} {choice.Tile?.ToString() ?? string.Empty}".Trim(), state.Sequence, now, result.NodeActivation);
+            this.pending = new PendingDispatch(
+                $"{choice.Kind} {choice.Tile?.ToString() ?? string.Empty}".Trim(), choice.Kind, state.Sequence,
+                this.reader.Tracker.CallWindowGeneration, state.Hand.Count, now, result.NodeActivation);
         if (result.Detail.StartsWith("RECOVERY", StringComparison.Ordinal))
         {
             this.RecoveriesThisSession++;
@@ -352,8 +397,8 @@ public sealed class AutoPlayer
         // while the match is still running is the expensive kind of wrong - it ends with a
         // duty forfeit - and "WinDeclared with the table still up" reads very differently
         // from "the game moved to its own score state".
-        var because = this.reader.Tracker.WinDeclared
-            ? $"a win we declared has not been settled yet (state {state.RawStateCode})"
+        var because = this.reader.Tracker.WinAnswerPending
+            ? $"a win we answered has not been settled yet (state {state.RawStateCode})"
             : $"the game is in state {state.RawStateCode}";
         if (because != this.lastRecapReason)
         {
@@ -485,7 +530,7 @@ public sealed class AutoPlayer
             $"hand=[{string.Join(" ", state.Hand)}] drawn={state.DrawnTile?.ToString() ?? "-"} melds=[{string.Join(" | ", state.OurMelds.Select(m => $"{m.Type} {string.Join(" ", m.Tiles)}"))}]",
             $"ourRiichi={state.OurRiichi} riichiIndex={state.Us.RiichiDiscardIndex} winds={state.RoundWind}/{state.SeatWind} dealer={state.DealerSeat}",
             $"callWindow: options=[{string.Join(",", state.CallOptions)}] tile={state.CallTile?.ToString() ?? "-"} from={state.CallFromSeat} shapes=[{string.Join(" | ", state.CallShapes.Select(m => string.Join(" ", m.Tiles)))}]",
-            $"tracker: callWindowActive={this.reader.Tracker.CallWindowActive} isClaim={this.reader.Tracker.CallIsClaim} winDeclared={this.reader.Tracker.WinDeclared} riichiDeclared={this.reader.Tracker.RiichiDeclared} roundEnded={this.reader.Tracker.RoundEnded}",
+            $"tracker: callWindowActive={this.reader.Tracker.CallWindowActive} isClaim={this.reader.Tracker.CallIsClaim} winAnswerPending={this.reader.Tracker.WinAnswerPending} riichiDeclared={this.reader.Tracker.RiichiDeclared} roundEnded={this.reader.Tracker.RoundEnded}",
             $"seats: {string.Join(" | ", state.Seats.Select(s => $"{s.Seat}: {s.Discards.Count}/{s.DiscardCount} discards riichi={s.Riichi} melds={s.Melds.Count} score={s.Score}"))}",
             $"notes: [{string.Join("; ", state.Notes)}]",
         };
@@ -539,6 +584,7 @@ public sealed class AutoPlayer
         this.pendingFingerprint = null;
         this.actedFingerprint = null;
         this.pending = null;
+        this.dispatchTimedOut = false;
         this.lastAckMs = null;
         // A style raised for one stubborn click must not outlive the match: there was no
         // assignment back to Activation anywhere, so one escalation held until the assembly

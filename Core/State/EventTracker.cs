@@ -5,9 +5,17 @@ namespace MahjongHater.Core.State;
 // (hand delta / atkType=74 payload), round boundaries (type-21/29/32 + struct discard
 // counts), winds, doras and session stats. Event meanings: docs/EMJ_ADDON_REFERENCE.md
 // "Event model". No Dalamud types; fed by EmjStateReader, replayable in tests.
+// An answer the actuator sent and the game has not yet acted on. Pure intent: it says what
+// we asked for and when, never what happened. Resolved by observing the game.
+public sealed record PendingAnswer(string Option, bool IsWin, long Generation, DateTime SentUtc);
+
 public sealed class EventTracker
 {
     private const int NoteRingCap = 400;
+
+    // How long an answer may sit unacknowledged before we stop waiting on it. Real answers are
+    // acted on within a frame or two; this only has to be long enough not to race the game.
+    private static readonly TimeSpan AnswerTimeout = TimeSpan.FromSeconds(3);
 
     private readonly Action<string>? logInfo;
     // Last NoteRingCap tracker lines (events, decisions, operator actions) so a stall
@@ -42,7 +50,6 @@ public sealed class EventTracker
     // and this is what gives the label edge an event to hang on - see the selfDeclare guard.
     private DateTime lastOwnDrawUtc = DateTime.MinValue;
 
-    private static readonly TimeSpan LabelWindowGrace = TimeSpan.FromMilliseconds(400);
 
     private DateTime lastTickUtc;
     private bool callWindowActive;
@@ -51,15 +58,13 @@ public sealed class EventTracker
     private List<Tile[]> callShapes = [];
     private Tile? callTile;
     private int callFromSeat = -1;
-    private string lastPromptSignature = string.Empty;
-    private bool callWindowFromLabels;
-    private DateTime labelWindowOpenedUtc;
 
     // Identity of the CURRENT window: bumped on every open (event, label edge or the
     // type-25 shape chooser). An operator captures it before dispatch and hands it back
     // with the answer, so a handler that synchronously opens the NEXT prompt inside
     // ReceiveEvent cannot have that new prompt cleared by the old one's answer.
     private long callWindowGeneration;
+    private PendingAnswer? pendingAnswer;
     // Options of the window the actuator already answered: the game echoes the selection
     // as a type-19 with the same labels (verified live 2026-09-19), which must not re-open it.
     private string? answeredSignature;
@@ -115,10 +120,6 @@ public sealed class EventTracker
 
     public bool CallWindowActive => this.callWindowActive;
 
-    // True when only the panel texts opened this window (no type-19/23/25 seen). Real
-    // prompts always come with the event, so an actuator should not answer such a window.
-    public bool CallWindowFromLabels => this.callWindowActive && this.callWindowFromLabels;
-
     // Monotonic id of the open window; 0 before the first one. See callWindowGeneration.
     public long CallWindowGeneration => this.callWindowGeneration;
 
@@ -145,17 +146,34 @@ public sealed class EventTracker
 
     public bool RoundEnded => this.roundEnded;
 
-    // True from an answered Tsumo/Ron until the win screen, so nothing is decided in between.
-    public bool WinDeclared { get; private set; }
+    // An answer we SENT and the game has not yet acted on. This is our own bookkeeping, not
+    // an observation: it exists so a dispatch in flight is not re-sent or decided over, and it
+    // is resolved only by watching the game, never by having sent it.
+    public PendingAnswer? Answer => this.pendingAnswer;
 
-    // The actuator answered the open window (list row clicked). Clears it so the next
-    // snapshot moves on (a riichi needs its discard right after), and ignores the echo.
+    // A Tsumo/Ron we answered and the game has not confirmed. Suppresses further decisions on
+    // a hand the game may already have scored. Previously called WinDeclared, which read as a
+    // statement about the game - and was then used to force the phase to RoundEnd, so sending
+    // a win MADE the plugin believe the round had ended whether or not the game agreed.
+    public bool WinAnswerPending => this.pendingAnswer is { IsWin: true };
+
+    // How long an answer has been waiting, for the log and for the stall ladder.
+    public TimeSpan? AnswerPendingFor(DateTime utc)
+        => this.pendingAnswer is { } a ? utc - a.SentUtc : null;
+
+    // The actuator SENT an answer for the open window. That is all this records.
     //
-    // `generation` is the window the answer was aimed at, captured BEFORE dispatch. A
-    // native handler may open the next prompt while ReceiveEvent is still running — a Chi
-    // row raises its type-25 shape chooser that way — and clearing "the current window"
-    // then would throw away the prompt that is actually on screen.
-    public void MarkCallAnswered(bool isWin, long generation)
+    // It used to also close the window and set the win flag, which made dispatch its own
+    // acknowledgement: the snapshot moved on the instant we sent, whether or not the game
+    // did anything, and a refused or ignored answer was indistinguishable from an accepted
+    // one. The window is the game's to close - it does so on the following draw, discard,
+    // meld or score event - and this only notes that we are waiting.
+    //
+    // `generation` is the window the answer was aimed at, captured BEFORE dispatch. A native
+    // handler may open the next prompt while ReceiveEvent is still running (a Chi row raises
+    // its type-25 shape chooser that way), so an answer aimed at a window that has already
+    // been replaced is dropped rather than attributed to the new one.
+    public void NoteAnswerSent(string option, bool isWin, long generation, DateTime? now = null)
     {
         if (!this.callWindowActive)
             return;
@@ -166,10 +184,33 @@ public sealed class EventTracker
         }
 
         this.answeredSignature = string.Join(",", this.callOptions);
-        this.WinDeclared |= isWin;
         this.answeredCallTile = this.callTile;
         this.answeredCallFromSeat = this.callFromSeat;
-        this.ClearCallWindow("answered by operator");
+        this.pendingAnswer = new PendingAnswer(option, isWin, generation, now ?? this.lastTickUtc);
+        this.Note($"answer \'{option}\' sent for window #{generation}; waiting for the game to act on it");
+    }
+
+    // An answer stops being pending only on an observation. The game closing the window it
+    // targeted is that observation; anything else leaves it pending until it times out.
+    private void ResolvePendingAnswer(long generation, string because)
+    {
+        if (this.pendingAnswer is not { } a || a.Generation != generation)
+            return;
+        var waited = (this.lastTickUtc - a.SentUtc).TotalMilliseconds;
+        this.Note($"answer \'{a.Option}\' for window #{generation} confirmed after {waited:F0} ms ({because})");
+        this.pendingAnswer = null;
+    }
+
+    // A dispatch the game never acted on must not wait forever, or one ignored answer parks
+    // the plugin for the rest of the hand. Timing out is reported as what it is - we do not
+    // know whether the game refused it, dropped it, or never saw it.
+    private void ExpirePendingAnswer(DateTime utc)
+    {
+        if (this.pendingAnswer is not { } a || utc - a.SentUtc <= AnswerTimeout)
+            return;
+        this.Note($"answer \'{a.Option}\' for window #{a.Generation} went UNACKNOWLEDGED for "
+                  + $"{(utc - a.SentUtc).TotalSeconds:F1} s - the game never acted on it");
+        this.pendingAnswer = null;
     }
 
     // The fu/han/limit/payment the game itself printed for the last win, or null when the
@@ -266,7 +307,6 @@ public sealed class EventTracker
                     this.lastOpponentDiscardUtc = utc;
                     // A fresh opponent discard can open a window whose labels are identical
                     // to the previous one (no edge) — let the next label scan re-evaluate.
-                    this.lastPromptSignature = string.Empty;
                 }
 
                 this.roundEnded = false;
@@ -404,7 +444,6 @@ public sealed class EventTracker
                 this.answeredSignature = null;
                 this.callWindowActive = true;
                 this.callWindowGeneration++;
-                this.callWindowFromLabels = false;
                 this.callOptions = ["Chi"];
                 this.callShapes = shapes;
                 this.CallIsClaim = true;
@@ -418,7 +457,7 @@ public sealed class EventTracker
                      // own yaku list with per-yaku han (docs/research/ADDON_PROTOCOL_2026_09_23.md)
             {
                 this.roundEnded = true;
-                this.WinDeclared = false;
+                this.pendingAnswer = null;
                 this.LastRecap = RoundRecapReader.Read(f);
                 if (this.LastRecap is { } recap)
                     this.Note($"recap: {recap.WinMethod} {recap.Score}; yaku [{string.Join(", ", recap.Yaku.Select(y => $"{y.Name} {y.Han}"))}]; "
@@ -438,7 +477,7 @@ public sealed class EventTracker
                      // [8]=1 on tsumo (all four confirmed against 23 win screens, 2026-09-22).
             {
                 this.roundEnded = true;
-                this.WinDeclared = false;
+                this.pendingAnswer = null;
                 this.LastWinScreen = ParseWinScreen(f);
                 // [1] is sometimes an empty string rather than a seat. Int() then yields 0,
                 // which reads as "seat 0 won" - us - and that is how a 3,000 point loss was
@@ -480,20 +519,23 @@ public sealed class EventTracker
 
     // ──────────────────────────────────────── TICK ──────────────────────────────────────────
 
-    // Per frame, after the struct read. promptLabels = visible call-panel button texts.
-    public void OnTick(DecodedStruct s, IReadOnlyList<string> promptLabels, DateTime? now = null)
+    // Per frame, after the struct read.
+    //
+    // This used to also open call windows from the call panel's button TEXT, on a rising edge
+    // of the visible labels ("label edge"). That path is gone. The panel keeps its texts after
+    // a prompt closes, so every window it produced was a guess that an event then had to
+    // confirm or expire - and it was never the thing that found a real prompt: all nine
+    // self-declares answered in the 2026-09-22 session came from the type-19/23 event, none
+    // from the labels. What it did produce was phantoms, 219 of them in one 2026-09-23
+    // session, each flipping the phase to SelfDeclare for ~40 ms. It also could not be acted
+    // on: a window it opened was marked label-only and then REFUSED by the actuator, so its
+    // single observable effect on the plugin was noise. Windows come from events now.
+    public void OnTick(DecodedStruct s, DateTime? now = null)
     {
         var utc = now ?? DateTime.UtcNow;
         this.lastTickUtc = utc;
+        this.ExpirePendingAnswer(utc);
 
-        // The panel keeps its texts after a prompt closes, so a label-edge window is a guess
-        // until an event confirms it. Every genuine window in the 2026-09-22 session had its
-        // type-19/23 within 5 ms (all nine self-declares that were answered came from the
-        // event, none from the labels), while the unconfirmed ones were residue of a window
-        // answered seconds earlier — including two that read a finished hand's "Ron" and one
-        // that offered riichi on a 1-shanten hand. Unconfirmed guesses therefore expire.
-        if (this.callWindowActive && this.callWindowFromLabels && utc - this.labelWindowOpenedUtc > LabelWindowGrace)
-            this.ClearCallWindow("label-only window unconfirmed by an event");
         var closed = s.ClosedTiles;
         var closedAll = s.HandInVisualOrder();
         var melds = this.seatMelds[0];
@@ -545,57 +587,12 @@ public sealed class EventTracker
         this.lastClosed = [.. closed];
         this.lastDrawnTile = s.DrawnTile;
 
-        // Prompt panel labels are only a fallback for a missed type-19/23: the panel, its
-        // list rows and their texts all persist unchanged after a window closes (verified
-        // live 2026-09-19, both open and closed trees identical), so they can never clear a
-        // window — closing belongs to the events (type-5 draw, type-8 discard, type-13/74
-        // meld, 29/32). A prompt also has no auto-pass timer here (one sat open 4 minutes),
-        // so no time-based clear either. The edge only opens when a fresh opponent discard
-        // names the tile; otherwise a stale "Pon" at cold start would become a phantom call.
-        var labels = promptLabels.Select(l => l.TrimEnd('!')).Where(l => l is "Chi" or "Pon" or "Kan" or "Ron" or "Riichi" or "Tsumo").ToList();
-
-        // The game never offers riichi to a player who has already declared it, so a
-        // label-edge "Riichi" while we are in riichi is the panel's leftover text and nothing
-        // else. It kept its rows visible under the round recap after a riichi on 2026-09-23
-        // and re-opened a phantom self-declare on EVERY turn advance - 219 label-edge windows
-        // in one session - each flipping the phase to SelfDeclare and adding LegalAction.Riichi
-        // for the ~40 ms before the next type-5 cleared it, which is long enough for the policy
-        // to be asked to declare a riichi we are already in.
-        //
-        // Only that one label is dropped: a riichi hand can still be offered Tsumo or a
-        // concealed Kan, and those labels are left to open a window as before.
-        if (labels.Count > 0 && (s.Seats[0].RiichiDiscardIndex is not null || this.riichiDeclared))
-            labels.RemoveAll(l => l == "Riichi");
-
-        var signature = string.Join(",", labels);
-        if (labels.Count == 0)
-        {
-            if (this.callWindowActive && this.callWindowFromLabels)
-                this.ClearCallWindow("prompt labels gone");
-        }
-        else if (signature != this.lastPromptSignature && !this.callWindowActive)
-        {
-            // A self-declare window only exists on our draw (14 - 3*melds closed); the panel
-            // keeps "Tsumo"/"Riichi" texts across the next deal (verified live 2026-09-19).
-            // A CLAIM label edge is anchored to a real event with a lifetime: an opponent
-            // discard within the last 8 seconds. That is why stale "Chi"/"Pon" text stops
-            // re-opening windows on its own once the discard ages out.
-            //
-            // A SELF-DECLARE edge used to be anchored to nothing but hand SHAPE - that we hold
-            // a full hand - which is true on every single draw, forever. So the panel's stale
-            // "Riichi" text re-opened a phantom every turn for the rest of the hand (219 in one
-            // session on 2026-09-23) while the chi text beside it stayed quiet. It now needs
-            // the same kind of anchor: our own draw, just as recent.
-            var offered = this.FreshOpponentDiscard(utc);
-            var freshOwnDraw = (utc - this.lastOwnDrawUtc).TotalSeconds < 8;
-            var selfDeclare = freshOwnDraw
-                              && labels.All(l => l is "Riichi" or "Tsumo" or "Kan")
-                              && this.prevClosedAll.Count == HandTracking.MaxClosedTiles(this.seatMelds[0].Count);
-            if (offered is not null || selfDeclare)
-                this.OpenCallWindow(labels, offered ?? this.callTile, "label edge");
-        }
-
-        this.lastPromptSignature = signature;
+        // Call windows are opened and closed by EVENTS alone (type-19/23/25 open them;
+        // type-5 draw, type-8 discard, type-13/74 meld and 29/32 close them). The panel and
+        // its list rows keep their texts unchanged after a window closes — verified live
+        // 2026-09-19, the open and closed trees are identical — so the texts can neither
+        // open nor close one. A prompt has no auto-pass timer either (one sat open for four
+        // minutes), so there is no time-based clear.
     }
 
     public void Reset()
@@ -625,12 +622,13 @@ public sealed class EventTracker
 
     // A declared win is final; a later discard or turn advance proves the click never
     // landed, and holding the phase at RoundEnd would freeze every decision after it.
+    // Play moving on IS the observation that our answer landed (or that it never will).
     private void DropWinDeclared(string why)
     {
-        if (!this.WinDeclared)
+        if (this.pendingAnswer is not { } a)
             return;
-        this.WinDeclared = false;
-        this.Note($"win declaration dropped: {why}");
+        this.pendingAnswer = null;
+        this.Note($"answer \'{a.Option}\' for window #{a.Generation} is no longer pending: {why}");
     }
 
     // ──────────────────────────────────────── INTERNALS ─────────────────────────────────────
@@ -697,9 +695,6 @@ public sealed class EventTracker
 
         this.callWindowActive = true;
         this.callWindowGeneration++;
-        this.callWindowFromLabels = source == "label edge";
-        if (this.callWindowFromLabels)
-            this.labelWindowOpenedUtc = this.lastTickUtc;
         this.callOptions = options;
         this.CallIsClaim = isClaim;
         this.callTile = isClaim ? candidate : null;
@@ -742,16 +737,18 @@ public sealed class EventTracker
     private void ClearCallWindow(string why)
     {
         if (this.callWindowActive)
-            this.Note($"call window cleared: {why}");
-        if (why != "answered by operator")
         {
-            this.answeredSignature = null;
-            this.answeredCallTile = null;
-            this.answeredCallFromSeat = -1;
+            this.Note($"call window cleared: {why}");
+            // The game closing the window we answered is the acknowledgement. Anything that
+            // closes a window we did NOT answer leaves the pending answer alone, to time out.
+            this.ResolvePendingAnswer(this.callWindowGeneration, why);
         }
 
+        this.answeredSignature = null;
+        this.answeredCallTile = null;
+        this.answeredCallFromSeat = -1;
+
         this.callWindowActive = false;
-        this.callWindowFromLabels = false;
         this.callOptions = [];
         this.callShapes = [];
         this.CallIsClaim = false;
@@ -773,7 +770,7 @@ public sealed class EventTracker
 
     private void ResetRound(string why)
     {
-        this.WinDeclared = false;
+        this.pendingAnswer = null;
         this.answeredSignature = null;
         this.answeredCallTile = null;
         this.answeredCallFromSeat = -1;
@@ -799,7 +796,6 @@ public sealed class EventTracker
         this.lastOpponentDiscardSeat = -1;
         this.riichiDeclared = false;
         this.ClearCallWindow(why);
-        this.lastPromptSignature = string.Empty;
         this.Log($"[Round] reset: {why}");
     }
 

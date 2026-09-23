@@ -63,11 +63,6 @@ public sealed class Configuration : IPluginConfiguration
     // been matched against a manual-input trace yet.
     public bool HoverEscalation { get; set; }
 
-    // NativeListSelection: commit a call row with AtkComponentList.SelectItem(index, true)
-    // instead of the list's registered ListItemClick. The registered event is what the
-    // 2026-07/09 sessions verified; this is the comparison route, not an adopted one.
-    public bool NativeListSelection { get; set; }
-
     public uint RequeueDuty { get; set; } = 766;   // Novice Mahjong (Quick Ranked Match)
 
     public static Configuration Load(IDalamudPluginInterface pluginInterface)

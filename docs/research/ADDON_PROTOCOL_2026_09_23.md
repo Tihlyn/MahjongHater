@@ -1,10 +1,52 @@
 # The Emj input protocol, measured — 2026-09-23 (stage 1)
 
-A full NPC match played manually with auto play off, recorded by Cartographer. Every line
-below is read off the game's own traffic; nothing is inferred from behaviour. Raw capture in
+A full NPC match played manually with auto play off, recorded by Cartographer. Raw capture in
 `artifacts/capture/` (`cb_*.json`, `timeline.json`, `lay_*.json`, `snap_*.json`).
 
 10 hands, 5,424 timeline entries, 282 callbacks, 277 distinct signatures.
+
+> ## Correction — 2026-09-23, after the interaction audit
+>
+> **The counts and one finding in the original version of this note were wrong.** They were
+> produced by pairing each callback with events in the same *millisecond*. The capture carries
+> a frame number, and pairing by frame changes the result:
+>
+> | head | published | actual (frame-paired) |
+> |---|---|---|
+> | 7 discard | 96 paired + **4 with no event** | **100 paired, 0 unpaired** |
+> | 11 call row | 22 | 28 in `timeline.json`, 30 fires in `cb_Emj.json` with repeats |
+> | 14 recap next | 9 | 10 |
+> | 15 pointer | 1 paired / 117 not | 3 paired / 115 not |
+> | 10 | *(absent)* | 1 fire, unidentified |
+>
+> The four "event-free" discards each have a `ButtonClick param=slot+15 node=9` between 23 and
+> 51 µs away, on the far side of a millisecond boundary:
+>
+> ```
+> cb 05:36:04.8419588 [7,13]  ev 05:36:04.8420099 param=28  -51us   841 -> 842
+> cb 05:36:20.2579840 [7,13]  ev 05:36:20.2580311 param=28  -47us   257 -> 258
+> cb 05:37:19.8059571 [7, 3]  ev 05:37:19.8060069 param=18  -49us   805 -> 806
+> cb 05:37:56.5879954 [7, 9]  ev 05:37:56.5880189 param=24  -23us   587 -> 588
+> ```
+>
+> **Consequence.** The sentence *"the game itself fires `[7, slot]` with no event at all, which
+> is the clearest proof that the callback is the command"* has no evidence behind it. Every
+> input command in this capture arrived with an event. The capture establishes each command's
+> **payload**; it establishes nothing about whether replaying the callback alone is sufficient.
+>
+> Bare `[7, slot]` *is* sufficient — v2.3.0 discards through it for whole matches — but that is
+> known from **live play**, and this note is not where it was learned. The player-observed
+> "after riichi the game discards for you" entry below is likewise unsupported by the capture;
+> those four discards look exactly like the other 96.
+>
+> Methodology this note should have followed, and now does: separate **source facts** (bytes in
+> the capture) from **correlations** (what accompanied what) from **tested postconditions**
+> (what an action actually did). "Observed during a successful human action" is a starting
+> point, not proof that replaying that one operation reproduces the action.
+>
+> Verified independently against the same artifacts (SHA-256 `timeline.json`
+> `db480ca9…745ef5b0`, `cb_Emj.json` `1711e8ab…dfe7f9160c`), audit in
+> `DOMAN_UI_AUDIT_2026_09_23.md`.
 
 ## The command channel
 
@@ -14,26 +56,35 @@ which are **inputs** (a user action produced them) and which are **notifications
 fired them itself) — the distinction that matters, because replaying a notification as a
 command is how the AutoMahjongSolver got stuck in state 32.
 
-| head | args | meaning | paired event | fires |
-|---|---|---|---|---|
-| **7** | slot 0–13 | **discard** | `ButtonClick param=slot+15 node=9` | 96 |
-| **7** | slot | *game discarding for you* (riichi auto-tsumogiri) | **none** | 4 |
-| **11** | row index | **call-window row** (Pon/Chi/Kan/Ron/Riichi/Pass) | `ListItemClick param=0 node=3` | 22 |
-| **12** | shape index | **pick a chi shape** (state 25) | `ButtonClick param=9+i node=5+i` | 1 |
-| **14** | — | **round-recap "Next"** | `ButtonClick param=7 node=97` | 9 |
-| **15** | tile icon id | **pointer is on this tile** | **none** (117 of 118) | 118 |
-| 9 | — | hand start | `TimelineActiveLabelChanged param=33 node=128` | 10 |
-| 17 | — | hand end → score screen | `TimelineActiveLabelChanged param=36 node=54` | 10 |
-| −1 / −2 / 0 | — | close / dismiss | mixed | 5 |
+Counts are frame-paired (see the correction above). "unpaired" means no addon-bound event in
+the same frame.
+
+| head | args | meaning | paired event | fires | unpaired |
+|---|---|---|---|---|---|
+| **7** | slot 0–13 | **discard** | `ButtonClick param=slot+15 node=9` | 100 | 0 |
+| **11** | row index | **call-window row** (Pon/Chi/Kan/Ron/Riichi/Pass) | `ListItemClick param=0 node=3` | 28 | 0 |
+| **12** | shape index | **pick a chi shape** (state 25) | `ButtonClick param=9+i node=5+i` | 1 | — |
+| **14** | — | **round-recap "Next"** | `ButtonClick param=7 node=97` | 10 | 0 |
+| **15** | tile icon id | **pointer is on this tile** | — | 118 | **115** |
+| 9 | — | hand start | `TimelineActiveLabelChanged param=33 node=128` | 10 | 0 |
+| 17 | — | hand end → score screen | `TimelineActiveLabelChanged param=36 node=54` | 10 | 0 |
+| 10 | — | **unidentified** | — | 1 | — |
+| −2 | — | close | — | 1 | — |
 
 **Inputs we may replay:** `7`, `11`, `14`. **Do not replay:** `9`, `17`, `−1`, `−2` — the
-addon fires those itself on state transitions.
+addon fires those itself on state transitions — and `10`, which we simply cannot account for.
 
-`15` is special: it fires **without any AtkEvent**, 117 times out of 118. The addon polls the
-cursor and reports the tile under it; it is not a response to a `MouseOver` we could
-synthesise. A real discard is therefore `[15, icon]` **then** `[7, slot]`, while the plugin
-produces only `[7, slot]` via a synthetic ButtonClick, leaving the addon's idea of the
-pointed-at tile untouched. That asymmetry is the strongest lead on the stuck-hover bug.
+Every one of those input commands arrived **with** an event. The capture therefore fixes each
+command's payload and says nothing about a bare callback's sufficiency; that question is
+answered by live play, not here.
+
+`15` is the exception that is genuinely unpaired: 115 of 118 fires have no event behind them.
+The addon polls the cursor and reports the tile under it, so it is not a response to a
+`MouseOver` we could synthesise. A real discard is `[15, icon]` **then** `[7, slot]`; ours
+sends only `[7, slot]`, leaving the addon's idea of the pointed-at tile untouched. That
+asymmetry is real. Whether it has anything to do with the stuck-hover bug is **unknown** — the
+earlier claim that it was "the strongest lead" rested on the retracted finding above plus a
+single correlated incident.
 
 ## End of match — our implementation was fiction
 
@@ -67,14 +118,15 @@ pointed-at tile untouched. That asymmetry is the strongest lead on the stuck-hov
 | the end of a match raises a `SelectYesno` | it does not; the only one is at match *start* |
 | state code `12` = riichi (`resources/layouts/emj.json`) | state 12 refreshes **140+ times per match**, every few seconds — it is a routine refresh, not riichi |
 | node 97 is the recap Next (by trial and error) | **confirmed**, and it emits callback `[14]` |
-| discards need a synthetic `ButtonClick` | `[7, slot]` is the command; the game itself fires it with no event at all during riichi |
+| discards need a synthetic `ButtonClick` | ~~the game fires it with no event during riichi~~ **retracted, see the correction above.** `[7, slot]` alone does work, established in live play |
 
 ## Player-observed behaviour worth recording
 
-- **After riichi the game discards for you.** Four `[7, slot]` callbacks fired with no
-  `ButtonClick` at 05:36:04, 05:36:20, 05:37:19, 05:37:56 — a riichi hand in that window.
-  Normal game behaviour, not a plugin action, and it explains "tiles were played without my
-  input while auto play was off".
+- ~~**After riichi the game discards for you.** Four `[7, slot]` callbacks fired with no
+  `ButtonClick`…~~ **Retracted.** All four carry a `ButtonClick param=slot+15 node=9` in the
+  same frame, identical to the other 96. The player's report that "tiles were played without my
+  input while auto play was off" is still a real observation, but *this capture does not
+  contain its signature* and nothing here explains it. Left open.
 - **Clicking the drawn tile while Tsumo is offered discards it and forfeits the win**, leaving
   you furiten (observed once; the other tsumo was declared from the call list). The win must
   be answered through the call list (`[11, row]`), never by touching the hand. This is direct
@@ -141,6 +193,22 @@ against the live chooser instead of assumed, along with the callback each produc
 
 Still unmeasured: the callback the **cancel** button emits (no cancel was performed).
 
-## Gap
+## Gaps
 
-None outstanding from the original action list.
+Rewritten after the audit. "None outstanding" was only true of the original action list, which
+was itself built on the mistaken reading above.
+
+- **Bare-callback sufficiency per command.** Known for `[7, slot]` from live play. **Unknown**
+  for `[11, row]`, `[12, shape]` and `[14]` — they work in live play too, but no experiment has
+  distinguished "the callback did it" from "the callback plus whatever else we do did it".
+- **Chi shapes.** One sample, index 0, one chooser. No other index, and **no cancel** — the
+  cancel callback is still unmeasured, so `ChiCancelParam = 8` is a layout path, not a
+  measured command.
+- **`head 10`.** One fire, `updateState=true`, 06:11:03.229. Unidentified.
+- **`EmjRankResult`.** Never loaded in this NPC capture. Reusing `ResultCloseNodeId = 26` for
+  it is an assumption, not a measurement.
+- **The stuck table.** No capture yet with same-frame pointer coordinates, expected tile
+  bounds, collision state, modal ownership and ImGui capture. Until then the `[15]` theory is
+  one of several, and the `/mhater focus` output is evidence rather than a diagnosis.
+- **Client language / addon variants.** One `Emj` layout on one English client. Row resolution
+  and wind parsing both go through English strings.

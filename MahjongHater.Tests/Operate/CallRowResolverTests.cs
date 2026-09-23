@@ -8,8 +8,9 @@ namespace MahjongHater.Tests.Operate;
 // answer goes to, so these are the rules that keep the plugin from clicking a leftover.
 public class CallRowResolverTests
 {
-    private static ListRow Row(int index, string label, bool renderer = true, bool enabled = true)
-        => new(index, label, renderer, enabled);
+    private static ListRow Row(int index, string label, bool renderer = true, bool enabled = true,
+        bool disputed = false)
+        => new(index, label, renderer, enabled, disputed);
 
     private static readonly IReadOnlyList<ListRow> ChiThenPass = [Row(0, "Chi"), Row(1, "Pass")];
 
@@ -69,6 +70,31 @@ public class CallRowResolverTests
         var choice = CallRowResolver.Resolve([Row(0, "Chi", enabled: false), Row(1, "Pass")], listVisible: true, "Chi", ["Chi"]);
         Assert.False(choice.Found);
         Assert.Contains("disabled", choice.Why);
+    }
+
+    // The list's GetItemDisabledState and the row button's IsEnabled used to be combined with
+    // a permissive OR: either one saying "usable" was enough. That was defended by the idea
+    // that the game would ignore a click on a row it considered disabled - which stopped
+    // being true when we started sending the addon's [11, row] command instead of clicking,
+    // because there is then no widget in the path to ignore anything. Neither field has been
+    // established as authoritative, so disagreement is refused rather than resolved by guess.
+    [Fact]
+    public void Refuses_a_row_the_list_and_its_button_disagree_about()
+    {
+        var choice = CallRowResolver.Resolve(
+            [Row(0, "Chi", disputed: true), Row(1, "Pass")], listVisible: true, "Chi", ["Chi"]);
+        Assert.False(choice.Found);
+        Assert.Contains("disputed", choice.Why);
+    }
+
+    // A disputed row must not poison the rest of the list: Pass is still answerable.
+    [Fact]
+    public void A_disputed_row_does_not_block_a_clean_one()
+    {
+        var choice = CallRowResolver.Resolve(
+            [Row(0, "Chi", disputed: true), Row(1, "Pass")], listVisible: true, "Pass", ["Chi"]);
+        Assert.True(choice.Found);
+        Assert.Equal(1, choice.Index);
     }
 
     // The old path fell back to the renderer's own index and finally to ROW 0, which turned

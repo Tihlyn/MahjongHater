@@ -41,25 +41,16 @@ internal static unsafe class EmjOperator
         HoverCycle,   // a matched MouseOver+MouseOut pair first, both while the node is still valid
     }
 
-    public enum ListRoute
-    {
-        RegisteredEvent,  // the list's registered ListItemClick with a list-shaped payload (verified live)
-        NativeSelect,     // AtkComponentList.SelectItem(index, dispatchEvent: true) — the comparison route
-    }
-
     private const int MaxChainDepth = 32;
+
+    // A call list offers Pon/Chi/Kan/Riichi/Ron/Tsumo plus Pass. Anything claiming more rows
+    // than this is a length field we should not be trusting, not a list we should be reading.
+    private const int MaxListRows = 32;
 
     // Session-sticky, framework thread only. AutoPlayer may raise Style to HoverCycle when
     // an ACTIVATION it really dispatched went unacknowledged and the user opted in; it is
     // reset to Activation at every match boundary so a one-off never outlives the match.
     public static ClickStyle Style { get; set; } = ClickStyle.Activation;
-
-    // Which mechanism commits a list row. The registered event is what the 2026-07/09
-    // sessions verified; NativeSelect is the FFXIVClientStructs binding other plugins use
-    // and is offered for comparison, not adopted (ADDON_INTERACTION_PLAN §3).
-    public static ListRoute Route { get; set; } = ListRoute.RegisteredEvent;
-
-    private delegate void NodeVisitor(AtkResNode* node, nint ownerComponent);
 
     // What one attempt did. Sent=false means NOTHING reached the game and Detail names the
     // guard that refused; Sent=true means an event was delivered — acceptance is a separate
@@ -69,13 +60,6 @@ internal static unsafe class EmjOperator
         public static Dispatch Reject(string why) => new(false, why);
 
         public static Dispatch Fired(string what) => new(true, what);
-    }
-
-    // A text match that may be clicked: the component that owns the text, already checked
-    // for a fully visible ancestor chain. Node == 0 means no usable target, and Why says so.
-    public readonly record struct LabelTarget(nint Node, string Matched, string Why)
-    {
-        public bool Found => this.Node != 0;
     }
 
     // ────────────────────────────────────────── TARGETS ─────────────────────────────────────────
@@ -121,17 +105,73 @@ internal static unsafe class EmjOperator
     // authoritative label, renderer presence and enabled state per index. Pooled off-screen
     // renderers report IsVisible, so visual ranking is NOT usable (live 2026-07-05: it
     // produced row 6 of a 2-row list); only the item table is trustworthy.
-    public static List<ListRow> Rows(AtkResNode* listNode)
+    //
+    // `why` is empty when the rows are trustworthy, and otherwise says what stopped us. An
+    // empty list WITH a reason is not the same thing as a list that has no rows, and callers
+    // must not report it as one.
+    //
+    // The type check is the point of this rewrite. It used to accept any node with
+    // Type >= 1000 and cast its component to AtkComponentList, but that number only says
+    // "some component". A different component at the same path, or a layout change, and the
+    // ItemRendererList pointer, both length fields and every Label read below become
+    // unrelated memory dereferenced on the framework thread. GetComponentType() is the
+    // component own statement about what it is, so that is what we ask it.
+    public static List<ListRow> Rows(AtkResNode* listNode, out string why)
     {
+        why = string.Empty;
         var rows = new List<ListRow>(8);
-        if (listNode == null || (ushort)listNode->Type < 1000)
+        if (listNode == null)
+        {
+            why = "no list node";
             return rows;
-        var comp = (AtkComponentList*)((AtkComponentNode*)listNode)->Component;
-        if (comp == null || comp->ItemRendererList == null)
-            return rows;
+        }
 
-        var count = Math.Min(comp->ListLength, comp->AllocatedItemRendererListLength);
-        for (var i = 0; i < count && i < 32; i++)
+        if ((ushort)listNode->Type < 1000)
+        {
+            why = $"node {listNode->NodeId} is not a component node (type {(ushort)listNode->Type})";
+            return rows;
+        }
+
+        var component = ((AtkComponentNode*)listNode)->Component;
+        if (component == null)
+        {
+            why = $"node {listNode->NodeId} has no component";
+            return rows;
+        }
+
+        var kind = component->GetComponentType();
+        if (kind != ComponentType.List)
+        {
+            why = $"node {listNode->NodeId} is a {kind} component, not a List - refusing to read it as one";
+            return rows;
+        }
+
+        var comp = (AtkComponentList*)component;
+        if (comp->ItemRendererList == null)
+        {
+            why = $"list {listNode->NodeId} has no item-renderer table";
+            return rows;
+        }
+
+        // Both lengths must agree that an index exists before it is dereferenced: ListLength
+        // is what the list says it holds, AllocatedItemRendererListLength is what it actually
+        // allocated, and an absurd value in either is a reason to read nothing at all.
+        int declared = comp->ListLength;
+        int allocated = comp->AllocatedItemRendererListLength;
+        if (declared < 0 || allocated < 0)
+        {
+            why = $"list {listNode->NodeId} reports a negative length (declared {declared}, allocated {allocated})";
+            return rows;
+        }
+
+        var count = Math.Min(declared, allocated);
+        if (count > MaxListRows)
+        {
+            why = $"list {listNode->NodeId} reports {count} rows, beyond the {MaxListRows} a call list can have";
+            return rows;
+        }
+
+        for (var i = 0; i < count; i++)
         {
             string label;
             try
@@ -145,10 +185,21 @@ internal static unsafe class EmjOperator
 
             var renderer = comp->ItemRendererList[i].AtkComponentListItemRenderer;
             // The Emj decision list never fills the item-table labels (verified live
-            // 2026-09-19); the row text lives in the renderer's text child instead.
+            // 2026-09-19); the row text lives in the renderer text child instead.
             if (label.Trim().Length == 0 && renderer != null)
                 label = FirstText(&renderer->AtkComponentButton.AtkComponentBase);
-            rows.Add(new ListRow(i, label.Trim(), renderer != null, renderer != null && IsRowEnabled(comp, renderer, i)));
+
+            if (renderer == null)
+            {
+                rows.Add(new ListRow(i, label.Trim(), false, false));
+                continue;
+            }
+
+            var listSaysDisabled = comp->GetItemDisabledState(i);
+            var buttonSaysEnabled = renderer->AtkComponentButton.IsEnabled;
+            rows.Add(new ListRow(i, label.Trim(), true,
+                Enabled: !listSaysDisabled && buttonSaysEnabled,
+                EnabledDisputed: listSaysDisabled == buttonSaysEnabled));
         }
 
         return rows;
@@ -166,62 +217,6 @@ internal static unsafe class EmjOperator
         }
 
         return null;
-    }
-
-    // A visible, unambiguous BUTTON carrying this text (recap Next, "End match", the chi
-    // chooser). Text inside a list is refused on purpose: list rows commit through the
-    // list's own route, where the item table — not pooled panel text — names the row.
-    public static LabelTarget FindButtonByLabel(AtkUnitBase* addon, string label)
-    {
-        // Collected, not first-wins: the pool holds copies of panel text, so "how many
-        // controls carry this label right now" is part of deciding whether any may be
-        // clicked at all. Two different owners is an ambiguity, and ambiguity is a rejection.
-        var exact = new Dictionary<nint, string>();
-        var prefix = new Dictionary<nint, string>();
-        Walk(addon, (node, ownerComponent) =>
-        {
-            var txt = node->GetAsAtkTextNode();
-            if (txt == null || !node->IsVisible())
-                return;
-            var text = EmjScanner.ReadTextNode(txt);
-            if (text.Length == 0)
-                return;
-            var owner = ownerComponent != 0 ? ownerComponent : (nint)node;
-            if (text.Equals(label, StringComparison.OrdinalIgnoreCase))
-                exact.TryAdd(owner, text);
-            else if (text.StartsWith(label, StringComparison.OrdinalIgnoreCase))
-                prefix.TryAdd(owner, text);
-        });
-
-        var isExact = exact.Count > 0;
-        var found = isExact ? exact : prefix;
-        if (found.Count == 0)
-            return new LabelTarget(0, string.Empty, $"no visible text matching '{label}'");
-
-        // Only a target whose whole ancestor chain is on screen is a control.
-        var live = found.Where(pair => IsChainVisible(addon, (AtkResNode*)pair.Key, out _)).ToList();
-        if (live.Count == 0)
-        {
-            IsChainVisible(addon, (AtkResNode*)found.First().Key, out var hidden);
-            return new LabelTarget(0, found.First().Value, $"'{label}' is not on screen ({hidden})");
-        }
-
-        // A caption and its button can both carry the text. Narrowing to the ones the game
-        // would actually react to usually leaves exactly one; if it does not, refuse rather
-        // than pick — this is the label path, and guessing here is what it exists to stop.
-        if (live.Count > 1)
-        {
-            var clickable = live.Where(pair => HasAddonBoundActivation(addon, (AtkResNode*)pair.Key)).ToList();
-            if (clickable.Count != 1)
-                return new LabelTarget(0, label, $"'{label}' matches {live.Count} visible controls, {clickable.Count} of them clickable — ambiguous");
-            live = clickable;
-        }
-
-        var target = (AtkResNode*)live[0].Key;
-        var matched = live[0].Value;
-        if (FindOwningList(target) != null)
-            return new LabelTarget(0, matched, $"'{matched}' is a list row, not a button — answer it through the call list");
-        return new LabelTarget((nint)target, matched, isExact ? "exact match" : "prefix match");
     }
 
     // ──────────────────────────────────────── DISPATCH ──────────────────────────────────────────
@@ -282,9 +277,18 @@ internal static unsafe class EmjOperator
         return Dispatch.Fired($"node {nodeId}: {string.Join("; ", fired)}");
     }
 
-    // Commits a list row by index. Every precondition is re-checked against the LIVE item
-    // table immediately before dispatch: the list is a component, on screen with all its
-    // ancestors, the index is inside the table, and the row owns a renderer. The payload is
+    // Commits a list row by index.
+    //
+    // NOT the call-window path. Call windows are answered with the addon's own [11, row]
+    // command through EmjActuator.AnswerCall; this is only reachable from ClickNode, i.e.
+    // from the debug click-by-path command and from result/queue addons. A configuration
+    // toggle used to advertise a choice between this and a native SelectItem for call rows,
+    // which was a dead control: AnswerCall has not gone through here since the protocol was
+    // measured, so the "comparison" compared nothing. Removed 2026-09-23.
+    //
+    // Every precondition is re-checked against the LIVE item table immediately before
+    // dispatch: the list is a component, on screen with all its ancestors, the index is
+    // inside the table, and the row owns a renderer. The payload is
     // zeroed and list-shaped, because AtkEventData is a union whose MouseData.PosX/PosY
     // overlap ListItemData.ListItemRenderer at offset 0 — a mouse payload leaves screen
     // coordinates in a POINTER field.
@@ -309,12 +313,6 @@ internal static unsafe class EmjOperator
             return Dispatch.Reject($"{what}: row {index} has no item renderer");
         if (renderer->AtkComponentButton.AtkComponentBase.OwnerNode == null)
             return Dispatch.Reject($"{what}: row {index}'s renderer has no owner node");
-
-        if (Route == ListRoute.NativeSelect)
-        {
-            comp->SelectItem(index, true);
-            return Dispatch.Fired($"{what}: native SelectItem({index}, dispatch) on list {listId}");
-        }
 
         var chain = FindChainEvent(listNode, AtkEventType.ListItemClick);
         if (chain == null)
@@ -350,11 +348,12 @@ internal static unsafe class EmjOperator
     // is to fire this. A notification head is refused outright - the addon emits those about
     // itself, and replaying one as input is how another plugin parked the addon in state 32.
     //
-    // The pointer handshake [15, icon] that precedes a HUMAN discard is deliberately NOT sent.
-    // The game itself fires [7, slot] with no handshake at all when a riichi hand auto-discards
-    // its draw, so the bare command is complete and game-sanctioned; and sending the handshake
-    // would reproduce exactly the hover-then-discard-the-hovered-tile sequence that preceded
-    // the table going unclickable on 2026-09-23.
+    // The pointer handshake [15, icon] that precedes a HUMAN discard is deliberately NOT sent,
+    // because discards land without it across whole live matches. The two reasons previously
+    // given here were both wrong: the "game fires [7, slot] with no handshake during riichi"
+    // observation does not exist (all 100 discards in the capture are paired; the four
+    // exceptions were a millisecond-rounding artifact), and "it would reproduce the sequence
+    // that preceded the table going unclickable" is a single correlation, not a cause.
     public static Dispatch FireCommand(AtkUnitBase* addon, string what, params int[] values)
     {
         if (addon == null)
@@ -375,10 +374,11 @@ internal static unsafe class EmjOperator
     // (docs/research/ADDON_PROTOCOL_2026_09_23.md).
     //
     // `updateState` is FireCallback's third argument, and the game passes TRUE for every
-    // callback a UI action produces — all 96 discards, all 22 call rows and all 9 recap
-    // advances in the capture carried it, while only the close/dismiss notifications carried
-    // false. It defaults to true here for that reason; the Duty Finder's Commence path keeps
-    // passing false because that is what it was verified with.
+    // callback a UI action produces — all 100 discards, all 30 call rows and all 10 recap
+    // advances in the capture carried it, while only the [-2] close carried false. It defaults
+    // to true here for that reason; the Duty Finder's Commence path keeps passing false because
+    // that is what it was verified with. Upstream names this argument `close`, so treat the
+    // measured value per operation as the authority rather than either name.
     public static string FireCallback(AtkUnitBase* addon, bool updateState, params int[] values)
     {
         if (addon == null)
@@ -448,9 +448,6 @@ internal static unsafe class EmjOperator
     // call list, and a wrong "disabled" would refuse every call — while a wrong "enabled"
     // only produces a dispatch the game ignores, which the caller now notices and reports,
     // because dispatch and acceptance are separate outcomes.
-    private static bool IsRowEnabled(AtkComponentList* list, AtkComponentListItemRenderer* renderer, int index)
-        => !list->GetItemDisabledState(index) || renderer->AtkComponentButton.IsEnabled;
-
     private static string FirstText(AtkComponentBase* comp)
     {
         var list = comp->UldManager.NodeList;
@@ -576,33 +573,4 @@ internal static unsafe class EmjOperator
         return null;
     }
 
-    // Flat walk over the addon's node pool plus every nested component pool.
-    private static void Walk(AtkUnitBase* addon, NodeVisitor visit)
-        => WalkManager(&addon->UldManager, 0, 0, visit);
-
-    private static void WalkManager(AtkUldManager* mgr, nint ownerComponent, int depth, NodeVisitor visit)
-    {
-        if (mgr == null || depth > 4)
-            return;
-        var list = mgr->NodeList;
-        var count = mgr->NodeListCount;
-        if (list == null)
-            return;
-
-        for (var i = 0; i < count; i++)
-        {
-            var n = list[i];
-            if (n == null)
-                continue;
-
-            visit(n, ownerComponent);
-
-            if ((ushort)n->Type >= 1000)
-            {
-                var comp = ((AtkComponentNode*)n)->Component;
-                if (comp != null)
-                    WalkManager(&comp->UldManager, (nint)n, depth + 1, visit);
-            }
-        }
-    }
 }

@@ -53,8 +53,8 @@ public sealed unsafe class EmjActuator
     // "End-of-round recap"). Hidden on the final results panel, where only End match remains.
     private const uint RecapNextNodeId = 97;
 
-    // "End match" may ask for confirmation - but ONLY a dialog we raised ourselves, within
-    // seconds of our own click, is ours to answer. See ConfirmYesNo.
+    // We never answer this. It is watched only so that automation stops while a modal
+    // dialog owns input, and so the prompt text lands in the log. See BlockedByDialog.
     private const string YesNoAddon = "SelectYesno";
 
     // The addons the game puts up once the match is genuinely over, measured on 2026-09-23:
@@ -62,12 +62,9 @@ public sealed unsafe class EmjActuator
     // one of them, never by a label in Emj.
     private static readonly string[] MatchOverAddons = [EmjProtocol.ResultAddon, EmjProtocol.RankResultAddon];
 
-    // How long after our own "End match" click a confirmation dialog can still be ours.
-    private static readonly TimeSpan ConfirmationWindow = TimeSpan.FromSeconds(6);
-
     private readonly IGameGui gameGui;
     private readonly EmjStateReader reader;
-    private DateTime endMatchClickedUtc = DateTime.MinValue;
+    private string lastDialogPrompt = string.Empty;
 
     public EmjActuator(IGameGui gameGui, EmjStateReader reader)
     {
@@ -110,16 +107,16 @@ public sealed unsafe class EmjActuator
         var tracker = this.reader.Tracker;
         if (!tracker.CallWindowActive)
             return OperateResult.Fail($"'{option}': no call window is open");
-        if (tracker.CallWindowFromLabels)
-            return OperateResult.Fail($"'{option}': the window is label-only — no type-19/23 confirmed it");
-
         var path = this.reader.Layout.Nodes.CallList;
         var listNode = EmjScanner.FindNodeByPath(addon, path);
         if (listNode == null)
             return OperateResult.Fail($"'{option}': the call list ({path}) is not in the tree");
 
         var visible = EmjOperator.IsChainVisible(addon, listNode, out var hidden);
-        var rows = EmjOperator.Rows(listNode);
+        var rows = EmjOperator.Rows(listNode, out var unreadable);
+        if (unreadable.Length > 0)
+            return OperateResult.Fail($"'{option}': the call list could not be read — {unreadable}");
+
         var choice = CallRowResolver.Resolve(rows, visible, option, tracker.CallOptions);
         if (!choice.Found)
             return OperateResult.Fail($"'{option}': {choice.Why}{(visible ? string.Empty : $" [{hidden}]")}");
@@ -134,7 +131,7 @@ public sealed unsafe class EmjActuator
             return OperateResult.Fail($"'{option}': {dispatch.Detail}");
 
         tracker.Note($"op {dispatch.Detail} (window #{generation}, {choice.Why})");
-        tracker.MarkCallAnswered(isWin, generation);
+        tracker.NoteAnswerSent(option, isWin, generation);
         return OperateResult.Sent($"{dispatch.Detail} — {choice.Why}, window #{generation}");
     }
 
@@ -192,29 +189,6 @@ public sealed unsafe class EmjActuator
         return OperateResult.Sent(detail);
     }
 
-    // Clicks a BUTTON whose visible text matches. Its only caller used to be the "End match"
-    // label search, which the 2026-09-23 capture replaced with the real control
-    // (EmjTotalResult node 26), so nothing calls this today. Kept because it is the one
-    // guarded way to reach a control we have not yet identified structurally; anything using
-    // it is by definition still a guess and should be measured instead.
-    public OperateResult ClickButton(string label)
-    {
-        var addon = this.GetAddon();
-        if (addon == null)
-            return OperateResult.Fail("Emj addon not open");
-
-        var target = EmjOperator.FindButtonByLabel(addon, label);
-        if (!target.Found)
-            return OperateResult.Fail($"'{label}': {target.Why}");
-
-        var dispatch = EmjOperator.ClickNode(addon, (AtkResNode*)target.Node);
-        if (!dispatch.Sent)
-            return OperateResult.Fail($"'{label}' → \"{target.Matched}\": {dispatch.Detail}");
-        var detail = $"button \"{label}\" → \"{target.Matched}\" ({target.Why}): {dispatch.Detail}";
-        this.reader.Tracker.Note($"op {detail}");
-        return OperateResult.Sent(detail, nodeActivation: true);
-    }
-
     // Full click on a node addressed by a Cartographer-style path ("1/46/52/7").
     public OperateResult ClickPath(string? path)
     {
@@ -234,17 +208,16 @@ public sealed unsafe class EmjActuator
         return OperateResult.Sent(detail, nodeActivation: true);
     }
 
-    // Recap screen: "Next" while a round recap is up, "End match" on the final results,
-    // and Yes on the confirmation the latter may raise.
+    // Recap screen: "Next" while a round recap is up, and closing the result addon once the
+    // match is genuinely over.
     public OperateResult AdvanceRecap()
     {
         var addon = this.GetAddon();
         if (addon == null)
             return OperateResult.Fail("Emj addon not open");
 
-        var yes = this.ConfirmYesNo();
-        if (yes is not null)
-            return yes;
+        if (this.BlockedByDialog() is { } blocked)
+            return blocked;
 
         // Node 97 still decides WHETHER a recap is up - the game removes its addon-bound
         // activation otherwise - but the advance itself is the command the button emits, [14].
@@ -291,18 +264,22 @@ public sealed unsafe class EmjActuator
         else
         {
             var visible = EmjOperator.IsChainVisible(addon, listNode, out var hidden);
-            lines.Add($"call list chainVisible={visible}{(visible ? string.Empty : $" ({hidden})")} rows: ["
-                      + string.Join(", ", EmjOperator.Rows(listNode).Select(r => $"{r.Index}:{r.Label}{(r.HasRenderer ? string.Empty : " noRenderer")}{(r.Enabled ? string.Empty : " disabled")}"))
-                      + "]");
+            var listRows = EmjOperator.Rows(listNode, out var unreadable);
+            lines.Add($"call list chainVisible={visible}{(visible ? string.Empty : $" ({hidden})")} "
+                      + (unreadable.Length > 0
+                          ? $"UNREADABLE: {unreadable}"
+                          : "rows: [" + string.Join(", ", listRows.Select(r =>
+                              $"{r.Index}:{r.Label}{(r.HasRenderer ? string.Empty : " noRenderer")}"
+                              + $"{(r.EnabledDisputed ? " enabledDisputed" : r.Enabled ? string.Empty : " disabled")}")) + "]"));
         }
 
         var tracker = this.reader.Tracker;
-        lines.Add($"window: active={tracker.CallWindowActive} generation=#{tracker.CallWindowGeneration} labelOnly={tracker.CallWindowFromLabels} options=[{string.Join(", ", tracker.CallOptions)}]");
+        lines.Add($"window: active={tracker.CallWindowActive} generation=#{tracker.CallWindowGeneration} options=[{string.Join(", ", tracker.CallOptions)}]");
         var next = EmjScanner.FindNodeById(addon, RecapNextNodeId);
         lines.Add($"recap Next visible={next != null && EmjOperator.IsChainVisible(addon, next, out _)}");
         var chooser = this.reader.Layout.Nodes.ChiShapeButtons.Length > 0 ? EmjScanner.FindNodeByPath(addon, this.reader.Layout.Nodes.ChiShapeButtons[0]) : null;
         lines.Add($"chi chooser visible={chooser != null && EmjOperator.IsChainVisible(addon, chooser, out _)}");
-        lines.Add($"click style={EmjOperator.Style} list route={EmjOperator.Route}");
+        lines.Add($"click style={EmjOperator.Style}");
         return lines;
     }
 
@@ -326,45 +303,47 @@ public sealed unsafe class EmjActuator
         return lines;
     }
 
-    // Answers a Yes/No dialog ONLY when we raised it ourselves by clicking End match
-    // moments ago. Null when none is up.
+    // Refuses to act while a Yes/No dialog is on screen, and never answers one.
     //
-    // This used to click Yes on ANY visible SelectYesno while the plugin believed a match
-    // was ending, with no check of what was being asked. A Yes/No that appears for any other
-    // reason - the game's own inactivity warning, a party or trade request, a mid-match
-    // "leave the duty?" - would have been confirmed for the player, and confirming the wrong
-    // one forfeits the duty and takes the penalty. A dialog nobody here asked for is left
-    // alone and its exact wording is logged, which is also how we learn the real prompt text.
-    private OperateResult? ConfirmYesNo()
+    // This used to click Yes, gated on nothing but a six-second timer started by our own
+    // result-screen close. That guard could only ever fire on the WRONG dialog: the
+    // 2026-09-23 capture shows no SelectYesno at the end of a match at all (the only one in
+    // the whole match was the NPC table's start-of-match challenge prompt), so any dialog
+    // arriving inside that window is by definition not the one the code was written for. A
+    // duty-leave confirmation landing there would have been accepted, and that costs a
+    // penalty. It read the prompt text and then ignored it.
+    //
+    // A dialog nobody here asked for is left alone. Its wording is logged once, which is
+    // also how we learn the real prompt text if an end-of-match confirmation ever does
+    // appear; when one is measured, it can be answered by identity - prompt, owner and a
+    // pending transaction - rather than by elapsed time.
+    private OperateResult? BlockedByDialog()
     {
         var ptr = this.gameGui.GetAddonByName(YesNoAddon);
         if (ptr.IsNull)
+        {
+            this.lastDialogPrompt = string.Empty;
             return null;
+        }
+
         var addon = (AtkUnitBase*)ptr.Address;
         if (!addon->IsVisible || addon->RootNode == null)
+        {
+            this.lastDialogPrompt = string.Empty;
             return null;
+        }
 
         var dialog = (AddonSelectYesno*)addon;
         var prompt = dialog->PromptText != null ? EmjScanner.ReadTextNode(dialog->PromptText) : string.Empty;
-        var since = DateTime.UtcNow - this.endMatchClickedUtc;
-        if (since > ConfirmationWindow)
+        var why = $"a SelectYesno is open (\"{prompt}\") — the plugin does not answer dialogs, "
+                  + "so it is waiting for the player";
+        if (prompt != this.lastDialogPrompt)
         {
-            var why = $"SelectYesno \"{prompt}\" was not raised by us (no End match click in the last "
-                      + $"{ConfirmationWindow.TotalSeconds:F0} s) — leaving it for the player";
-            this.reader.Tracker.Note($"op refused: {why}");
-            return OperateResult.Fail(why);
+            this.lastDialogPrompt = prompt;
+            this.reader.Tracker.Note($"op paused: {why}");
         }
 
-        var button = dialog->YesButton;
-        if (button == null || button->OwnerNode == null || !button->IsEnabled)
-            return OperateResult.Fail($"SelectYesno \"{prompt}\" has no clickable Yes");
-        var dispatch = EmjOperator.ClickNode(addon, &button->OwnerNode->AtkResNode);
-        if (!dispatch.Sent)
-            return OperateResult.Fail($"SelectYesno \"{prompt}\": {dispatch.Detail}");
-        this.endMatchClickedUtc = DateTime.MinValue;   // one confirmation per End match click
-        var detail = $"SelectYesno \"{prompt}\" → Yes ({since.TotalSeconds:F1} s after our End match): {dispatch.Detail}";
-        this.reader.Tracker.Note($"op {detail}");
-        return OperateResult.Sent(detail, nodeActivation: true);
+        return OperateResult.Fail(why);
     }
 
     // What the recap surface actually IS, read rather than assumed. The controls here were
@@ -447,7 +426,6 @@ public sealed unsafe class EmjActuator
         var dispatch = EmjOperator.ClickNode(result, close);
         if (!dispatch.Sent)
             return OperateResult.Fail($"{name} close: {dispatch.Detail}");
-        this.endMatchClickedUtc = DateTime.UtcNow;
         var detail = $"{name} close (node {EmjProtocol.ResultCloseNodeId}): {dispatch.Detail}";
         this.reader.Tracker.Note($"op {detail}");
         return OperateResult.Sent(detail, nodeActivation: true);
@@ -498,7 +476,7 @@ public sealed unsafe class EmjActuator
         if (!dispatch.Sent)
             return OperateResult.Fail(dispatch.Detail);
         this.reader.Tracker.Note($"op {dispatch.Detail}");
-        this.reader.Tracker.MarkCallAnswered(isWin: false, generation);
+        this.reader.Tracker.NoteAnswerSent("chi shape", isWin: false, generation);
         return OperateResult.Sent($"{dispatch.Detail} (window #{generation})");
     }
 
@@ -517,7 +495,7 @@ public sealed unsafe class EmjActuator
         var result = this.ClickPath(path);
         if (!result.Ok)
             return OperateResult.Fail($"{what}: {result.Detail}");
-        this.reader.Tracker.MarkCallAnswered(isWin: false, generation);
+        this.reader.Tracker.NoteAnswerSent(what, isWin: false, generation);
         return OperateResult.Sent($"{what} (window #{generation}): {result.Detail}", nodeActivation: true);
     }
 

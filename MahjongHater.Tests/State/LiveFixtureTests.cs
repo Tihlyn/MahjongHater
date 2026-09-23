@@ -62,7 +62,7 @@ public class LiveFixtureTests
     {
         var d = StructFixture.DecodeFixture("emj_struct_round1_turn1", out _);
         var t = new EventTracker();
-        t.OnTick(d, [], T0);
+        t.OnTick(d, T0);
         var s = new SnapshotBuilder().Build(d, t, StructFixture.Layout, RulesetOptions.Default);
         Assert.Equal(GamePhase.OurTurn, s.Phase);
         Assert.Equal(14, s.Hand.Count);
@@ -76,9 +76,12 @@ public class LiveFixtureTests
         var d = StructFixture.DecodeFixture("emj_struct_round1_call_prompt_pon", out var sidecar);
         var t = new EventTracker();
         var b = new SnapshotBuilder();
-        t.OnTick(d, [], T0);
+        t.OnTick(d, T0);
         t.OnRefresh(AtkFrame.OfInts(8, 3, StructFixture.IconOf(Tile.Parse("5s"), 76041)), T0); // kamicha discards 5s
-        t.OnTick(d, sidecar.GetProperty("callOptions").EnumerateArray().Select(e => e.GetString()!).ToList(), T0);
+        // The prompt is the game's type-23, not the panel's leftover text.
+        t.OnRefresh(AtkFrame.OfInts([23, 2, 5, 0, .. new int[18]])   // 5 = Pon
+            .WithString(6, "Pon!").WithString(7, "Pon").WithString(8, "Pass"), T0);
+        t.OnTick(d, T0);
         var s = b.Build(d, t, StructFixture.Layout, RulesetOptions.Default);
 
         Assert.Equal(GamePhase.CallPrompt, s.Phase);
@@ -113,7 +116,7 @@ public class LiveFixtureTests
             foreach (var tile in list)
                 t.OnRefresh(AtkFrame.OfInts(8, seat, StructFixture.IconOf(tile, 76041)), T0);
 
-        t.OnTick(d, [], T0);
+        t.OnTick(d, T0);
         var s = new SnapshotBuilder().Build(d, t, StructFixture.Layout, RulesetOptions.Default);
 
         Assert.Equal(GamePhase.OthersTurn, s.Phase);
@@ -137,7 +140,7 @@ public class LiveFixtureTests
     {
         var d = StructFixture.DecodeFixture("emj_struct_round6_melds", out _);
         var t = new EventTracker();
-        t.OnTick(d, [], T0);
+        t.OnTick(d, T0);
         var s = new SnapshotBuilder().Build(d, t, StructFixture.Layout, RulesetOptions.Default);
         var toimen = s.Seats[2];
         Assert.Equal(2, toimen.Melds.Count);
@@ -152,7 +155,7 @@ public class LiveFixtureTests
     {
         var d = StructFixture.DecodeFixture("emj_struct_round1_win_screen", out _);
         var t = new EventTracker();
-        t.OnTick(d, [], T0);
+        t.OnTick(d, T0);
         var s = new SnapshotBuilder().Build(d, t, StructFixture.Layout, RulesetOptions.Default);
         Assert.Equal(GamePhase.RoundEnd, s.Phase);
         Assert.False(s.Can(LegalAction.Discard));
@@ -164,12 +167,12 @@ public class LiveFixtureTests
     {
         var mid = StructFixture.DecodeFixture("emj_struct_round6_melds", out _);
         var t = new EventTracker();
-        t.OnTick(mid, [], T0);
+        t.OnTick(mid, T0);
         t.OnRefresh(AtkFrame.OfInts(8, 1, 76041), T0);
         Assert.NotEmpty(t.SeatDiscardsOf(1));
 
         var deal = StructFixture.DecodeFixture("emj_struct_deal_fresh", out _);
-        t.OnTick(deal, [], T0);
+        t.OnTick(deal, T0);
         Assert.Empty(t.SeatDiscardsOf(1));
         var s = new SnapshotBuilder().Build(deal, t, StructFixture.Layout, RulesetOptions.Default);
         Assert.Equal(GamePhase.Dealing, s.Phase);

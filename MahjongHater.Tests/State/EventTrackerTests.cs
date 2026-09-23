@@ -69,7 +69,7 @@ public class EventTrackerTests
     public void Type5_tracks_the_wall_and_ends_a_call_window()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), [], T0);
+        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), T0);
         t.OnRefresh(Discard(1, "2z"), T0);
         t.OnRefresh(CallWindow("Pon"), T0);
         Assert.True(t.CallWindowActive);
@@ -89,7 +89,7 @@ public class EventTrackerTests
     public void Options_come_from_the_codes_not_the_button_text()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("123m456p789s11z22z", null), [], T0);
+        t.OnTick(StructFixture.Decoded("123m456p789s11z22z", null), T0);
         t.OnRefresh(Discard(1, "2z"), T0);
         // [1]=3 rows (Ron, Pon, Pass), codes Ron + Pon, with the banner in [6].
         t.OnRefresh(CallCodes(3, 2, 5).WithString(6, "Ron!").WithString(7, "Ron").WithString(8, "Pon"), T0);
@@ -102,7 +102,7 @@ public class EventTrackerTests
     public void An_integer_payload_that_is_not_an_option_frame_is_ignored()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("123m456p789s11z22z", null), [], T0);
+        t.OnTick(StructFixture.Decoded("123m456p789s11z22z", null), T0);
         t.OnRefresh(Discard(1, "2z"), T0);
         t.OnRefresh(CallCodes(2, 2, 0).WithString(7, "Ron").WithString(8, "Pass"), T0);
         Assert.Equal(["Ron"], t.CallOptions);
@@ -113,35 +113,35 @@ public class EventTrackerTests
         Assert.Equal(["Ron"], t.CallOptions);
     }
 
-    // The panel keeps its texts after a prompt closes: a window only the labels opened is a
-    // guess, and every genuine one in the 2026-09-22 session had its event within 5 ms.
+    // The call panel's button TEXT used to open windows on its own, on a rising edge of the
+    // visible labels. It no longer does anything at all. The panel keeps its texts after a
+    // prompt closes, so the edge was a guess that an event then had to confirm or expire; it
+    // never found a prompt the events missed (all nine self-declares answered in the
+    // 2026-09-22 session came from the type-19/23), and a window it opened was refused by the
+    // actuator anyway. What it did produce was 219 phantoms in one 2026-09-23 session.
     [Fact]
-    public void A_label_only_window_expires_unless_an_event_confirms_it()
+    public void Panel_text_alone_never_opens_a_window()
     {
         var t = new EventTracker();
         var hand = StructFixture.Decoded("123m456p789s1122z", "3z");
         t.OnRefresh(OurDraw(), T0);
-        t.OnTick(hand, ["Riichi", "Pass"], T0);
-        Assert.True(t.CallWindowActive);
-        Assert.True(t.CallWindowFromLabels);
+        t.OnTick(hand, T0);
+        Assert.False(t.CallWindowActive);
 
-        t.OnTick(hand, ["Riichi", "Pass"], T0.AddMilliseconds(200));   // still within the grace
-        Assert.True(t.CallWindowActive);
-
-        t.OnTick(hand, ["Riichi", "Pass"], T0.AddSeconds(1));          // no event ever arrived
+        t.OnTick(hand, T0.AddSeconds(1));
         Assert.False(t.CallWindowActive);
     }
 
+    // The event is the whole story now: it opens the window and nothing textual expires it.
     [Fact]
-    public void An_event_confirms_a_label_window_and_it_stays()
+    public void An_event_opens_the_window_and_it_stays()
     {
         var t = new EventTracker();
         var hand = StructFixture.Decoded("123m456p789s1122z", "3z");
-        t.OnTick(hand, ["Riichi", "Pass"], T0);
         t.OnRefresh(CallWindow("Riichi"), T0);
-        Assert.False(t.CallWindowFromLabels);
+        Assert.True(t.CallWindowActive);
 
-        t.OnTick(hand, ["Riichi", "Pass"], T0.AddSeconds(30));
+        t.OnTick(hand, T0.AddSeconds(30));
         Assert.True(t.CallWindowActive);
         Assert.Equal(["Riichi"], t.CallOptions);
     }
@@ -151,7 +151,7 @@ public class EventTrackerTests
     {
         var t = new EventTracker();
         // No souzu at all: an 8s can be neither pon'd, chi'd nor ron'd.
-        t.OnTick(StructFixture.Decoded("333m456m89m567p7p7z", null), [], T0);
+        t.OnTick(StructFixture.Decoded("333m456m89m567p7p7z", null), T0);
         t.OnRefresh(Discard(2, "8s"), T0);
         t.OnRefresh(CallBanner("Chi"), T0);
         Assert.False(t.CallWindowActive);
@@ -165,7 +165,7 @@ public class EventTrackerTests
     public void A_corroborated_row_list_opens_even_when_our_read_cannot_explain_it()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("333m456m89m567p7p7z", null), [], T0);
+        t.OnTick(StructFixture.Decoded("333m456m89m567p7p7z", null), T0);
         t.OnRefresh(Discard(2, "8s"), T0);
         t.OnRefresh(CallWindow("Pon"), T0);
         Assert.True(t.CallWindowActive);
@@ -177,7 +177,7 @@ public class EventTrackerTests
     public void Chi_window_from_a_non_kamicha_seat_is_not_ours()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("45m111p222p333s7z9s", null), [], T0);
+        t.OnTick(StructFixture.Decoded("45m111p222p333s7z9s", null), T0);
         t.OnRefresh(Discard(1, "3m"), T0); // shimocha: chi impossible
         t.OnRefresh(CallBanner("Chi"), T0);
         Assert.False(t.CallWindowActive);
@@ -193,45 +193,37 @@ public class EventTrackerTests
     {
         var t = new EventTracker();
         t.OnRefresh(OurDraw(), T0);
-        t.OnTick(StructFixture.Decoded("123m456p789s1122z", "3z"), ["Riichi", "Pass"], T0);
+        t.OnTick(StructFixture.Decoded("123m456p789s1122z", "3z"), T0);
+        t.OnRefresh(CallWindow("Riichi"), T0);
         Assert.True(t.CallWindowActive);
         Assert.False(t.CallIsClaim);
         Assert.Null(t.CallTile);
         Assert.Equal(["Riichi"], t.CallOptions);
     }
 
+    // A claim window is the event's to open and the events' to close: play continuing
+    // (type-5 draw) ends it, and a later discard opens a fresh one.
     [Fact]
-    public void Label_edges_open_and_label_disappearance_closes()
+    public void A_claim_window_opens_on_its_event_and_closes_when_play_moves_on()
     {
         var t = new EventTracker();
         var hand = StructFixture.Decoded("22z34567m11p3459s", null);
-        t.OnTick(hand, [], T0);
+        t.OnTick(hand, T0);
         t.OnRefresh(Discard(3, "2z"), T0);
-        t.OnTick(hand, ["Pon", "Pass", "Time remaining: 9"], T0);
+        t.OnRefresh(CallWindow("Pon"), T0);
         Assert.True(t.CallWindowActive);
         Assert.Equal(Tile.Parse("2z"), t.CallTile);
 
-        t.OnTick(hand, ["Pon", "Pass"], T0);   // same labels: no re-trigger, still active
+        t.OnTick(hand, T0);   // ticks alone neither re-open nor close it
         Assert.True(t.CallWindowActive);
-        t.OnTick(hand, [], T0);
-        Assert.False(t.CallWindowActive);
-    }
 
-    [Fact]
-    public void Stuck_labels_reactivate_on_the_next_opponent_discard()
-    {
-        var t = new EventTracker();
-        var hand = StructFixture.Decoded("22z34567m11p3459s", null);
-        t.OnTick(hand, [], T0);
-        t.OnRefresh(Discard(3, "2z"), T0);
-        t.OnTick(hand, ["Pon", "Pass"], T0);
-        t.OnRefresh(AtkFrame.OfInts(5, 40, 0, 76041), T0);   // window resolved by play continuing
+        t.OnRefresh(AtkFrame.OfInts(5, 40, 0, 76041), T0);   // play continues
         Assert.False(t.CallWindowActive);
-        t.OnTick(hand, ["Pon", "Pass"], T0);                  // stale panel: no edge
+        t.OnTick(hand, T0);                                   // stale panel text: still nothing
         Assert.False(t.CallWindowActive);
 
         t.OnRefresh(Discard(1, "2z"), T0);                    // a fresh discard we can pon
-        t.OnTick(hand, ["Pon", "Pass"], T0);
+        t.OnRefresh(CallWindow("Pon"), T0);
         Assert.True(t.CallWindowActive);
     }
 
@@ -239,11 +231,11 @@ public class EventTrackerTests
     public void Hand_delta_after_a_pon_reconstructs_the_meld()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), [], T0);
+        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), T0);
         t.OnRefresh(Discard(1, "2z"), T0);
         t.OnRefresh(CallWindow("Pon"), T0);
         // Post-call: 11 closed, claimed tile parked in slot 13.
-        t.OnTick(StructFixture.PostPon, [], T0);
+        t.OnTick(StructFixture.PostPon, T0);
         var meld = Assert.Single(t.Melds);
         Assert.Equal(MeldType.Pon, meld.Type);
         Assert.False(t.CallWindowActive);
@@ -253,15 +245,15 @@ public class EventTrackerTests
     public void AtkType74_does_not_book_and_hand_delta_books_once()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), [], T0);
+        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), T0);
         t.OnRefresh(Discard(1, "2z"), T0);
         var payload = AtkFrame.OfInts([74, 0, 0, 0, 0, 0, 0, 0, 76069, 76069, 76069, 0]);
         t.OnReceiveEvent(74, payload);
         t.OnReceiveEvent(74, payload);
         Assert.Empty(t.Melds);
-        t.OnTick(StructFixture.PostPon, [], T0);   // hand delta 13→11 books the pon
+        t.OnTick(StructFixture.PostPon, T0);   // hand delta 13→11 books the pon
         Assert.Single(t.Melds);
-        t.OnTick(StructFixture.PostPon, [], T0);
+        t.OnTick(StructFixture.PostPon, T0);
         Assert.Single(t.Melds);
     }
 
@@ -269,11 +261,11 @@ public class EventTrackerTests
     public void Stale_melds_clear_when_the_struct_shows_a_full_closed_hand()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), [], T0);
+        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), T0);
         t.OnRefresh(Discard(1, "2z"), T0);
-        t.OnTick(StructFixture.PostPon, [], T0);
+        t.OnTick(StructFixture.PostPon, T0);
         Assert.Single(t.Melds);
-        t.OnTick(StructFixture.Decoded("123m456p789s1122z", null), [], T0); // next deal, 13 closed
+        t.OnTick(StructFixture.Decoded("123m456p789s1122z", null), T0); // next deal, 13 closed
         Assert.Empty(t.Melds);
     }
 
@@ -281,10 +273,10 @@ public class EventTrackerTests
     public void Discard_counts_dropping_to_zero_resets_the_round()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null, [3, 3, 2, 2]), [], T0);
+        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), T0);
         t.OnRefresh(Discard(1, "9p"), T0);
         Assert.NotEmpty(t.SeatDiscardsOf(1));
-        t.OnTick(StructFixture.Decoded("123m456p789s1122z", null, [0, 0, 0, 0]), [], T0);
+        t.OnTick(StructFixture.Decoded("123m456p789s1122z", null), T0);
         Assert.Empty(t.SeatDiscardsOf(1));
         Assert.Equal(70, t.EventWallRemaining);
     }
@@ -317,64 +309,97 @@ public class EventTrackerTests
 
     // Live 2026-09-19: after the actuator picks a row, the game echoes a type-19 with the
     // same labels; a riichi then waits for our discard, so the window must be gone.
+    // Sending an answer does not close the window - the GAME closes it, on the discard or
+    // draw that follows. The tracker used to clear it the instant the actuator dispatched,
+    // which made a dispatch its own acknowledgement: an answer the game ignored looked
+    // exactly like one it accepted, and the plugin moved on either way.
     [Fact]
-    public void Answered_window_clears_and_ignores_its_echo()
+    public void An_answer_stays_pending_until_the_game_acts_on_it()
     {
         var t = new EventTracker();
         var hand = StructFixture.Decoded("34m788m111p789p99s", "5m");
-        t.OnTick(hand, [], T0);
+        t.OnTick(hand, T0);
         t.OnRefresh(CallWindow("Riichi"), T0);
         Assert.True(t.CallWindowActive);
         Assert.Equal(["Riichi"], t.CallOptions); // banner deduped
 
-        t.MarkCallAnswered(isWin: false, t.CallWindowGeneration);
-        Assert.False(t.CallWindowActive);
-        t.OnRefresh(CallWindow("Riichi"), T0); // echo
-        Assert.False(t.CallWindowActive);
-        t.OnTick(hand, ["Riichi", "Pass"], T0);                     // panel texts persist
-        Assert.False(t.CallWindowActive);
+        var answered = t.CallWindowGeneration;
+        t.NoteAnswerSent("Riichi", isWin: false, answered, T0);
+        Assert.NotNull(t.Answer);
+        Assert.True(t.CallWindowActive);          // still the game's window
 
-        t.OnRefresh(Discard(0, "8m"), T0);                          // our riichi discard
-        t.OnRefresh(Discard(1, "1p"), T0);                          // we hold three 1p
-        t.OnRefresh(CallWindow("Pon"), T0);         // a genuinely new window
+        // The echo must not open a NEW generation: the pending answer is tied to one, and a
+        // bumped generation would orphan it into a spurious timeout.
+        t.OnRefresh(CallWindow("Riichi"), T0);
+        Assert.Equal(answered, t.CallWindowGeneration);
+        Assert.Equal(["Riichi"], t.CallOptions);
+        Assert.NotNull(t.Answer);
+
+        t.OnRefresh(Discard(0, "8m"), T0);        // our riichi discard: the game acted
+        Assert.False(t.CallWindowActive);
+        Assert.Null(t.Answer);
+        Assert.Contains(t.RecentNotes(20), n => n.Contains("confirmed after"));
+
+        t.OnRefresh(Discard(1, "1p"), T0);        // we hold three 1p
+        t.OnRefresh(CallWindow("Pon"), T0);       // a genuinely new window
         Assert.True(t.CallWindowActive);
+    }
+
+    // An answer the game never acts on must not wait forever, or one ignored dispatch parks
+    // the plugin for the rest of the hand.
+    [Fact]
+    public void An_unacknowledged_answer_times_out_and_says_so()
+    {
+        var t = new EventTracker();
+        var hand = StructFixture.Decoded("34m788m111p789p99s", "5m");
+        t.OnTick(hand, T0);
+        t.OnRefresh(CallWindow("Riichi"), T0);
+        t.NoteAnswerSent("Riichi", isWin: false, t.CallWindowGeneration, T0);
+        Assert.NotNull(t.Answer);
+
+        t.OnTick(hand, T0.AddSeconds(1));
+        Assert.NotNull(t.Answer);                 // still inside the window
+
+        t.OnTick(hand, T0.AddSeconds(5));
+        Assert.Null(t.Answer);
+        Assert.Contains(t.RecentNotes(20), n => n.Contains("UNACKNOWLEDGED"));
     }
 
     [Fact]
     public void Answered_win_holds_until_the_win_screen()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("44m77m3p55p556s6699s", "3p"), [], T0);
+        t.OnTick(StructFixture.Decoded("44m77m3p55p556s6699s", "3p"), T0);
         t.OnRefresh(CallWindow("Tsumo", "Riichi"), T0);
-        t.MarkCallAnswered(isWin: true, t.CallWindowGeneration);
-        Assert.True(t.WinDeclared);
+        t.NoteAnswerSent("Tsumo", isWin: true, t.CallWindowGeneration, T0);
+        Assert.True(t.WinAnswerPending);
         t.OnRefresh(AtkFrame.OfInts([32, .. new int[21]]).WithString(2, "East 2 East Wind"), T0);
-        Assert.False(t.WinDeclared);
+        Assert.False(t.WinAnswerPending);
     }
 
-    // A win click that never landed is proven by play continuing: the next discard or
-    // turn advance must release the RoundEnd hold instead of freezing every decision.
+    // A win answer that never landed is proven by play continuing: the next discard or turn
+    // advance must release the hold instead of freezing every decision after it.
     [Fact]
     public void Answered_win_is_dropped_when_play_continues()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("44m77m3p55p556s6699s", "3p"), [], T0);
+        t.OnTick(StructFixture.Decoded("44m77m3p55p556s6699s", "3p"), T0);
         t.OnRefresh(CallWindow("Tsumo", "Riichi"), T0);
-        t.MarkCallAnswered(isWin: true, t.CallWindowGeneration);
-        Assert.True(t.WinDeclared);
+        t.NoteAnswerSent("Tsumo", isWin: true, t.CallWindowGeneration, T0);
+        Assert.True(t.WinAnswerPending);
         t.OnRefresh(Discard(2, "9m"), T0);
-        Assert.False(t.WinDeclared);
+        Assert.False(t.WinAnswerPending);
     }
 
     [Fact]
     public void Answered_chi_keeps_the_claimed_tile_for_the_shape_chooser()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("233m2345p0p23456s", null), [], T0);
+        t.OnTick(StructFixture.Decoded("233m2345p0p23456s", null), T0);
         t.OnRefresh(Discard(3, "4s"), T0);
         t.OnRefresh(CallWindow("Chi"), T0);
-        t.MarkCallAnswered(isWin: false, t.CallWindowGeneration);                          // "Chi" row clicked
-        Assert.False(t.CallWindowActive);
+        t.NoteAnswerSent("Chi", isWin: false, t.CallWindowGeneration, T0);                 // "Chi" row clicked
+        Assert.True(t.CallWindowActive);                                                   // the game has not moved yet
 
         int I(string tile) => StructFixture.IconOf(Tile.Parse(tile), 76041);
         t.OnRefresh(AtkFrame.OfInts(25, 6, 0, 3,
@@ -395,7 +420,7 @@ public class EventTrackerTests
     public void Answer_aimed_at_a_superseded_window_leaves_the_new_one_open()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("233m2345p0p23456s", null), [], T0);
+        t.OnTick(StructFixture.Decoded("233m2345p0p23456s", null), T0);
         t.OnRefresh(Discard(3, "4s"), T0);
         t.OnRefresh(CallWindow("Chi"), T0);
         var answered = t.CallWindowGeneration;           // captured before the click, as the actuator does
@@ -407,25 +432,25 @@ public class EventTrackerTests
             I("4s"), I("5s"), I("6s"), 76041).WithString(2, "Chi"), T0);
         Assert.NotEqual(answered, t.CallWindowGeneration);
 
-        t.MarkCallAnswered(isWin: false, answered);
+        t.NoteAnswerSent("Chi", isWin: false, answered, T0);
         Assert.True(t.CallWindowActive);
         Assert.Equal(3, t.CallShapes.Count);
         Assert.Contains(t.RecentNotes(20), n => n.Contains($"answer for call window #{answered} ignored"));
     }
 
-    // A win answered against the wrong window must not set WinDeclared either: that holds
-    // the phase at RoundEnd and would freeze every decision after it.
+    // A win answered against the wrong window must not be recorded as pending either: that
+    // suppresses every decision after it.
     [Fact]
     public void A_superseded_win_answer_does_not_declare_the_win()
     {
         var t = new EventTracker();
         var hand = StructFixture.Decoded("44m77m3p55p556s6699s", "3p");
-        t.OnTick(hand, [], T0);
+        t.OnTick(hand, T0);
         t.OnRefresh(CallWindow("Tsumo", "Riichi"), T0);
         var stale = t.CallWindowGeneration - 1;
 
-        t.MarkCallAnswered(isWin: true, stale);
-        Assert.False(t.WinDeclared);
+        t.NoteAnswerSent("Tsumo", isWin: true, stale, T0);
+        Assert.False(t.WinAnswerPending);
         Assert.True(t.CallWindowActive);
     }
 
@@ -433,50 +458,19 @@ public class EventTrackerTests
     public void Each_window_gets_its_own_generation()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), [], T0);
+        t.OnTick(StructFixture.Decoded("22z34567m11p3459s", null), T0);
         t.OnRefresh(Discard(1, "2z"), T0);
         t.OnRefresh(CallWindow("Pon"), T0);
         var first = t.CallWindowGeneration;
 
-        t.MarkCallAnswered(isWin: false, first);
+        t.NoteAnswerSent("Pon", isWin: false, first, T0);
         t.OnRefresh(Discard(2, "2z"), T0);
         t.OnRefresh(CallWindow("Pon"), T0);
         Assert.True(t.CallWindowActive);
         Assert.True(t.CallWindowGeneration > first);
     }
 
-    // After a riichi the panel keeps its "Riichi"/"Pass" rows visible - on 2026-09-23 they sat
-    // under the round recap - and the label edge re-opened a phantom self-declare on every turn
-    // advance, 219 times in one session. The game never offers riichi to a player already in
-    // it, so that label is dropped while we are in riichi.
-    [Fact]
-    public void A_riichi_label_is_ignored_once_we_are_already_in_riichi()
-    {
-        var t = new EventTracker();
-        var seated = StructFixture.Decoded("34m788m111p789p99s", "5m", riichiIndices: [3, 255, 255, 255]);
-        t.OnTick(seated, ["Riichi", "Pass"], T0);
-        Assert.False(t.CallWindowActive);
 
-        // ...and the same panel text on a hand that is NOT in riichi still opens one.
-        var free = new EventTracker();
-        free.OnRefresh(OurDraw(), T0);
-        free.OnTick(StructFixture.Decoded("34m788m111p789p99s", "5m"), ["Riichi", "Pass"], T0);
-        Assert.True(free.CallWindowActive);
-        Assert.Equal(["Riichi"], free.CallOptions);
-    }
-
-    // A riichi hand can still be offered Tsumo or a concealed Kan, so only the impossible
-    // label is dropped - the rest still opens a window.
-    [Fact]
-    public void A_riichi_hand_can_still_be_offered_tsumo()
-    {
-        var t = new EventTracker();
-        var seated = StructFixture.Decoded("44m77m3p55p556s6699s", "3p", riichiIndices: [3, 255, 255, 255]);
-        t.OnRefresh(OurDraw(), T0);
-        t.OnTick(seated, ["Riichi", "Tsumo", "Pass"], T0);
-        Assert.True(t.CallWindowActive);
-        Assert.Equal(["Tsumo"], t.CallOptions);
-    }
 
     // [1] of a win screen is sometimes an empty string rather than a seat index. Int() then
     // yields 0, which reads as "seat 0 won" - us - and on 2026-09-23 a 3,000 point loss was
@@ -494,22 +488,6 @@ public class EventTrackerTests
         Assert.Equal(2, named.LastWinnerSeat);
     }
 
-    // The asymmetry this fixes: a claim edge dies on its own because the discard it hangs on
-    // ages out after 8 s, while a self-declare edge used to hang on hand SHAPE, which is true
-    // on every draw forever. Stale panel text with no recent draw behind it now opens nothing.
-    [Fact]
-    public void A_self_declare_label_needs_a_recent_draw_the_way_a_claim_needs_a_discard()
-    {
-        var stale = new EventTracker();
-        stale.OnRefresh(OurDraw(), T0);
-        stale.OnTick(StructFixture.Decoded("123m456p789s1122z", "3z"), ["Tsumo", "Pass"], T0.AddSeconds(30));
-        Assert.False(stale.CallWindowActive);
-
-        var fresh = new EventTracker();
-        fresh.OnRefresh(OurDraw(), T0);
-        fresh.OnTick(StructFixture.Decoded("123m456p789s1122z", "3z"), ["Tsumo", "Pass"], T0.AddSeconds(2));
-        Assert.True(fresh.CallWindowActive);
-    }
 
     [Fact]
     public void Notes_are_kept_for_stall_dumps()
@@ -520,18 +498,6 @@ public class EventTrackerTests
         Assert.Contains(notes, n => n.Contains("discard seat=1 2z"));
     }
 
-    [Fact]
-    public void Self_declare_label_edge_needs_the_draw_in_hand()
-    {
-        var t = new EventTracker();
-        t.OnRefresh(OurDraw(), T0);
-        t.OnTick(StructFixture.Decoded("15m6m12p568p5s1356z", null), ["Tsumo", "Riichi", "Pass"], T0);
-        Assert.False(t.CallWindowActive);
-        t.OnTick(StructFixture.Decoded("15m6m12p568p5s1356z", null), [], T0);
-        t.OnTick(StructFixture.Decoded("15m6m12p568p5s1356z", "9m"), ["Tsumo", "Riichi", "Pass"], T0);
-        Assert.True(t.CallWindowActive);
-        Assert.False(t.CallIsClaim);
-    }
 
     // Live 2026-09-19 (AtkValues verbatim): after "Chi" the game asks which sequence:
     // [0]=25 [1]=6 [2]="Chi" [3]=3, then 2s3s4s·, 3s4s5s·, 4s5s6s· (· = 76041 placeholder).
@@ -540,7 +506,7 @@ public class EventTrackerTests
     {
         var t = new EventTracker();
         var hand = StructFixture.Decoded("233m2345p0p23456s", null);
-        t.OnTick(hand, [], T0);
+        t.OnTick(hand, T0);
         t.OnRefresh(Discard(3, "4s"), T0);
         t.OnRefresh(CallWindow("Chi"), T0);
         Assert.True(t.CallWindowActive);
@@ -572,7 +538,7 @@ public class EventTrackerTests
     public void AtkType74_closes_the_window_but_never_books_a_meld()
     {
         var t = new EventTracker();
-        t.OnTick(StructFixture.Decoded("233m2345p0p23456s", null), [], T0);
+        t.OnTick(StructFixture.Decoded("233m2345p0p23456s", null), T0);
         t.OnRefresh(Discard(3, "4s"), T0);
         t.OnRefresh(CallWindow("Chi"), T0);
         int I(string tile) => StructFixture.IconOf(Tile.Parse(tile), 76041);

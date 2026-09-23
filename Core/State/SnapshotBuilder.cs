@@ -70,7 +70,7 @@ public sealed class SnapshotBuilder
         // bug. This turns every claim window into an assertion about the hand
         // (docs/research/WIN_OFFERS_2026_09_22.md); across 2026-09-22's 242 confirmed claim
         // windows the coarse version of this check never once disagreed.
-        if (t.CallWindowActive && !t.CallWindowFromLabels && t.CallIsClaim && callTile is { } claimed)
+        if (t.CallWindowActive && t.CallIsClaim && callTile is { } claimed)
             notes.AddRange(ClaimMismatches(hand, melds.Count, claimed, t.CallFromSeat, options));
 
         var doras = new List<Tile>();
@@ -92,14 +92,15 @@ public sealed class SnapshotBuilder
 
         var codes = layout.StateCodes;
         var totalClosed = hand.Count + (3 * m);
-        // An answered Tsumo/Ron holds the phase at RoundEnd until the win screen lands, so
-        // no discard or call is offered against a hand the game has already scored.
-        var phase = t.WinDeclared
-            ? GamePhase.RoundEnd
-            : ComputePhase(s.StateCode, codes, t.CallWindowActive, selfDeclare, totalClosed, hand.Count);
+        // The phase is what the GAME is showing. A Tsumo/Ron we answered used to force it to
+        // RoundEnd, which meant sending a win made the plugin believe the round had ended
+        // whether or not the game agreed - the auto player then went into its recap handling
+        // against a live table. Our own answer is carried separately, as AwaitingOurWin, and
+        // it suppresses decisions without relabelling what the game is doing.
+        var phase = ComputePhase(s.StateCode, codes, t.CallWindowActive, selfDeclare, totalClosed, hand.Count);
 
         var legal = LegalAction.None;
-        if (t.CallWindowActive && !t.WinDeclared)
+        if (t.CallWindowActive && !t.WinAnswerPending)
         {
             legal |= LegalAction.Pass;
             foreach (var o in options)
@@ -125,7 +126,7 @@ public sealed class SnapshotBuilder
             }
         }
 
-        if (phase == GamePhase.OurTurn || (selfDeclare && totalClosed == 14 && !t.WinDeclared))
+        if (phase == GamePhase.OurTurn || (selfDeclare && totalClosed == 14 && !t.WinAnswerPending))
             legal |= LegalAction.Discard;
 
         var countsMapped = s.Seats.Any(x => x.DiscardCount is not null);
@@ -162,7 +163,9 @@ public sealed class SnapshotBuilder
             CallShapes = t.CallWindowActive
                 ? t.CallShapes.Select(s => new Meld(MeldType.Chi, s, true)).ToList()
                 : [],
-            CallWindowConfirmed = t.CallWindowActive && !t.CallWindowFromLabels,
+            CallWindowConfirmed = t.CallWindowActive,
+            AwaitingOurWin = t.WinAnswerPending,
+            AnswerPending = t.Answer is not null,
         };
 
         var key = ContentKey(snapshot);

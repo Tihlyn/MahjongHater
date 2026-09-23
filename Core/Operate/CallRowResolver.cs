@@ -2,7 +2,15 @@ namespace MahjongHater.Core.Operate;
 
 // One row of a live AtkComponentList as its own item table reports it. Everything here
 // is a copy taken on the framework thread before any dispatch: no pointers survive.
-public readonly record struct ListRow(int Index, string Label, bool HasRenderer, bool Enabled);
+//
+// EnabledDisputed: the list GetItemDisabledState and the row button IsEnabled disagree about
+// this row. The two used to be combined with a permissive OR, justified by the idea that a
+// wrongly-enabled row would simply be ignored by the game. That stopped being safe once the
+// caller began bypassing the widget and issuing the addon command directly, where there is
+// no widget left to ignore it. Which field is authoritative has never been established, so a
+// row they disagree about is refused instead of guessed at.
+public readonly record struct ListRow(
+    int Index, string Label, bool HasRenderer, bool Enabled, bool EnabledDisputed = false);
 
 // Where an answer should go, or why it must not be sent at all.
 public readonly record struct RowChoice(int Index, string Why)
@@ -77,6 +85,9 @@ public static class CallRowResolver
         var row = matches[0];
         if (!row.HasRenderer)
             return RowChoice.Reject($"row {row.Index} ('{want}') has no item renderer — a list event would carry no valid target");
+        if (row.EnabledDisputed)
+            return RowChoice.Reject($"row {row.Index} \"{row.Label}\" has a disputed enabled state "
+                                    + "(the list and the row button disagree) - refusing rather than guessing");
         if (!row.Enabled)
             return RowChoice.Reject($"row {row.Index} ('{want}') is disabled");
         return RowChoice.At(row.Index, $"row {row.Index} of [{string.Join(", ", labels)}]");

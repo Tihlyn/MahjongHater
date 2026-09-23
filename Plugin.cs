@@ -385,11 +385,8 @@ public sealed class Plugin : IDalamudPlugin
         this.Reader.Tick();
         this.AnalysisService.Update(this.Reader.Current);
         this.ReadMahjongRank();
-        // Interaction switches are read every frame so a comparison run needs no reload.
+        // Read every frame so a comparison run needs no reload.
         this.AutoPlayer.AllowHoverEscalation = this.Configuration.HoverEscalation;
-        EmjOperator.Route = this.Configuration.NativeListSelection
-            ? EmjOperator.ListRoute.NativeSelect
-            : EmjOperator.ListRoute.RegisteredEvent;
         // The operator acts first and the anti-idle press goes last, so a synthetic keystroke
         // is never delivered in the moments before a dispatch: both run on this thread, in this
         // order, every frame. The press is still skipped while automation is mid-action, and

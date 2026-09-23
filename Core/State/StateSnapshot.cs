@@ -113,6 +113,16 @@ public sealed record StateSnapshot(
     // our own hand read is not (docs/research/WIN_OFFERS_2026_09_22.md).
     public bool CallWindowConfirmed { get; init; }
 
+    // We answered a Tsumo/Ron and the game has not settled it yet. This is OUR intent, not
+    // the game's state: the phase above still says what the game is showing. Nothing should be
+    // decided against a hand we may already have won, so Legal is empty while this is set.
+    public bool AwaitingOurWin { get; init; }
+
+    // Any answer we sent that the game has not acted on yet. Distinct from the window being
+    // open: a window can close without our answer being the reason, and an answer can sit
+    // unacknowledged with the window still up. Neither is inferred from having dispatched.
+    public bool AnswerPending { get; init; }
+
     public SeatState Us => this.Seats[0];
 
     public bool IsOpen => this.OurMelds.Any(m => m.IsOpen);
