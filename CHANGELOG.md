@@ -4,6 +4,25 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+### Changed
+
+- Auto play now plays through the addon's own command channel instead of synthesising mouse
+  events. A discard sends `[7, slot]`, a call answer `[11, row]`, a chi shape `[12, index]`
+  and a recap advance `[14]` - the exact callbacks the game was recorded sending when a human
+  performed each action (docs/research/ADDON_PROTOCOL_2026_09_23.md). The guard layer is
+  unchanged and still decides *whether* and *which*: an event-confirmed window, a visible list
+  whose rows still carry it, one matching enabled row from the live item table, and the window
+  generation the answer was aimed at.
+- The pointer handshake `[15, icon]` that precedes a human discard is deliberately not sent.
+  The game itself fires `[7, slot]` with no handshake when a riichi hand auto-discards, so the
+  bare command is complete - and sending it would reproduce the hover-then-discard-that-tile
+  sequence that preceded the table going unclickable.
+- A notification head (`9`, `17`, `-1`, `-2`) can no longer be sent as a command; the addon
+  emits those about itself, and replaying one is how another plugin parked the addon in
+  state 32.
+- Clicks remain only where a click is what was measured: the match-result close button, the
+  chi chooser's cancel (its callback was never observed) and the SelectYesno confirmation.
+
 ### Added
 
 - The round recap is read and checked against our own scoring. State 29 carries the game's

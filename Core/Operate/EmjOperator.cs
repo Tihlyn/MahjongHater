@@ -345,6 +345,30 @@ internal static unsafe class EmjOperator
         => IsChainVisible(addon, node, out _)
            && FindChainEventCore(node, AtkEventType.ButtonClick, (nint)(AtkEventListener*)addon, requireVisible: true, 0, out _) != null;
 
+    // Sends one of the addon's own commands (EmjProtocol). This is what the game does when a
+    // human plays: the click is only how the cursor reaches the handler, and the handler's job
+    // is to fire this. A notification head is refused outright - the addon emits those about
+    // itself, and replaying one as input is how another plugin parked the addon in state 32.
+    //
+    // The pointer handshake [15, icon] that precedes a HUMAN discard is deliberately NOT sent.
+    // The game itself fires [7, slot] with no handshake at all when a riichi hand auto-discards
+    // its draw, so the bare command is complete and game-sanctioned; and sending the handshake
+    // would reproduce exactly the hover-then-discard-the-hovered-tile sequence that preceded
+    // the table going unclickable on 2026-09-23.
+    public static Dispatch FireCommand(AtkUnitBase* addon, string what, params int[] values)
+    {
+        if (addon == null)
+            return Dispatch.Reject($"{what}: Emj addon not open");
+        if (values.Length == 0)
+            return Dispatch.Reject($"{what}: no command values");
+        if (EmjProtocol.IsNotification(values[0]))
+            return Dispatch.Reject($"{what}: [{string.Join(",", values)}] is a notification the addon sends about itself, not a command");
+
+        var detail = $"{what}: callback [{string.Join(",", values)}]";
+        FireCallback(addon, updateState: true, values);
+        return Dispatch.Fired(detail);
+    }
+
     // Raw addon callback with int values. This is the addon's real command channel, not a
     // simulated mouse: the 2026-09-23 capture recorded the game itself sending [7, slot] to
     // discard, [11, row] to answer a call and [14] to advance a recap
