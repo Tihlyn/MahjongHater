@@ -100,7 +100,10 @@ public sealed class SnapshotBuilder
         var phase = ComputePhase(s.StateCode, codes, t.CallWindowActive, selfDeclare, totalClosed, hand.Count);
 
         var legal = LegalAction.None;
-        if (t.CallWindowActive && !t.WinAnswerPending)
+        // An already-answered window offers nothing: re-deciding it is how one Riichi prompt
+        // became three [11, 0] sends. With the calls withheld, a self-declare falls through to
+        // the discard below - which is exactly what a declared riichi is waiting for.
+        if (t.CallWindowActive && !t.WinAnswerPending && !t.CurrentWindowAnswered)
         {
             legal |= LegalAction.Pass;
             foreach (var o in options)

@@ -365,10 +365,9 @@ public class EventTrackerTests
         Assert.Contains(t.RecentNotes(20), n => n.Contains("UNACKNOWLEDGED"));
     }
 
-    // The other half of the same live regression, dalamud.log 13:31:42.685-42.692. Accepting
-    // Chi raises the shape chooser 7 ms later - which IS the game acting on the Chi - but the
-    // chooser advances the window generation, so the answer sat on the old one and timed out
-    // with a false "the game never acted on it".
+    // dalamud.log 13:31:42.685-42.692: accepting Chi raises the shape chooser 7 ms later,
+    // which IS the game acting on the Chi - but the chooser advances the window generation,
+    // so the answer sat on the old one and timed out with a false "never acted on it".
     [Fact]
     public void A_new_window_replacing_the_answered_one_confirms_the_answer()
     {
@@ -388,64 +387,63 @@ public class EventTrackerTests
 
         Assert.NotEqual(answered, t.CallWindowGeneration);
         Assert.Null(t.Answer);
+        Assert.False(t.CurrentWindowAnswered);   // the NEW window is answerable
         Assert.Contains(t.RecentNotes(20), n => n.Contains("confirmed after") && n.Contains("chooser"));
-        Assert.DoesNotContain(t.RecentNotes(20), n => n.Contains("UNACKNOWLEDGED"));
     }
 
-    // The live 2026-09-23 regression, replayed from dalamud.log at 13:33:37-13:33:46.
+    // The 13:49:08 furiten, replayed. A Tsumo window opened one millisecond before a type-6
+    // carrying a 13-wide 0..12 ramp. A previous fix read that ramp as "riichi accepted" and
+    // cleared the call window on it - killing the live Tsumo prompt, so the policy fell
+    // through to a discard and tsumogiri'd the winning tile.
     //
-    // A Riichi window is NOT closed by a turn advance, a discard, a meld or a score event:
-    // the game answers [11, row] synchronously with a type-6 carrying a slot ramp ("riichi
-    // accepted, here are the 12 slots you may still discard") and leaves the Riichi/Pass
-    // panel on screen while it waits for that discard. With no case for the ramp the answer
-    // looked unacknowledged, timed out after 3 s, and the auto player declared riichi again.
+    // The ramp is NOT an acknowledgement: it recurs on every draw while in riichi. Nothing
+    // outside the measured set (type-5/8/13/74/29/32, or a new prompt) may close a window.
     [Fact]
-    public void A_riichi_answer_is_acknowledged_by_the_discard_slot_ramp()
+    public void A_post_riichi_slot_ramp_does_not_close_a_live_window()
     {
         var t = new EventTracker();
         var hand = StructFixture.Decoded("123m456p789s1122z", "3z");
-        t.OnRefresh(OurDraw(), T0);
         t.OnTick(hand, T0);
-
-        // [1]=2 rows, [2]=3 (Riichi), banner "Discard", rows "Riichi"/"Pass" - the real frame.
-        t.OnRefresh(AtkFrame.OfInts([23, 2, 3, 0, .. new int[18]])
-            .WithString(6, "Discard").WithString(7, "Riichi").WithString(8, "Pass"), T0);
+        t.OnRefresh(AtkFrame.OfInts([23, 2, 1, 0, .. new int[18]])
+            .WithString(6, "Tsumo!").WithString(7, "Tsumo").WithString(8, "Pass"), T0);
         Assert.True(t.CallWindowActive);
-        Assert.Equal(["Riichi"], t.CallOptions);
+        Assert.Equal(["Tsumo"], t.CallOptions);
 
-        var generation = t.CallWindowGeneration;
-        t.NoteAnswerSent("Riichi", isWin: false, generation, T0);
-        Assert.NotNull(t.Answer);
+        // The exact frame from the log: type-6, [1]=13, then 0..12.
+        t.OnRefresh(AtkFrame.OfInts([6, 13, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, .. new int[7]]), T0);
 
-        // The game's reply, fired inside our own callback: 12 legal discard slots, 0..11.
-        t.OnRefresh(AtkFrame.OfInts([6, 12, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, .. new int[8]]), T0);
-
-        Assert.False(t.CallWindowActive);
-        Assert.Null(t.Answer);
-        Assert.Contains(t.RecentNotes(20), n => n.Contains("riichi accepted"));
+        Assert.True(t.CallWindowActive);
+        Assert.Equal(["Tsumo"], t.CallOptions);
     }
 
-    // The ramp must be the WHOLE ramp. A type-6 that merely happens to start 0,1 is an
-    // ordinary refresh and must not be mistaken for the riichi acknowledgement - closing a
-    // live window on one would drop a prompt the game is still offering.
+    // One prompt gets one answer. A call answer is not idempotent - Riichi and Pass are rows
+    // of the same list - so an answer we are unsure about is never re-sent. On 2026-09-23 the
+    // retry ladder put [11, 0] into one Riichi window three times, because nothing the tracker
+    // watches closes that window until the riichi discard happens.
     [Fact]
-    public void A_partial_ramp_is_not_a_riichi_acknowledgement()
+    public void A_window_is_answered_once_even_after_the_answer_times_out()
     {
         var t = new EventTracker();
         var hand = StructFixture.Decoded("123m456p789s1122z", "3z");
         t.OnRefresh(OurDraw(), T0);
         t.OnTick(hand, T0);
-        t.OnRefresh(AtkFrame.OfInts([23, 2, 3, 0, .. new int[18]])
-            .WithString(6, "Discard").WithString(7, "Riichi").WithString(8, "Pass"), T0);
-        Assert.True(t.CallWindowActive);
+        t.OnRefresh(CallWindow("Riichi"), T0);
+        Assert.False(t.CurrentWindowAnswered);
 
-        // [1]=4 claims four slots but [5] breaks the ramp.
-        t.OnRefresh(AtkFrame.OfInts([6, 4, 0, 1, 9, 0, .. new int[16]]), T0);
-        Assert.True(t.CallWindowActive);
+        t.NoteAnswerSent("Riichi", isWin: false, t.CallWindowGeneration, T0);
+        Assert.True(t.CurrentWindowAnswered);
 
-        // [1]=0 is the shape every routine type-6 in the live log carries.
-        t.OnRefresh(AtkFrame.OfInts([6, 0, 3, 0, .. new int[18]]), T0);
+        // The pending answer times out, but the window stays answered.
+        t.OnTick(hand, T0.AddSeconds(5));
+        Assert.Null(t.Answer);
+        Assert.True(t.CurrentWindowAnswered);
+
+        // A genuinely new prompt is answerable again.
+        t.OnRefresh(Discard(0, "8m"), T0.AddSeconds(6));
+        t.OnRefresh(Discard(1, "1p"), T0.AddSeconds(6));
+        t.OnRefresh(CallWindow("Pon"), T0.AddSeconds(6));
         Assert.True(t.CallWindowActive);
+        Assert.False(t.CurrentWindowAnswered);
     }
 
     [Fact]

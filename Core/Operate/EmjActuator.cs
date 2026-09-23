@@ -107,6 +107,9 @@ public sealed unsafe class EmjActuator
         var tracker = this.reader.Tracker;
         if (!tracker.CallWindowActive)
             return OperateResult.Fail($"'{option}': no call window is open");
+        if (tracker.CurrentWindowAnswered)
+            return OperateResult.Fail($"'{option}': window #{tracker.CallWindowGeneration} has already been "
+                                      + "answered — a call answer is not idempotent, so it is never re-sent");
         var path = this.reader.Layout.Nodes.CallList;
         var listNode = EmjScanner.FindNodeByPath(addon, path);
         if (listNode == null)

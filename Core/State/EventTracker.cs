@@ -65,6 +65,7 @@ public sealed class EventTracker
     // ReceiveEvent cannot have that new prompt cleared by the old one's answer.
     private long callWindowGeneration;
     private PendingAnswer? pendingAnswer;
+    private long answeredGeneration = -1;
     // Options of the window the actuator already answered: the game echoes the selection
     // as a type-19 with the same labels (verified live 2026-09-19), which must not re-open it.
     private string? answeredSignature;
@@ -161,6 +162,20 @@ public sealed class EventTracker
     public TimeSpan? AnswerPendingFor(DateTime utc)
         => this.pendingAnswer is { } a ? utc - a.SentUtc : null;
 
+    // We have already answered the window that is open. One prompt gets one answer.
+    //
+    // A call answer is not idempotent - Riichi and Pass are different rows of the same list -
+    // so "we are not sure it landed" is never a reason to send another one. On 2026-09-23 the
+    // retry ladder sent [11, 0] three times into one Riichi window because nothing the tracker
+    // watches closes that window; the answer sits pending until the riichi DISCARD happens,
+    // and the discard is what the plugin should be doing in the meantime.
+    //
+    // This deliberately outlives the pending answer's timeout: if a dispatch really was lost
+    // we give up that one prompt rather than guess again at a window whose rows we have
+    // already acted on. The flag clears when the game gives us a new prompt (a new
+    // generation) or the round moves on.
+    public bool CurrentWindowAnswered => this.callWindowActive && this.answeredGeneration == this.callWindowGeneration;
+
     // The actuator SENT an answer for the open window. That is all this records.
     //
     // It used to also close the window and set the win flag, which made dispatch its own
@@ -187,6 +202,7 @@ public sealed class EventTracker
         this.answeredCallTile = this.callTile;
         this.answeredCallFromSeat = this.callFromSeat;
         this.pendingAnswer = new PendingAnswer(option, isWin, generation, now ?? this.lastTickUtc);
+        this.answeredGeneration = generation;
         this.Note($"answer \'{option}\' sent for window #{generation}; waiting for the game to act on it");
     }
 
@@ -291,35 +307,6 @@ public sealed class EventTracker
 
         switch (type)
         {
-            case 6 when IsSlotRamp(f): // the state the game enters when a riichi is accepted
-            {
-                // THE acknowledgement of a riichi declaration, and the one signal that says
-                // the self-declare prompt is resolved.
-                //
-                // MEASURED, live 2026-09-23: answering a Riichi window with [11, row] makes
-                // the game fire a type-6 carrying [1]=12 then a plain 0,1,2,...,11 ramp,
-                // SYNCHRONOUSLY inside our own callback. It appeared exactly twice in that
-                // session's log, both times immediately after a [11, row] answering a Riichi
-                // window, and never otherwise. Reading the live addon while the bug was
-                // happening showed the same shape as the table's current state.
-                //
-                // NOT measured: what the ramp MEANS. "12 legal discard slots" is the obvious
-                // reading, but a contiguous 0..11 is equally consistent with "the first 12 of
-                // something", and no experiment has distinguished them. Nothing here depends
-                // on the answer - the shape is being used as a state marker, not decoded -
-                // and it must not be decoded as slot legality until that is settled.
-                //
-                // Nothing else closes this window. A riichi prompt is NOT followed by a
-                // turn advance, a discard, a meld or a score event, and the panel stays on
-                // screen while the game waits for the riichi discard - which is why the
-                // "Riichi / Pass" rows remain visible and readable the whole time. Before
-                // this case existed the plugin saw its own answer go unacknowledged, timed
-                // out, and declared riichi a second time.
-                this.Note($"riichi accepted (type-6, {f.Int(1)}-wide slot ramp; the ramp's meaning is unverified)");
-                this.ClearCallWindow("riichi accepted (type-6 discard selection)");
-                break;
-            }
-
             case 5: // turn advance: [1]=wall remaining, [2]=seat that draws next
                 if (f.Int(1) is > 0 and <= 70)
                     this.eventWallRemaining = f.Int(1);
@@ -756,27 +743,6 @@ public sealed class EventTracker
 
     private static bool IsOption(string s) => s is "Chi" or "Pon" or "Kan" or "Ron" or "Riichi" or "Tsumo";
 
-    // [1] = a count, then [2..] a plain 0,1,2,... ramp that long. The same shape the type-19
-    // decode warns about, here as the thing being looked for rather than guarded against: on a
-    // type-6 it is the state a riichi declaration puts the game into. Requires the FULL ramp,
-    // so a frame that merely starts 0,1 does not qualify - closing a live window on a
-    // coincidence would drop a prompt the game is still offering.
-    private static bool IsSlotRamp(AtkFrame f)
-    {
-        if (!f.IsInt(1))
-            return false;
-        var count = f.Int(1);
-        if (count is < 1 or > 14)
-            return false;
-        for (var i = 0; i < count; i++)
-        {
-            if (!f.IsInt(2 + i) || f.Int(2 + i) != i)
-                return false;
-        }
-
-        return true;
-    }
-
     // "40 Fu 3 Han" / "25 Fu 5 Han Mangan" - fu, han and the limit name the game applied.
     private static WinScreen? ParseWinScreen(AtkFrame f)
     {
@@ -832,6 +798,7 @@ public sealed class EventTracker
     private void ResetRound(string why)
     {
         this.pendingAnswer = null;
+        this.answeredGeneration = -1;
         this.answeredSignature = null;
         this.answeredCallTile = null;
         this.answeredCallFromSeat = -1;
