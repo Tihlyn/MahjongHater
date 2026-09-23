@@ -4,9 +4,10 @@ namespace MahjongHater.Core.State;
 // touches game memory and tests can replay recorded frames.
 public sealed class AtkFrame
 {
-    // Highest slot the tracker reads is [37] (deal hand); the rest of the prefix exists so a
-    // round-end hand reveal (up to 4 × 14 icons) can be captured and its layout confirmed.
-    public const int MaxCopied = 96;
+    // The round recap (state 29) is the deepest read: its ura dora sits at [104], behind the
+    // three 18-slot yaku arrays that end at [96] (docs/research/ADDON_PROTOCOL_2026_09_23.md).
+    // Everything the tracker needs otherwise is below [42].
+    public const int MaxCopied = 112;
 
     private readonly int[] ints;
     private readonly string?[] strings;

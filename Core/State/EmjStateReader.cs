@@ -28,6 +28,8 @@ public sealed unsafe class EmjStateReader : IDisposable
     private const int BlockerScanInterval = 60;
     private int blockerTicks;
     private string lastBlockerSignature = string.Empty;
+    private RoundRecap? lastCheckedRecap;
+    private IReadOnlyList<Tile> lastHandInPlay = [];
 
     // Tenpai ground truth: the last in-play snapshot is frozen when the phase turns to
     // RoundEnd, then the seat banners are polled until the announcement has landed.
@@ -117,7 +119,10 @@ public sealed unsafe class EmjStateReader : IDisposable
 
             this.Current = this.builder.Build(decoded, this.tracker, this.Layout, new RulesetOptions(this.configuration.Kuitan, (int)this.configuration.GameLength));
             this.LogHealthChanges(this.Current);
+            if (this.Current is { Phase: not (GamePhase.RoundEnd or GamePhase.NotInGame), Hand.Count: >= 13 })
+                this.lastHandInPlay = this.Current.Hand;
             this.CheckScoringAgainstTheGame();
+            this.CheckRecapAgainstTheGame();
             this.LogInputBlockerChanges();
             this.RecordTenpaiGroundTruth(addon, this.Current);
         }
@@ -188,8 +193,82 @@ public sealed unsafe class EmjStateReader : IDisposable
         this.pluginLog.Information($"[Input] {signature}");
     }
 
+    // The round recap is the game explaining its own scoring, so it checks two separate
+    // things (docs/research/ADDON_PROTOCOL_2026_09_23.md):
+    //
+    //   A. when WE won, the hand it shows is the hand we actually held - the one moment our
+    //      hand read can be compared against ground truth, and the read is what made the
+    //      plugin pass its own Ron on 2026-09-22;
+    //   B. the han it awarded, against our own detector run on THAT hand, which isolates the
+    //      yaku logic from the hand read.
+    //
+    // Yaku NAMES are logged side by side rather than compared: the game prints Lodestone
+    // English ("Ura Dora") and YakuDetector uses romaji ("Chinitsu"), and inventing that
+    // translation table from guesses is the habit this whole rework exists to break. The
+    // pairs these lines produce are how it gets built from evidence instead.
+    private void CheckRecapAgainstTheGame()
+    {
+        if (this.tracker.LastRecap is not { } recap || ReferenceEquals(recap, this.lastCheckedRecap))
+            return;
+        this.lastCheckedRecap = recap;
+
+        var weWon = this.tracker.LastWinnerSeat == 0;
+        var hand = recap.Hand.Concat(recap.WinningTile is { } won ? [won] : Array.Empty<Tile>()).ToList();
+        this.pluginLog.Information($"[Rules] Recap: {recap.WinMethod} {recap.Score} by seat {this.tracker.LastWinnerSeat}"
+                                   + $"{(weWon ? " (us)" : string.Empty)}; game yaku ["
+                                   + string.Join(", ", recap.Yaku.Select(y => $"{y.Name}={y.Han}"))
+                                   + $"]; hand [{string.Join(" ", hand)}]");
+
+        if (!weWon)
+            return;
+
+        // A - our read of our own hand, against the hand the game just showed.
+        var ours = this.lastHandInPlay;
+        if (ours.Count > 0 && hand.Count > 0)
+        {
+            var mine = ours.Select(TileHelpers.Normalize).Order().ToList();
+            var theirs = hand.Select(TileHelpers.Normalize).Order().ToList();
+            if (!mine.SequenceEqual(theirs))
+                this.pluginLog.Warning($"[Rules] HAND READ MISMATCH on our own win: the game scored "
+                                       + $"[{string.Join(" ", hand)}] and our last read was [{string.Join(" ", ours)}]. "
+                                       + "Every decision that hand made was taken on the second one.");
+        }
+
+        // B - our han for that hand, against the han the game awarded for it.
+        var detected = this.DetectHan(recap, hand);
+        if (detected is { } han && han != recap.YakuHan)
+            this.pluginLog.Warning($"[Rules] YAKU HAN MISMATCH: the game awarded {recap.YakuHan} han from ["
+                                   + string.Join(", ", recap.YakuNames) + $"] and our detector scores {han} "
+                                   + $"for the same hand [{string.Join(" ", hand)}].");
+    }
+
+    // Our yaku han for the hand the game just scored, or null when we cannot judge it - an
+    // open hand, because the recap's flat tile array does not say which tiles were melded and
+    // openness decides several yaku outright.
+    private int? DetectHan(RoundRecap recap, IReadOnlyList<Tile> hand)
+    {
+        if (hand.Count != 14 || this.tracker.SeatMeldsOf(0).Count > 0)
+            return null;
+        var built = new Hand { IsRiichi = recap.Yaku.Any(y => y.Name.Contains("Riichi", StringComparison.OrdinalIgnoreCase)) };
+        built.ClosedTiles.AddRange(hand);
+        built.WinningTile = recap.WinningTile;
+        built.WinMethod = recap.WinMethod.Contains("Tsumo", StringComparison.OrdinalIgnoreCase) ? WinMethod.Tsumo : WinMethod.Ron;
+        var detector = new YakuDetector(new RulesetOptions(this.configuration.Kuitan, (int)this.configuration.GameLength));
+        var best = 0;
+        foreach (var decomposition in HandDecomposer.GetWinningDecompositions(built))
+        {
+            var han = detector.Detect(built, decomposition.Melds, decomposition.Pair, decomposition.Wait)
+                .Sum(y => y.IsYakuman ? 13 : y.Han);
+            best = Math.Max(best, han);
+        }
+
+        return best;
+    }
+
     public void Reset()
     {
+        this.lastCheckedRecap = null;
+        this.lastHandInPlay = [];
         this.lastBlockerSignature = string.Empty;
         this.lastCheckedWin = null;
         this.lastHealthSignature = string.Empty;

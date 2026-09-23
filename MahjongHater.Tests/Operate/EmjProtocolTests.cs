@@ -14,6 +14,8 @@ public class EmjProtocolTests
         Assert.Equal([7, 5], EmjProtocol.DiscardSlot(5));
         Assert.Equal([11, 1], EmjProtocol.SelectCallRow(1));
         Assert.Equal([14], EmjProtocol.AdvanceRecap());
+        Assert.Equal([12, 0], EmjProtocol.PickChiShape(0));
+        Assert.Equal([12, 1], EmjProtocol.PickChiShape(1));
         Assert.Equal([15, 76057], EmjProtocol.PointAtTile(76057));
     }
 
@@ -25,6 +27,8 @@ public class EmjProtocolTests
         Assert.Throws<ArgumentOutOfRangeException>(() => EmjProtocol.DiscardSlot(-1));
         Assert.Throws<ArgumentOutOfRangeException>(() => EmjProtocol.SelectCallRow(-1));
         Assert.Throws<ArgumentOutOfRangeException>(() => EmjProtocol.PointAtTile(0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => EmjProtocol.PickChiShape(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => EmjProtocol.PickChiShape(4));
     }
 
     // The addon fires these itself on state transitions. Replaying one as input is how another
@@ -41,7 +45,19 @@ public class EmjProtocolTests
     [InlineData(EmjProtocol.CallRow)]
     [InlineData(EmjProtocol.RecapNext)]
     [InlineData(EmjProtocol.Pointer)]
+    [InlineData(EmjProtocol.ChiShape)]
     public void Commands_are_not_notifications(int head) => Assert.False(EmjProtocol.IsNotification(head));
+
+    // The chooser's buttons: shape i is node 5+i with ButtonClick param 9+i, cancel is node 11
+    // with param 8 - the layout paths the plugin already carried, now confirmed against a live
+    // chooser rather than assumed.
+    [Fact]
+    public void The_chooser_buttons_are_where_the_layout_says()
+    {
+        Assert.Equal("1/46/52", EmjProtocol.ChooserPath);
+        Assert.Equal(9, EmjProtocol.ChiShapeFirstParam);
+        Assert.Equal(8, EmjProtocol.ChiCancelParam);
+    }
 
     // Ending a match lives in a different addon than the plugin used to search.
     [Fact]

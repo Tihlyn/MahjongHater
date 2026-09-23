@@ -175,6 +175,12 @@ public sealed class EventTracker
     // (docs/research/RULES_CROSSCHECK_2026_09_22.md).
     public WinScreen? LastWinScreen { get; private set; }
 
+    // The game's own scoring of the last round: the winner's hand, every yaku it awarded with
+    // that yaku's han, the fu/han total and the dora. This is the only place the game explains
+    // its reasoning rather than just its result, so it is what our own scoring is checked
+    // against (docs/research/ADDON_PROTOCOL_2026_09_23.md).
+    public RoundRecap? LastRecap { get; private set; }
+
     public IReadOnlyList<string> RecentNotes(int tail) => this.noteRing.TakeLast(Math.Clamp(tail, 1, NoteRingCap)).ToList();
 
     // Relative seat named by the last type-32 win screen this round; -1 until then (a
@@ -403,10 +409,15 @@ public sealed class EventTracker
                 break;
             }
 
-            case 29: // post-round score delta: [1]=seat-0 delta ×100
+            case 29: // the round recap: per-seat deltas, the winner's hand, and the game's
+                     // own yaku list with per-yaku han (docs/research/ADDON_PROTOCOL_2026_09_23.md)
             {
                 this.roundEnded = true;
                 this.WinDeclared = false;
+                this.LastRecap = RoundRecapReader.Read(f);
+                if (this.LastRecap is { } recap)
+                    this.Note($"recap: {recap.WinMethod} {recap.Score}; yaku [{string.Join(", ", recap.Yaku.Select(y => $"{y.Name} {y.Han}"))}]; "
+                              + $"hand [{string.Join(" ", recap.Hand)}] + {recap.WinningTile?.ToString() ?? "-"}");
                 this.ClearCallWindow("score (type-29)");
                 var delta = f.Int(1) * 100;
                 this.LastScoreDelta = delta;

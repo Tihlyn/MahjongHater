@@ -4,6 +4,19 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+### Added
+
+- The round recap is read and checked against our own scoring. State 29 carries the game's
+  full reasoning - the winner's actual hand, every yaku it awarded with that yaku's han, the
+  fu/han total and the dora - so every win now verifies two things independently: when we won,
+  the hand the game scored against the hand we thought we held, and our detector's han against
+  the game's for that same hand. Mismatches log at Warning. The layout was confirmed by
+  decoding a valid winning shape out of it rather than by assuming offsets
+  (docs/research/ADDON_PROTOCOL_2026_09_23.md).
+- Yaku names are logged side by side rather than compared: the game prints Lodestone English
+  ("Ura Dora") and the detector uses romaji ("Chinitsu"), and that translation table will be
+  built from those logged pairs rather than guessed.
+
 ### Changed
 
 - The Emj addon's input protocol is now recorded rather than guessed. A full match played by

@@ -25,6 +25,13 @@ public static class EmjProtocol
     // node 3, 22 times. Row indices come from the live item table, never from a label.
     public const int CallRow = 11;
 
+    // [12, shape] — pick a chi shape while the state-25 chooser is up. Measured 2026-09-23:
+    // accepting Chi from the call list ([11, row]) refreshes the addon into state 25, and the
+    // shape button then fires [12, index] paired with ButtonClick param=9+index on node 5+index
+    // of the chooser panel (1/46/52). Index is 0-based and matches the order the shapes appear
+    // in the state-25 values, which is the order our CallShapes already uses.
+    public const int ChiShape = 12;
+
     // [14] — advance the end-of-round recap. Paired with ButtonClick param=7 on node 97, 9
     // times; this is what finally identifies node 97, which the plugin had been pressing by
     // trial and error without ever reading it.
@@ -67,6 +74,15 @@ public static class EmjProtocol
     // Hand slots run 0..13 (13 is the draw/claim slot).
     public const int MaxSlot = 13;
 
+    // The chooser panel. Shape i is node 5+i with ButtonClick param 9+i; the cancel button is
+    // node 11 with param 8. Both confirmed against the live chooser on 2026-09-23, and they
+    // match the paths the layout already carried.
+    public const string ChooserPath = "1/46/52";
+
+    public const int ChiShapeFirstParam = 9;
+
+    public const int ChiCancelParam = 8;
+
     // A callback the addon sends about itself, which must never be replayed as input.
     public static bool IsNotification(int head)
         => head is HandStarted or HandEnded or Dismissed or Closed;
@@ -82,6 +98,12 @@ public static class EmjProtocol
             : throw new ArgumentOutOfRangeException(nameof(row), row, "Call rows are indexes into the live item table.");
 
     public static int[] AdvanceRecap() => [RecapNext];
+
+    // The chooser offers at most four shapes; buttons beyond the offered count are hidden.
+    public static int[] PickChiShape(int shapeIndex)
+        => shapeIndex is >= 0 and <= 3
+            ? [ChiShape, shapeIndex]
+            : throw new ArgumentOutOfRangeException(nameof(shapeIndex), shapeIndex, "The chi chooser offers at most four shapes.");
 
     public static int[] PointAtTile(int tileIconId)
         => tileIconId > 0
