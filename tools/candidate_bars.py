@@ -135,6 +135,9 @@ def bar3(args):
     with open(path, newline="", encoding="utf-8") as f:
         rows = [r for r in csv.DictReader(f) if not args.population or r.get("population") == args.population]
     arms = {tag: [r for r in rows if r.get("model") == tag] for tag in (args.a, args.b)}
+    if any(r.get("outcome") == "unknown" for arm in arms.values() for r in arm):
+        print("bar 3: INCOMPLETE - an arm contains unknown hand outcomes; resolve them before comparing win/deal-in rates.")
+        return False
     print(f"bar 3 - live matches from {path}, population {args.population or 'any'}: A = {args.a} ({len(arms[args.a])} hands), B = {args.b} ({len(arms[args.b])} hands)")
     tags = sorted({r.get("model") for r in rows})
     if any(len(v) == 0 for v in arms.values()):

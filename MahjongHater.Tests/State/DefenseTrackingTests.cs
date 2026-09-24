@@ -17,7 +17,8 @@ public class DefenseTrackingTests
 
     private static AtkFrame TurnAdvance(int wall, int seat) => AtkFrame.OfInts(5, wall, seat, 76041);
 
-    private static AtkFrame Win(int winner, string round) => AtkFrame.OfInts(32, winner).WithString(2, round);
+    private static AtkFrame Win(bool tsumo, string round)
+        => AtkFrame.OfInts(32, 0, 0, 0, 0, 0, 0, 0, tsumo ? 1 : 0).WithString(2, round);
 
     [Fact]
     public void Discards_get_a_global_order_across_seats()
@@ -39,7 +40,8 @@ public class DefenseTrackingTests
         var t = new EventTracker();
         t.OnRefresh(TurnAdvance(50, 0), T0);
         t.OnRefresh(Discard(0, "5p"), T0);
-        t.OnRefresh(Win(2, "East 3 South Wind"), T0);
+        t.OnRefresh(Win(false, "East 3 South Wind"), T0);
+        t.OnRefresh(AtkFrame.OfInts(29, -39, 0, 39, 0), T0.AddSeconds(5));
         Assert.True(t.LastWinByRon);
         Assert.Equal(0, t.RonVictimSeat);
         Assert.Equal(Tile.Parse("5p"), t.RonTile);
@@ -53,7 +55,8 @@ public class DefenseTrackingTests
         var t = new EventTracker();
         t.OnRefresh(Discard(0, "5p"), T0);
         t.OnRefresh(TurnAdvance(49, 1), T0);
-        t.OnRefresh(Win(1, "South 1 East Wind"), T0);
+        t.OnRefresh(Win(true, "South 1 East Wind"), T0);
+        t.OnRefresh(AtkFrame.OfInts(29, -20, 60, -20, -20), T0.AddSeconds(5));
         Assert.False(t.LastWinByRon);
         Assert.Equal(-1, t.RonVictimSeat);
         Assert.Null(t.RonTile);
@@ -65,7 +68,8 @@ public class DefenseTrackingTests
     {
         var t = new EventTracker();
         t.OnRefresh(Discard(2, "5p"), T0);
-        t.OnRefresh(Win(0, "East 4 East Wind"), T0);
+        t.OnRefresh(Win(false, "East 4 East Wind"), T0);
+        t.OnRefresh(AtkFrame.OfInts(29, 39, 0, -39, 0), T0.AddSeconds(5));
         Assert.True(t.LastWinByRon);
         Assert.Equal(2, t.RonVictimSeat);
     }

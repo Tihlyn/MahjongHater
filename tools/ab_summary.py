@@ -26,9 +26,15 @@ def default_path():
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else default_path()
     groups = defaultdict(list)
+    unknown = 0
     with open(path, newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
+            if r.get("outcome") == "unknown":
+                unknown += 1
+                continue
             groups[(r.get("model", "?"), r.get("population", "?"))].append(r)
+    if unknown:
+        print(f"Excluded {unknown} hand(s) with unknown outcomes; summary covers classified hands only.")
     if not groups:
         print(f"no rows in {path}")
         return

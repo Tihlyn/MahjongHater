@@ -33,10 +33,9 @@ public sealed unsafe class EmjStateReader : IDisposable
     private IReadOnlyList<Tile> lastHandInPlay = [];
 
     // Tenpai ground truth: the last in-play snapshot is frozen when the phase turns to
-    // RoundEnd, then the seat banners are polled until the announcement has landed.
+    // RoundEnd, then held until the final type-29 score transfer arrives.
     private StateSnapshot? lastPlaySnapshot;
     private StateSnapshot? pendingCalibration;
-    private int calibrationTicks;
     // Deal-in ground truth: our discards against threats, labelled at hand end.
     private readonly Policy.DealInRecorder dealIns = new();
 
@@ -211,7 +210,7 @@ public sealed unsafe class EmjStateReader : IDisposable
     // pairs these lines produce are how it gets built from evidence instead.
     private void CheckRecapAgainstTheGame()
     {
-        if (this.tracker.LastRecap is not { } recap || ReferenceEquals(recap, this.lastCheckedRecap))
+        if (this.tracker.Settlement == null || this.tracker.LastRecap is not { } recap || ReferenceEquals(recap, this.lastCheckedRecap))
             return;
         this.lastCheckedRecap = recap;
 
@@ -364,9 +363,6 @@ public sealed unsafe class EmjStateReader : IDisposable
         }
     }
 
-    // Draw screens label every seat "Tenpai!"/"Noten..." in the seat banners; a win names
-    // the winner in type-32. Banners keep their last text (residue), so on a draw we wait
-    // until all three opponent banners read Tenpai/Noten — up to ~5 s — before trusting them.
     // The policy actually in charge of decisions ("learned-guarded", "V2", "Legacy"), written
     // into hand_results.csv so live matches with different policies can be compared
     // (tools/ab_summary.py). Set by the plugin once the policy stack is built.
@@ -391,26 +387,31 @@ public sealed unsafe class EmjStateReader : IDisposable
         var sink = this.CalibrationSink;
         if (this.pendingCalibration is null)
         {
-            if (this.lastPlaySnapshot is null || sink is null)
+            if (this.lastPlaySnapshot is null)
                 return;
             this.pendingCalibration = this.lastPlaySnapshot;
             this.lastPlaySnapshot = null;
-            this.calibrationTicks = 0;
         }
 
-        var winner = this.tracker.LastWinnerSeat;
+        // A displayed win precedes payment by several seconds. Never emit the default
+        // zero delta or use the win screen's unverified [1] as a relative seat.
+        if (this.tracker.Settlement is not { } settlement) return;
+        var winner = settlement.WinnerSeat;
         var banners = new string?[4];
         var paths = this.Layout.Nodes.ResultBanners;
         for (var seat = 0; seat < 4 && seat < paths.Length; seat++)
             banners[seat] = EmjScanner.ReadTextAtPath(addon, paths[seat]);
 
-        var complete = winner >= 0 || Policy.TenpaiCalibration.DrawBannersComplete(banners);
-        if (!complete && ++this.calibrationTicks < 300)
-            return;
-
-        // The last in-play snapshot of this hand; cleared below, so keep it before that.
-        var last = this.pendingCalibration;
-        var samples = Policy.TenpaiCalibration.FromRoundEnd(last, banners, winner, Policy.PolicyWeights.Default, DateTime.UtcNow);
+        var drawBannersReady = settlement.IsDraw && Policy.TenpaiCalibration.DrawBannersComplete(banners);
+        var last = this.pendingCalibration with
+        {
+            // The in-play round label can lag one hand; type 32 refreshes it at the win.
+            RoundWind = this.tracker.RoundWind,
+            HandNumber = this.tracker.HandNumber,
+        };
+        var samples = settlement.OutcomeKnown && (winner >= 0 || drawBannersReady)
+            ? Policy.TenpaiCalibration.FromRoundEnd(last, banners, winner, Policy.PolicyWeights.Default, DateTime.UtcNow)
+            : [];
         this.pendingCalibration = null;
         this.tracker.Note($"tenpai calibration: {samples.Count} sample(s) (winner={winner}, banners=[{string.Join("|", banners.Select(b => b ?? "-"))}])");
         if (samples.Count > 0)
@@ -418,13 +419,15 @@ public sealed unsafe class EmjStateReader : IDisposable
 
         var dealIns = this.dealIns.Finish(winner, this.tracker.LastWinByRon, this.tracker.RonVictimSeat, this.tracker.RonTile);
         this.tracker.Note($"deal-in calibration: {dealIns.Count} row(s), ron={this.tracker.LastWinByRon} victim={this.tracker.RonVictimSeat} tile={this.tracker.RonTile?.ToString() ?? "-"}");
-        if (dealIns.Count > 0)
+        if (dealIns.Count > 0 && settlement.OutcomeKnown
+            && (!settlement.WinByRon || this.tracker.RonTile != null))
             this.DealInSink?.Invoke(dealIns);
 
         this.HandResultSink?.Invoke(Policy.HandResult.FromRoundEnd(last, winner, this.tracker.LastWinByRon,
-            this.tracker.RonVictimSeat, winner >= 0 ? null : Policy.TenpaiCalibration.BannerMeansTenpai(banners[0]),
+            this.tracker.RonVictimSeat, drawBannersReady ? Policy.TenpaiCalibration.BannerMeansTenpai(banners[0]) : null,
             this.tracker.LastScoreDelta, this.configuration.CalibrationPopulation,
-            this.PolicyTag ?? (this.configuration.DefenseV2 ? "V2" : "Legacy"), DateTime.UtcNow));
+            this.PolicyTag ?? (this.configuration.DefenseV2 ? "V2" : "Legacy"), DateTime.UtcNow,
+            outcomeKnown: settlement.OutcomeKnown));
     }
 
     // Visible texts of the call panel (Pon/Chi/Pass, Riichi/Tsumo/…). They persist after a

@@ -79,10 +79,10 @@ public sealed record HandResult(
     // what was deciding ("learned-guarded" / "V2" / "Legacy"), so live A/B arms can be told
     // apart (tools/ab_summary.py, tools/candidate_bars.py bar3).
     public static HandResult FromRoundEnd(StateSnapshot last, int winnerSeat, bool winByRon, int ronVictimSeat,
-        bool? ourTenpaiAtDraw, int scoreDelta, string population, string policy, DateTime utc) =>
+        bool? ourTenpaiAtDraw, int scoreDelta, string population, string policy, DateTime utc, bool outcomeKnown = true) =>
         new(utc, last.RoundWind.ToString(), last.HandNumber,
             Math.Max(last.Us.Discards.Count, last.Us.DiscardCount),
-            Classify(winnerSeat, winByRon, ronVictimSeat, ourTenpaiAtDraw), scoreDelta, last.OurRiichi,
+            outcomeKnown ? Classify(winnerSeat, winByRon, ronVictimSeat, ourTenpaiAtDraw) : "unknown", scoreDelta, last.OurRiichi,
             last.Seats.Count(s => s.Seat != 0 && s.Riichi), population, policy);
 
     public static string Classify(int winnerSeat, bool winByRon, int ronVictimSeat, bool? ourTenpaiAtDraw)
@@ -143,7 +143,7 @@ public sealed class DealInRecorder
     }
 
     // Hand over: label and return the rows. `ronVictimSeat`/`winnerSeat` come from the
-    // tracker's type-32 read (-1 when the hand was a draw or a tsumo).
+    // tracker's settled type-29 transfers (victim -1 on a draw or a tsumo).
     public IReadOnlyList<DealInSample> Finish(int winnerSeat, bool winByRon, int ronVictimSeat, Tile? ronTile)
     {
         var result = new List<DealInSample>(this.rows.Count);

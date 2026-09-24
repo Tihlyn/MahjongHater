@@ -12,10 +12,10 @@ namespace MahjongHater.Tests.State;
 public class RoundRecapTests
 {
     // Riichi + Ura Dora, 40 Fu 2 Han, Ron. Hand 1m1m 678m 999m 456p 23s completed by 1s.
-    private static AtkFrame LiveRecap()
+    private static AtkFrame LiveRecap(bool winEvent = false)
     {
         var v = new int[112];
-        v[0] = 29;
+        v[0] = winEvent ? 32 : 29;
         v[1] = 26; v[2] = -26; v[3] = 0; v[4] = 0;      // per-seat deltas / 100
         v[14] = 13;                                      // tiles in the hand array
         int[] hand = [76041, 76041, 76046, 76047, 76048, 76049, 76049, 76049, 76053, 76054, 76055, 76060, 76061];
@@ -33,6 +33,21 @@ public class RoundRecapTests
             .WithString(61, "1 Han").WithString(62, "1 Han")
             .WithString(79, "Win after calling riichi.")
             .WithString(80, "Awards bonus han but is not a yaku by itself.");
+    }
+
+    [Fact]
+    public void Win_details_have_no_payment_until_the_later_score_event()
+    {
+        var t = new EventTracker();
+        t.OnRefresh(LiveRecap(winEvent: true));
+        Assert.NotNull(t.LastRecap);
+        Assert.Equal(2, t.LastRecap.Han);
+        Assert.Empty(t.LastRecap.SeatDeltas);
+        Assert.Equal(-1, t.LastWinnerSeat);
+        Assert.Null(t.Settlement);
+        t.OnRefresh(AtkFrame.OfInts(29, 26, -26, 0, 0));
+        Assert.Equal([2600, -2600, 0, 0], t.LastRecap.SeatDeltas);
+        Assert.Equal(0, t.LastWinnerSeat);
     }
 
     [Fact]

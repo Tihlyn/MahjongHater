@@ -1,0 +1,285 @@
+{
+  "source": "Cartographer monitor-events.jsonl, Emj refreshes, 2026-09-23; first nine values, player names omitted",
+  "hands": [
+    {
+      "events": [
+        {
+          "utc": "2026-09-23T13:13:38.5466266Z",
+          "seq": 1788,
+          "count": 73,
+          "values": [
+            31,
+            2,
+            1,
+            0,
+            0,
+            5,
+            1,
+            0,
+            null
+          ]
+        },
+        {
+          "utc": "2026-09-23T13:13:41.5644932Z",
+          "seq": 1791,
+          "count": 109,
+          "values": [
+            32,
+            null,
+            "East 1 North Wind",
+            0,
+            null,
+            "Called Ron",
+            "30 Fu 2 Han",
+            20,
+            0
+          ]
+        },
+        {
+          "utc": "2026-09-23T13:13:46.2490786Z",
+          "seq": 1802,
+          "count": 5,
+          "values": [
+            29,
+            20,
+            0,
+            -20,
+            0
+          ]
+        }
+      ],
+      "winner": 0,
+      "victim": 2,
+      "outcome": "win-ron",
+      "delta": 2000
+    },
+    {
+      "events": [
+        {
+          "utc": "2026-09-23T13:20:28.8550508Z",
+          "seq": 4040,
+          "count": 73,
+          "values": [
+            31,
+            0,
+            0,
+            0,
+            1,
+            6,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "utc": "2026-09-23T13:20:30.4911032Z",
+          "seq": 4047,
+          "count": 5,
+          "values": [
+            29,
+            10,
+            0,
+            -30,
+            10
+          ]
+        }
+      ],
+      "winner": -1,
+      "victim": -1,
+      "outcome": "draw",
+      "delta": 1000
+    },
+    {
+      "events": [
+        {
+          "utc": "2026-09-23T13:24:25.4763525Z",
+          "seq": 4665,
+          "count": 73,
+          "values": [
+            31,
+            3,
+            0,
+            0,
+            0,
+            -1,
+            0,
+            0,
+            3
+          ]
+        },
+        {
+          "utc": "2026-09-23T13:24:28.4981782Z",
+          "seq": 4668,
+          "count": 109,
+          "values": [
+            32,
+            0,
+            "East 4 West Wind",
+            0,
+            null,
+            "Called Tsumo",
+            "30 Fu 4 Han",
+            79,
+            1
+          ]
+        },
+        {
+          "utc": "2026-09-23T13:24:33.190968Z",
+          "seq": 4679,
+          "count": 5,
+          "values": [
+            29,
+            -40,
+            -21,
+            92,
+            -21
+          ]
+        }
+      ],
+      "winner": 2,
+      "victim": -1,
+      "outcome": "tsumo-loss",
+      "delta": -4000
+    },
+    {
+      "events": [
+        {
+          "utc": "2026-09-23T13:26:25.7584298Z",
+          "seq": 5252,
+          "count": 73,
+          "values": [
+            31,
+            2,
+            0,
+            0,
+            0,
+            -1,
+            0,
+            0,
+            "Pass"
+          ]
+        },
+        {
+          "utc": "2026-09-23T13:26:28.7749173Z",
+          "seq": 5255,
+          "count": 109,
+          "values": [
+            32,
+            0,
+            "South 1 South Wind",
+            0,
+            null,
+            "Called Ron",
+            "30 Fu 2 Han",
+            20,
+            0
+          ]
+        },
+        {
+          "utc": "2026-09-23T13:26:33.4582193Z",
+          "seq": 5266,
+          "count": 5,
+          "values": [
+            29,
+            0,
+            0,
+            20,
+            -20
+          ]
+        }
+      ],
+      "winner": 2,
+      "victim": 3,
+      "outcome": "other-ron",
+      "delta": 0
+    },
+    {
+      "events": [
+        {
+          "utc": "2026-09-23T13:27:34.4090932Z",
+          "seq": 5595,
+          "count": 73,
+          "values": [
+            31,
+            2,
+            0,
+            0,
+            0,
+            -1,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "utc": "2026-09-23T13:27:37.4431229Z",
+          "seq": 5598,
+          "count": 109,
+          "values": [
+            32,
+            0,
+            "South 2 North Wind",
+            0,
+            null,
+            "Called Ron",
+            "40 Fu 4 Han Mangan",
+            80,
+            0
+          ]
+        },
+        {
+          "utc": "2026-09-23T13:27:43.3430404Z",
+          "seq": 5611,
+          "count": 5,
+          "values": [
+            29,
+            0,
+            80,
+            0,
+            -80
+          ]
+        }
+      ],
+      "winner": 1,
+      "victim": 3,
+      "outcome": "other-ron",
+      "delta": 0
+    },
+    {
+      "events": [
+        {
+          "utc": "2026-09-23T13:30:08.3622904Z",
+          "seq": 6421,
+          "count": 73,
+          "values": [
+            31,
+            0,
+            0,
+            0,
+            1,
+            7,
+            0,
+            0,
+            3
+          ]
+        },
+        {
+          "utc": "2026-09-23T13:30:10.0631775Z",
+          "seq": 6428,
+          "count": 5,
+          "values": [
+            29,
+            -15,
+            5,
+            5,
+            -15
+          ]
+        }
+      ],
+      "winner": -1,
+      "victim": -1,
+      "outcome": "draw",
+      "delta": -1500
+    }
+  ]
+}

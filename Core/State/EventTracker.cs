@@ -255,8 +255,8 @@ public sealed class EventTracker
 
     public IReadOnlyList<string> RecentNotes(int tail) => this.noteRing.TakeLast(Math.Clamp(tail, 1, NoteRingCap)).ToList();
 
-    // Relative seat named by the last type-32 win screen this round; -1 until then (a
-    // draw never sets it). Consumed by the tenpai calibration recorder.
+    // Winner resolved from a win announcement plus the type-29 transfers.
+    // -1 before settlement, on draws, or when the result is ambiguous.
     public int LastWinnerSeat { get; private set; } = -1;
 
     public bool RiichiDeclared => this.riichiDeclared;
@@ -265,6 +265,10 @@ public sealed class EventTracker
 
     // Our point change announced by the last type-29 score screen (0 until one arrives).
     public int LastScoreDelta { get; private set; }
+
+    public HandSettlement? Settlement { get; private set; }
+    private bool? resultWinByRon;
+    private bool resultIsDraw;
 
     public int LossesThisSession { get; private set; }
 
@@ -511,39 +515,50 @@ public sealed class EventTracker
                 break;
             }
 
-            case 29: // the round recap: per-seat deltas, the winner's hand, and the game's
-                     // own yaku list with per-yaku han (docs/research/ADDON_PROTOCOL_2026_09_23.md)
+            case 31: // conclusion: observed draw layout has mode [1]=0 and banner [4]=1
+                if (this.Settlement == null && f.IsInt(1) && f.IsInt(4))
+                    this.resultIsDraw = f.Int(1) == 0 && f.Int(4) == 1;
+                break;
+
+            case 29: // four final per-seat point transfers, in hundreds
             {
                 this.roundEnded = true;
                 this.pendingAnswer = null;
-                this.LastRecap = RoundRecapReader.Read(f);
-                if (this.LastRecap is { } recap)
-                    this.Note($"recap: {recap.WinMethod} {recap.Score}; yaku [{string.Join(", ", recap.Yaku.Select(y => $"{y.Name} {y.Han}"))}]; "
-                              + $"hand [{string.Join(" ", recap.Hand)}] + {recap.WinningTile?.ToString() ?? "-"}");
                 this.ClearCallWindow("score (type-29)");
-                var delta = f.Int(1) * 100;
-                this.LastScoreDelta = delta;
-                if (delta >= 100)
-                    this.WinsThisSession++;
-                else if (delta <= -100)
-                    this.LossesThisSession++;
+                var settlement = HandSettlement.Read(f, this.resultWinByRon, this.resultIsDraw);
+                if (settlement == null || this.Settlement != null) break;
+                this.Settlement = settlement;
+                this.LastScoreDelta = settlement.SeatDeltas[0];
+                this.LastWinnerSeat = settlement.WinnerSeat;
+                this.LastWinByRon = settlement.WinByRon;
+                if (settlement.RonVictimSeat != this.RonVictimSeat) this.RonTile = null;
+                this.RonVictimSeat = settlement.RonVictimSeat;
+                if (this.LastRecap is { } recap)
+                    this.LastRecap = recap with { SeatDeltas = settlement.SeatDeltas };
+                if (settlement.OutcomeKnown && settlement.WinnerSeat == 0) this.WinsThisSession++;
+                else if (this.LastScoreDelta < 0) this.LossesThisSession++;
+                this.Note($"settlement: winner={settlement.WinnerSeat} ron={settlement.WinByRon} "
+                    + $"victim={settlement.RonVictimSeat} draw={settlement.IsDraw} known={settlement.OutcomeKnown} "
+                    + $"deltas=[{string.Join(",", settlement.SeatDeltas)}]");
                 break;
             }
 
-            case 32: // win screen: [1]=winner seat, [2]="East 3 South Wind", [3]=1 when the
+            case 32: // win screen: [1] is NOT a winner seat; [2]="East 3 South Wind", [3]=1 when the
                      // winner is the dealer, [6]="40 Fu 3 Han [Mangan]", [7]=points/100,
                      // [8]=1 on tsumo (all four confirmed against 23 win screens, 2026-09-22).
             {
                 this.roundEnded = true;
                 this.pendingAnswer = null;
+                // A repeated win screen must not overwrite an already settled result.
+                if (this.Settlement != null) break;
                 this.LastWinScreen = ParseWinScreen(f);
-                // [1] is sometimes an empty string rather than a seat. Int() then yields 0,
-                // which reads as "seat 0 won" - us - and that is how a 3,000 point loss was
-                // reported as our own win on 2026-09-23.
-                this.LastWinnerSeat = f.IsInt(1) && f.Int(1) is >= 0 and <= 3 ? f.Int(1) : -1;
-                this.LastWinByRon = this.discardSinceTurnAdvance && this.LastWinnerSeat >= 0 && this.LastWinnerSeat != this.lastDiscardSeat;
-                this.RonVictimSeat = this.LastWinByRon ? this.lastDiscardSeat : -1;
-                this.RonTile = this.LastWinByRon ? this.lastDiscardTile : null;
+                this.LastRecap = RoundRecapReader.Read(f);
+                this.resultIsDraw = false;
+                this.resultWinByRon = f.IsInt(8) && f.Int(8) is 0 or 1 ? f.Int(8) == 0 : null;
+                this.LastWinnerSeat = -1; // [1] is commonly zero for opponents too.
+                this.LastWinByRon = this.resultWinByRon == true;
+                this.RonVictimSeat = this.LastWinByRon && this.discardSinceTurnAdvance ? this.lastDiscardSeat : -1;
+                this.RonTile = this.RonVictimSeat >= 0 ? this.lastDiscardTile : null;
                 this.ClearCallWindow("win screen (type-32)");
                 var round = f.Str(2) ?? string.Empty;
                 if (ParseHandNumber(round) is { } handNo)
@@ -828,6 +843,11 @@ public sealed class EventTracker
         this.answeredCallFromSeat = -1;
         this.LastWinnerSeat = -1;
         this.LastScoreDelta = 0;
+        this.Settlement = null;
+        this.resultWinByRon = null;
+        this.resultIsDraw = false;
+        this.LastRecap = null;
+        this.LastWinScreen = null;
         this.LastWinByRon = false;
         this.RonVictimSeat = -1;
         this.RonTile = null;

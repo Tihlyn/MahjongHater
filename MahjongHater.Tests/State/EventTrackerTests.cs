@@ -289,7 +289,8 @@ public class EventTrackerTests
         t.OnRefresh(AtkFrame.OfInts([21, 13, 0, .. new int[19]]), T0);  // mid-round refresh
         Assert.NotEmpty(t.SeatDiscardsOf(1));
 
-        t.OnRefresh(AtkFrame.OfInts([29, 12, 0, 0, 0]), T0);             // score screen: +1200
+        t.OnRefresh(AtkFrame.OfInts(32, 0, 0, 0, 0, 0, 0, 0, 0), T0);
+        t.OnRefresh(AtkFrame.OfInts([29, 12, -12, 0, 0]), T0);         // score screen: +1200
         Assert.Equal(1, t.WinsThisSession);
         t.OnRefresh(AtkFrame.OfInts([21, 13, 0, .. new int[19]]), T0);  // genuine deal
         Assert.Empty(t.SeatDiscardsOf(1));
@@ -553,10 +554,7 @@ public class EventTrackerTests
 
 
 
-    // [1] of a win screen is sometimes an empty string rather than a seat index. Int() then
-    // yields 0, which reads as "seat 0 won" - us - and on 2026-09-23 a 3,000 point loss was
-    // reported as our own win, which in turn made the recap check compare our hand against
-    // the winner's.
+    // [1] of a win screen is NOT a winner seat, whether it is typed Int or String.
     [Fact]
     public void A_win_screen_without_a_seat_index_leaves_the_winner_unknown()
     {
@@ -566,7 +564,7 @@ public class EventTrackerTests
 
         var named = new EventTracker();
         named.OnRefresh(AtkFrame.OfInts([32, 2, .. new int[20]]).WithString(2, "East 1 East Wind"), T0);
-        Assert.Equal(2, named.LastWinnerSeat);
+        Assert.Equal(-1, named.LastWinnerSeat);
     }
 
 

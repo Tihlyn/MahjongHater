@@ -4,7 +4,7 @@ namespace MahjongHater.Core.State;
 // touches game memory and tests can replay recorded frames.
 public sealed class AtkFrame
 {
-    // The round recap (state 29) is the deepest read: its ura dora sits at [104], behind the
+    // The win details (type 32) are the deepest read: ura dora sits at [104], behind the
     // three 18-slot yaku arrays that end at [96] (docs/research/ADDON_PROTOCOL_2026_09_23.md).
     // Everything the tracker needs otherwise is below [42].
     public const int MaxCopied = 112;

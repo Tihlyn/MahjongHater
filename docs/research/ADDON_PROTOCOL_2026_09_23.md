@@ -137,16 +137,21 @@ single correlated incident.
 
 ## The round recap carries the game's own scoring, in full
 
-State 29 (`AtkValues[0] == 29`) is the end-of-round recap, and its values hold everything the
-game used to score the hand. **No hovering is needed** - the hoverable tooltips on screen are
-just these strings; they are already in the value array. Captured live on 2026-09-23:
+The persistent addon array at state 29 holds the scoring details left by the preceding
+type-32 refresh. **Correction, 2026-09-24:** the actual type-29 event has only five values:
+the header and four score transfers. Type 32 supplies the 109-value win details several
+seconds earlier. Do not read the persistent array's leftover tail as a type-29 payload.
+No hovering is needed for the details. Captured live on 2026-09-23:
 
 | index | type | meaning |
 |---|---|---|
-| 0 | Int | state code, 29 |
-| 1–4 | Int | per-seat score delta / 100 (`26` = +2,600) |
+| 0 | Int | refresh type 32 (details), later 29 (transfers) |
+| 1–4 | Int | **type 29 only:** per-seat score delta / 100 (`26` = +2,600) |
+| 1 | null / Int | **type 32:** not the winner's seat; often zero even for opponents |
+| 4 | String | **type 32:** winner's displayed name |
 | 5 | ConstString | how it was won (`"Called Ron"`) |
 | 6 | String | `"40 Fu 2 Han"` — the total already used by the scoring oracle |
+| 8 | Int | **type 32:** 0 = ron, 1 = tsumo |
 | 14 | UInt | number of tiles in the hand array |
 | 24 … 24+n-1 | Int | the winner's hand, tile icon ids |
 | 41 | Int | the winning tile |
@@ -170,6 +175,11 @@ This turns every win in every match into a verification of the whole scoring pat
 winner's actual hand (against our hand read, at the exact moment our read matters most),
 the yaku list **yaku by yaku** with per-yaku han, the fu/han total, and the dora counts.
 Yesterday's oracle could only check the payout table.
+
+For seat attribution, require a recognized win announcement and an unambiguous type-29
+payment: one positive seat and one payer for ron, or three payers for tsumo. Type-31 draw
+announcements have `[1]=0, [4]=1` in the capture; a positive draw payment is not a win.
+See [hand logging correction](HAND_LOGGING_2026_09_24.md) for the evidence and limitations.
 
 ## The chi shape chooser, measured 2026-09-23
 

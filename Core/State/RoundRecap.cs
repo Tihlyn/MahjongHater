@@ -34,9 +34,9 @@ public sealed record RoundRecap(
     public bool ParsedCleanly => this.Yaku.Count > 0 && this.Yaku.Sum(y => y.Han) == this.Han;
 }
 
-// Decodes the state-29 round recap. The layout was read off the live client on 2026-09-23
-// and confirmed by reconstructing a valid winning hand from it, rather than by assuming an
-// offset table (docs/research/ADDON_PROTOCOL_2026_09_23.md).
+// Decodes type-32 win details (and legacy combined type-29 addon-array captures).
+// The type-29 event itself carries only the later score transfers. See the measured
+// layout in docs/research/ADDON_PROTOCOL_2026_09_23.md.
 //
 // This is the game stating, for every win in every match: the winner's actual hand, the yaku
 // it awarded with per-yaku han, the fu/han total, the dora, and what each seat paid. It is
@@ -61,7 +61,7 @@ public static class RoundRecapReader
     public static RoundRecap? Read(AtkFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
-        if (frame.EventType != 29)
+        if (frame.EventType is not (29 or 32))
             return null;
 
         // A draw carries no hand and no yaku; only a scored win is worth comparing.
@@ -93,7 +93,7 @@ public static class RoundRecapReader
             score.Trim(), fu, han, hand,
             frame.IsInt(WinningTile) && TileHelpers.TryTileFromIconId(frame.Int(WinningTile), out var won) ? won : null,
             yaku,
-            [.. Enumerable.Range(1, 4).Select(i => frame.Int(i) * 100)],
+            frame.EventType == 29 ? [.. Enumerable.Range(1, 4).Select(i => frame.Int(i) * 100)] : [],
             Indicators(frame, DoraCount, DoraFirst),
             Indicators(frame, UraCount, UraFirst));
     }
