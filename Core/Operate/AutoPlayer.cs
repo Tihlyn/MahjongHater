@@ -82,6 +82,8 @@ public sealed class AutoPlayer
         };
     }
 
+    private readonly IncompleteMeldWatch incompleteMelds = new();
+    private long loggedWinDisagreement = -1;
     private PendingDispatch? pending;
     private bool dispatchTimedOut;
     private double? lastAckMs;
@@ -215,6 +217,7 @@ public sealed class AutoPlayer
 
         if (state.Phase == GamePhase.RoundEnd)
         {
+            this.incompleteMelds.Reset();
             this.pendingFingerprint = null;
             if (this.recapSinceUtc == default)
                 this.recapSinceUtc = now;
@@ -224,6 +227,11 @@ public sealed class AutoPlayer
 
         this.recapSinceUtc = default;
 
+        if (this.incompleteMelds.Observe(state, now))
+        {
+            this.logWarning("[AutoPlay] Meld reconstruction remains incomplete; preserving the native turn and recording evidence.");
+            this.DumpStall(state, TimeSpan.FromSeconds(5), "incomplete meld reconstruction");
+        }
         this.ActOnDecision(state, now);
         this.WatchForStall(state, now);
     }
@@ -272,8 +280,10 @@ public sealed class AutoPlayer
         // (DecisionPolicy), but the hand is recorded so the read can be repaired: on
         // 2026-09-22 exactly this situation was answered with Pass and the hand ran out as a
         // draw (docs/research/WIN_OFFERS_2026_09_22.md).
-        if (choice.Steps.FirstOrDefault(s => s.Stage == DecisionPolicy.WinReadDisagrees) is { } disagreement)
+        if (choice.Steps.FirstOrDefault(s => s.Stage == DecisionPolicy.WinReadDisagrees) is { } disagreement
+            && this.loggedWinDisagreement != this.reader.Tracker.CallWindowGeneration)
         {
+            this.loggedWinDisagreement = this.reader.Tracker.CallWindowGeneration;
             this.logWarning($"[AutoPlay] {disagreement.Display}");
             this.Record($"win read disagrees: {choice.Kind} offered on a hand we score as no win");
         }
@@ -432,6 +442,14 @@ public sealed class AutoPlayer
 
     private void WatchForStall(StateSnapshot state, DateTime now)
     {
+        // Reconstruction failures have their own diagnostic watch. Do not run a
+        // blind Pass/discard/recap ladder against missing data or a winning prompt.
+        if (!RecoveryAllowed(state))
+        {
+            this.stalled = false;
+            this.recoveryStep = 0;
+            return;
+        }
         var waitingOnUs = state.Phase is GamePhase.OurTurn or GamePhase.CallPrompt or GamePhase.SelfDeclare;
         var budget = waitingOnUs ? StallAfterOurs : StallAfterOthers;
         var idle = now - this.lastChangeUtc;
@@ -475,6 +493,10 @@ public sealed class AutoPlayer
                 break;
         }
     }
+
+    internal static bool RecoveryAllowed(StateSnapshot state)
+        => state.Us.MeldsVerified && !state.AwaitingOurWin
+           && !state.Can(LegalAction.Ron) && !state.Can(LegalAction.Tsumo);
 
     // The draw slot first (tsumogiri is always legal on our turn), then any slot the
     // game will take a click on. A registered activation is NOT proof that a discard is
@@ -520,18 +542,20 @@ public sealed class AutoPlayer
         }
     }
 
-    private void DumpStall(StateSnapshot state, TimeSpan idle)
+    private void DumpStall(StateSnapshot state, TimeSpan idle, string? readProblem = null)
     {
         var publication = this.analysis.Latest;
+        var cause = readProblem ?? $"no snapshot change for {idle.TotalSeconds:F0} s";
+        var label = readProblem == null ? $"STALL #{this.StallsThisSession}" : "READ FAILURE";
         var lines = new List<string>(128)
         {
-            $"=== STALL #{this.StallsThisSession} {DateTime.Now:O} — no snapshot change for {idle.TotalSeconds:F0} s ===",
+            $"=== {label} {DateTime.Now:O} — {cause} ===",
             $"phase={state.Phase} stateCode={state.RawStateCode} seq={state.Sequence} legal={state.Legal} wall={state.WallRemaining} layoutHealthy={state.LayoutHealthy}",
             $"hand=[{string.Join(" ", state.Hand)}] drawn={state.DrawnTile?.ToString() ?? "-"} melds=[{string.Join(" | ", state.OurMelds.Select(m => $"{m.Type} {string.Join(" ", m.Tiles)}"))}]",
             $"ourRiichi={state.OurRiichi} riichiIndex={state.Us.RiichiDiscardIndex} winds={state.RoundWind}/{state.SeatWind} dealer={state.DealerSeat}",
             $"callWindow: options=[{string.Join(",", state.CallOptions)}] tile={state.CallTile?.ToString() ?? "-"} from={state.CallFromSeat} shapes=[{string.Join(" | ", state.CallShapes.Select(m => string.Join(" ", m.Tiles)))}]",
             $"tracker: callWindowActive={this.reader.Tracker.CallWindowActive} isClaim={this.reader.Tracker.CallIsClaim} winAnswerPending={this.reader.Tracker.WinAnswerPending} riichiDeclared={this.reader.Tracker.RiichiDeclared} roundEnded={this.reader.Tracker.RoundEnded}",
-            $"seats: {string.Join(" | ", state.Seats.Select(s => $"{s.Seat}: {s.Discards.Count}/{s.DiscardCount} discards riichi={s.Riichi} melds={s.Melds.Count} score={s.Score}"))}",
+            $"seats: {string.Join(" | ", state.Seats.Select(s => $"{s.Seat}: {s.Discards.Count}/{s.DiscardCount} discards riichi={s.Riichi} melds={s.Melds.Count}/{s.MeldCount} verified={s.MeldsVerified} score={s.Score}"))}",
             $"notes: [{string.Join("; ", state.Notes)}]",
         };
 
@@ -574,13 +598,15 @@ public sealed class AutoPlayer
             this.logWarning($"[AutoPlay] stall dump failed: {ex.Message}");
         }
 
-        var headline = $"STALL #{this.StallsThisSession}: {state.Phase} for {idle.TotalSeconds:F0} s, decision={(publication?.Choice?.Kind.ToString() ?? "none")} → {path}";
+        var headline = $"{label}: {state.Phase}, {cause}, decision={(publication?.Choice?.Kind.ToString() ?? "none")} → {path}";
         this.Record(headline);
         this.logWarning($"[AutoPlay] {headline}");
     }
 
     private void ResetProgress()
     {
+        this.incompleteMelds.Reset();
+        this.loggedWinDisagreement = -1;
         this.pendingFingerprint = null;
         this.actedFingerprint = null;
         this.pending = null;

@@ -21,7 +21,7 @@ public sealed class Meld
         }
 
         this.Type = type;
-        this.Tiles = tiles.Select(TileHelpers.Normalize).OrderBy(tile => tile).ToArray();
+        this.Tiles = tiles.OrderBy(tile => tile).ToArray();
         this.Opened = type switch
         {
             MeldType.Ankan or MeldType.Pair => false,

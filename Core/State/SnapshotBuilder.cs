@@ -21,7 +21,8 @@ public sealed class SnapshotBuilder
             seats[seat] = BuildSeat(seat, s, t, notes);
 
         var melds = seats[0].Melds;
-        var m = melds.Count;
+        var m = s.Us.MeldCount is >= 0 and <= 4 ? s.Us.MeldCount.Value : melds.Count;
+        var meldsVerified = seats[0].MeldsVerified;
         var closedSlots = s.ClosedTiles.ToList();
         var drawn = s.DrawnTile;
 
@@ -56,10 +57,10 @@ public sealed class SnapshotBuilder
         // the meld list disagree, and every decision built on it is guesswork - the policy
         // used to discover this silently, deep inside the win evaluation, and answer a Ron
         // window with Pass (docs/research/WIN_OFFERS_2026_09_22.md).
-        var handTotal = hand.Count + (3 * melds.Count);
+        var handTotal = hand.Count + (3 * m);
         if (handTotal is not (13 or 14) && s.StateCode != layout.StateCodes.Deal
             && s.StateCode != layout.StateCodes.Win && s.StateCode != layout.StateCodes.PostWin)
-            notes.Add($"hand does not add up: {hand.Count} closed + {melds.Count} meld(s) = {handTotal}, expected 13 or 14");
+            notes.Add($"hand does not add up: {hand.Count} closed + {m} meld(s) = {handTotal}, expected 13 or 14");
 
         var callTile = t.CallWindowActive && t.CallIsClaim ? t.CallTile : null;
         var options = t.CallWindowActive ? t.CallOptions.ToList() : [];
@@ -135,6 +136,11 @@ public sealed class SnapshotBuilder
         if (discardableTiles is { Count: 0 })
             legal &= ~LegalAction.Discard;
 
+        // Keep the native turn and draw visible even when composition is missing.
+        // Strategic actions require complete melds; a confirmed win/pass remains usable.
+        if (!meldsVerified)
+            legal &= LegalAction.Ron | LegalAction.Tsumo | LegalAction.Pass;
+
         var countsMapped = s.Seats.Any(x => x.DiscardCount is not null);
         var wall = s.WallRemaining
                    ?? (t.EventWallRemaining < 70 ? t.EventWallRemaining : (countsMapped ? Math.Max(0, 70 - s.TotalDiscards) : t.EventWallRemaining));
@@ -162,7 +168,7 @@ public sealed class SnapshotBuilder
             CallFromSeat: callTile is null ? -1 : t.CallFromSeat,
             CallOptions: options,
             Ruleset: ruleset,
-            LayoutHealthy: healthy)
+            LayoutHealthy: healthy && meldsVerified)
         {
             Notes = notes,
             HandNumber = t.HandNumber,
@@ -201,46 +207,7 @@ public sealed class SnapshotBuilder
     private static SeatState BuildSeat(int seat, DecodedStruct s, EventTracker t, List<string> notes)
     {
         var panel = s.Seats[seat];
-        var eventMelds = t.SeatMeldsOf(seat);
-        var melds = new List<Meld>(4);
-        if (panel.MeldCount is { } count)
-        {
-            var chis = eventMelds.Where(x => x.IsSequence).ToList();
-            var chiUsed = 0;
-            for (var i = 0; i < count; i++)
-            {
-                var sm = i < panel.Melds.Count ? panel.Melds[i] : null;
-                if (sm is null)
-                {
-                    if (i < eventMelds.Count)
-                        melds.Add(eventMelds[i]);
-                    else
-                        notes.Add($"seat {seat} meld {i}: not in struct or events");
-                    continue;
-                }
-
-                if (sm.IsChi)
-                {
-                    if (chiUsed < chis.Count)
-                        melds.Add(chis[chiUsed++]);
-                    else
-                        notes.Add($"seat {seat} meld {i}: chi composition unknown (no type-13 seen)");
-                    continue;
-                }
-
-                // Pon/kan: prefer the event's tiles (keeps red fives) when the kind matches.
-                var fromEvents = eventMelds.FirstOrDefault(x => !x.IsSequence && sm.Tile is { } st && TileHelpers.SameKind(x.Tiles[0], st)
-                                                                 && !melds.Contains(x));
-                if (fromEvents is not null)
-                    melds.Add(fromEvents);
-                else if (sm.Tile is { } tile)
-                    melds.Add(Meld.MakePon(tile, true));
-            }
-        }
-        else
-        {
-            melds.AddRange(eventMelds);
-        }
+        var melds = MeldReconciler.Resolve(seat, panel, t.MeldObservations(seat), notes, out var verifiedMelds);
 
         var discards = s.SeatDiscards[seat] ?? t.SeatDiscardsOf(seat).ToList();
         var verified = panel.DiscardCount is not { } dc || discards.Count == dc;
@@ -252,6 +219,8 @@ public sealed class SnapshotBuilder
         var order = t.SeatDiscardOrderOf(seat);
         return new SeatState(seat, discards, melds, riichi, riichiIndex, panel.Score ?? 0)
         {
+            MeldCount = panel.MeldCount ?? -1,
+            MeldsVerified = verifiedMelds,
             DiscardsVerified = verified,
             DiscardCount = panel.DiscardCount ?? -1,
             DiscardOrder = order.Count == discards.Count ? order.ToList() : [],
@@ -323,6 +292,7 @@ public sealed class SnapshotBuilder
         {
             sb.Append(seat.Discards.Count).Append(':').Append(seat.DiscardCount).Append(':').Append(seat.Riichi ? 1 : 0)
               .Append(':').Append(seat.Score).Append(':');
+            sb.Append("melds=").Append(seat.MeldCount).Append(':').Append(seat.MeldsVerified).Append(';');
             foreach (var meld in seat.Melds)
                 sb.Append(meld.Type).Append('=').Append(string.Join(",", meld.Tiles)).Append(';');
             sb.Append('/');

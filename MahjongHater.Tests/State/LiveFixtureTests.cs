@@ -136,16 +136,17 @@ public class LiveFixtureTests
     }
 
     [Fact]
-    public void Melds_fixture_without_events_still_builds_pons_from_the_struct()
+    public void Melds_fixture_without_events_preserves_count_without_guessing_pon_or_kan()
     {
         var d = StructFixture.DecodeFixture("emj_struct_round6_melds", out _);
         var t = new EventTracker();
         t.OnTick(d, T0);
         var s = new SnapshotBuilder().Build(d, t, StructFixture.Layout, RulesetOptions.Default);
         var toimen = s.Seats[2];
-        Assert.Equal(2, toimen.Melds.Count);
-        Assert.Equal(Tile.Parse("5s"), toimen.Melds[0].Tiles[0]);
-        Assert.Equal(Tile.Parse("8m"), toimen.Melds[1].Tiles[0]);
+        Assert.Equal(2, toimen.MeldCount);
+        Assert.Empty(toimen.Melds);
+        Assert.False(toimen.MeldsVerified);
+        Assert.Contains(s.Notes, n => n.Contains("unresolved composition"));
         Assert.False(toimen.DiscardsVerified);
         Assert.Contains(s.Notes, n => n.Contains("seat 2 discards"));
     }

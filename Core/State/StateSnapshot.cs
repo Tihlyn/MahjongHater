@@ -44,6 +44,11 @@ public sealed record SeatState(
     // count for this seat (events missed, e.g. plugin loaded mid-round).
     public bool DiscardsVerified { get; init; } = true;
 
+    // Preserve native counts even when an event/composition is missing. Never silently
+    // turn a missing set into an opponent turn or invent a pon from a tile index.
+    public int MeldCount { get; init; } = -1;
+    public bool MeldsVerified { get; init; } = true;
+
     // Struct discard count when known (-1 otherwise); authoritative even when Discards is short.
     public int DiscardCount { get; init; } = -1;
 

@@ -38,7 +38,7 @@ public class EmjLayoutTests
         Assert.Equal([0x0504, 0x07E4, 0x0AC4, 0x0DA4], layout.PointDifferences);
         Assert.Equal(4, layout.MeldTileIndexSlots);
         Assert.Equal(-1, layout.MeldTileIndexEmpty);
-        Assert.Equal(255, layout.MeldTileIndexChi);
+        Assert.Equal(255, layout.MeldTileIndexUnknown);
         Assert.Equal(255, layout.RiichiNone);
     }
 

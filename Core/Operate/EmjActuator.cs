@@ -163,6 +163,8 @@ public sealed unsafe class EmjActuator
     // Clicks a hand slot holding the tile, by struct semantics (EmjStateReader.FindSlotNodeForTile).
     public OperateResult DiscardTile(Tile tile)
     {
+        if (this.reader.Current is { Us.MeldsVerified: false })
+            return OperateResult.Fail("meld composition is incomplete");
         var addon = this.GetAddon();
         if (addon == null)
             return OperateResult.Fail("Emj addon not open");

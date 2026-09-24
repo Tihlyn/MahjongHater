@@ -54,13 +54,13 @@ node/tween data that churns every frame (ignore).
 | `+0x030`, `+0x034` | `int32`, `int32` | Point-difference display copies | *plausible* | Equal `+0x2CC`. |
 | `+0x038` | `float[4]` | Tween params | — | |
 | `+0x050` … `+0x23F` | `ptr[62]` | Node pointers: hand tile slots (14, listed twice for opponents, two distinct sets for us: face-up and face-down), discard-pile slots, meld slots. Grouping by role is **not** established. | — | Pool addresses only. |
-| `+0x240` | `int32[4]` | **Meld i tile index** (34-index, same space as icon − 76041). `-1` = empty. **255 for a chi** (tiles not stored). Reset to `-1` at round end. | **verified** | Seat 2 pon 7s → `0xA38 = 24`; pon Wh → `31`; pon G → `32`; seat 3 pon 5p → `0xD18 = 13`; chi 7-8-9p → `0xA3C = 255`. All matched the type-13 meld event `[6]`. |
+| `+0x240` | `int32[4]` | **Meld i tile index** (34-index, same space as icon − 76041). `-1` = empty. **255 for chi or concealed kan** (composition comes from events; see `research/CLOSED_KAN_2026_09_23.md`). Reset to `-1` at round end. | **verified** | Seat 2 pon 7s → `0xA38 = 24`; pon Wh → `31`; pon G → `32`; seat 3 pon 5p → `0xD18 = 13`; chi 7-8-9p → `0xA3C = 255`. All matched the type-13 meld event `[6]`. |
 | `+0x250` | `byte[4]` | **Meld i claimed-from direction**, relative to the caller in turn order: `1` = shimocha (next seat), `2` = toimen, `3` = kamicha (previous seat). **Not reset at round end** — only meaningful for `i < meldCount`. | **verified** | Seat 2 pon of seat 1's 7s → `3`; seat 3 pon of our 5p → `1`; seat 2 pon of our G → `2`. Equals type-13 event `[5]`. |
 | `+0x254` | 4 bytes | Uninitialised garbage | — | |
 | `+0x258` … `+0x2BF` | `ptr[13]` | Node pointers | — | |
 | `+0x2C0` | `int32` | Garbage-looking constant (differs per seat) | unknown | |
 | `+0x2C4` | `byte` | **Closed tile count** excluding the drawn/claimed tile (13 at deal; 11 right after a pon/chi, 10 after the following discard; 7 with two melds). Set to 0 for non-winners at the win screen; animates 0→4→8→12→13 during the deal for opponents. | **verified** | `0xABC 0D→0B→0A`, `08→07`; `0x7DC 00→04→08→0C→0D`. |
-| `+0x2C5` | `byte` | **Open meld count** | **verified** | `0xABD 00→01→02`, reset to 0 at round end. |
+| `+0x2C5` | `byte` | **Declared meld count**, including concealed kans | **verified** | `0xABD 00→01→02`, reset to 0 at round end. |
 | `+0x2C6` | `byte` | **Discard count** (increments per discard; **does not** decrement when the discard is claimed) | **verified** | Every discard `+1`; `0x7DE` stayed at 12 when seat 2 pon'd seat 1's 12th discard. |
 | `+0x2C7` | `byte` | **Riichi discard index** (0-based index into the seat's discards), `0xFF` when not in riichi | **verified** | `0x7DF FF→07` and `0xABF FF→0B` at the riichi declarations (state 12); reset to `FF` on deal. |
 | `+0x2C8` | `int32` | **Score** | **verified** | 25000 ×4 at start; 19000/18100/41900/21000 after round 2 (sum 100000); later 17000/18100/43500/21400 matched the score text nodes. |
@@ -90,7 +90,8 @@ Absolute offsets for the four seats (seat 0..3):
 | Opponent discard tiles | `AtkValues` refresh type **8**: `[1]` = seat, `[2]` = tile icon (`EventTracker`) | Fires once per discard for every seat incl. us. Opponent type-5/20 `[3]` is the 76041 placeholder. The struct only counts them (`+0x2C6`). |
 | Own discard | type 8 with `[1]=0`, or the ButtonClick callback `[15, icon]` | |
 | Draw / wall | type **5**: `[1]` = live wall remaining (70 → 0), `[2]` = seat that drew, `[3]` = drawn icon for us (placeholder for others) | `SnapshotBuilder` uses the type-5 wall, else `70 − Σ discard counts`. The centre counter node `1/46/105/{2,3}/2` (two `Counter` digits) shows the same number. |
-| Meld composition | type **13**: `[1]` caller, `[3]` 4=pon / 5=chi, `[5]` from-direction (as `+0x250`), `[6]` tile index or 255, `[7]` tile count, `[8..10]` tile icons (chi: claimed tile first) | Only source for chi tiles and for red fives inside melds; a missed one is inferred from our closed-hand delta (`MeldInference`). |
+| Meld composition | type **13**: `[1]` caller, `[3]` 4=pon / 5=chi / 6=kan, `[4]` display selector (not a meld ordinal), `[5]` from-direction (0 for concealed kan), `[6]` tile index or ambiguous 255, `[7]` tile count, `[8..11]` tile icons (chi: claimed tile first) | Only source for chi tiles and for red fives inside melds; a missed one is inferred from our closed-hand delta (`MeldInference`). |
+| Added kan | type **14**: `[1]` caller, `[2]` tile index, `[3]` fourth tile icon | Upgrades the existing pon in place; count does not increase. Observed at 16:05:31 on 2026-09-23 and supported by the saved native handler. |
 | Riichi declaration | struct riichi index (`+0x2C7`) flips on the riichi discard; state code **12** on the declaring seat's turn | The snapshot's `Seats[i].Riichi` is the struct index ≠ 255. |
 | Seat winds | Text nodes `1/36/37/38/7/9` (us), `1/36/39/40/8/10`, `1/36/41/42/8/10`, `1/36/43/44/8/10` — "East"/"South"/"West"/"North" (`EmjStateReader.ScanWinds`, every 30 ticks) | Dealer = the seat whose text is "East". Round wind: the hidden text `1/46/54/57` (`nodes.roundWindText`, win-screen residue — leading word) or `AtkValues[2]` on type 32 ("East 4 North Wind"). |
 | Honba | Hidden text `1/46/48/2` "Honba N" | Only visible during the announcement; residue afterwards. **Not read** — the snapshot reports 0. |
@@ -118,7 +119,7 @@ public unsafe struct EmjSeatPanel {
     [FieldOffset(0x030)] public int DiffDisplayCurrent;
     [FieldOffset(0x034)] public int DiffDisplayTarget;
     [FieldOffset(0x050)] public fixed ulong Nodes[62];          // AtkResNode*/AtkComponentNode*
-    [FieldOffset(0x240)] public fixed int MeldTileIndex[4];     // 34-index, -1 empty, 255 chi
+    [FieldOffset(0x240)] public fixed int MeldTileIndex[4];     // 34-index, -1 empty, 255 chi/concealed kan
     [FieldOffset(0x250)] public fixed byte MeldFromDirection[4]; // 1 shimocha, 2 toimen, 3 kamicha
     [FieldOffset(0x258)] public fixed ulong Nodes2[13];
     [FieldOffset(0x2C4)] public byte ClosedTileCount;
@@ -155,9 +156,8 @@ sequences where they could be reconstructed from type-8 events.
 - Grouping of the 62 + 13 node pointers per seat (which are pile slots vs meld slots) — resolve by
   reading `NodeId` through each pointer.
 - `+0x2D8` "tsumogiri" reading, `0x0FDC` behaviour after a kan, `0x0FF8`, `0x12BC/0x12C0`.
-- Seat 0 meld record: exercised live 2026-09-19 for pon and chi (the meld count drove the
-  tracker's meld-list trim; the tile index was not separately checked against type-13); kans of
-  any kind are still unobserved — tile-count deltas and whether `+0x240` stores a kan the same way
-  are unknown.
+- Concealed and added kans were captured on 2026-09-23 (see
+  `research/CLOSED_KAN_2026_09_23.md`). The former shares marker 255 with chi; the latter
+  upgrades a pon through refresh 14. Further client versions still need layout validation.
 - Whether `+0x2C6` is capped / how furiten and the "Calls Off" toggle surface.
 - Honba, riichi sticks and ura dora have no struct field; the text-node candidates above are unread.

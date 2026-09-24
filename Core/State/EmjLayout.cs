@@ -46,7 +46,7 @@ public sealed class EmjLayout
 
     public int MeldTileIndexEmpty { get; init; } = -1;
 
-    public int MeldTileIndexChi { get; init; } = 255;
+    public int MeldTileIndexUnknown { get; init; } = 255;
 
     public required int?[] MeldFromDirectionBytes { get; init; }
 
@@ -133,7 +133,7 @@ public sealed class EmjLayout
             MeldTileIndexArrays = FourOffsets(melds?.TileIndexArrays),
             MeldTileIndexSlots = melds?.TileIndexSlots ?? 4,
             MeldTileIndexEmpty = melds?.TileIndexEmpty ?? -1,
-            MeldTileIndexChi = melds?.TileIndexChi ?? 255,
+            MeldTileIndexUnknown = melds?.TileIndexUnknown ?? melds?.TileIndexChi ?? 255,
             MeldFromDirectionBytes = FourOffsets(melds?.FromDirectionBytes),
             RiichiDiscardIndexBytes = FourOffsets(riichi?.DiscardIndexBytes),
             RiichiNone = riichi?.None ?? 255,
@@ -354,6 +354,8 @@ public sealed class EmjLayout
         [JsonPropertyName("tileIndexArrays")] public string?[]? TileIndexArrays { get; set; }
         [JsonPropertyName("tileIndexSlots")] public int? TileIndexSlots { get; set; }
         [JsonPropertyName("tileIndexEmpty")] public int? TileIndexEmpty { get; set; }
+        [JsonPropertyName("tileIndexUnknown")] public int? TileIndexUnknown { get; set; }
+        // Legacy layout key; the value was never exclusive to chi.
         [JsonPropertyName("tileIndexChi")] public int? TileIndexChi { get; set; }
         [JsonPropertyName("fromDirectionBytes")] public string?[]? FromDirectionBytes { get; set; }
         [JsonPropertyName("countBytes")] public string?[]? CountBytes { get; set; }

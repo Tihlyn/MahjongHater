@@ -50,7 +50,7 @@ public class StructFrameTests
         Assert.Equal(Tile.Parse("5s"), seat2.Melds[0].Tile);
         Assert.Equal(2, seat2.Melds[0].FromDirection);
         Assert.Equal(Tile.Parse("8m"), seat2.Melds[1].Tile);
-        Assert.False(seat2.Melds[1].IsChi);
+        Assert.False(seat2.Melds[1].NeedsComposition);
         Assert.Equal(7, d.Seats[1].RiichiDiscardIndex);
         Assert.Null(d.Seats[0].RiichiDiscardIndex);
     }
@@ -62,7 +62,7 @@ public class StructFrameTests
         var d = StructFrame.FromBytes(StructFixture.BytesFor("124589m1589p69s6z", null, melds: records), StructFixture.Layout, 15, 0, 50)
             .Decode(StructFixture.Layout);
         var meld = Assert.Single(d.Seats[3].Melds);
-        Assert.True(meld.IsChi);
+        Assert.True(meld.NeedsComposition);
         Assert.Null(meld.Tile);
         Assert.Equal(3, meld.FromDirection);
     }

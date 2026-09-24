@@ -298,7 +298,15 @@ public sealed unsafe class EmjStateReader : IDisposable
                 return;
             // The persistent array retains the previous recap's tail (109 entries).
             // A two-value refresh is only two values, not another scoring reveal.
-            this.tracker.OnRefresh(EmjStructReader.CopyAtkValues((AtkValue*)refresh.AtkValues, refresh.AtkValueCount));
+            var payload = EmjStructReader.CopyAtkValues((AtkValue*)refresh.AtkValues, refresh.AtkValueCount);
+            int? meldSlot = null;
+            // PostRefresh runs after the native meld handler increments this count.
+            // Payload [4] is a display selector, not a unique meld ordinal.
+            if (payload.EventType == 13 && payload.IsInt(1) && payload.Int(1) is >= 0 and <= 3
+                && this.structReader.TryRead((AtkUnitBase*)args.Addon.Address, this.Layout, out var frame)
+                && frame.Seats[payload.Int(1)].MeldCount is { } count && count is > 0 and <= 4)
+                meldSlot = count - 1;
+            this.tracker.OnRefresh(payload, meldSlot: meldSlot);
         }
         catch (Exception ex)
         {

@@ -15,7 +15,7 @@
       "tileIndexArrays": ["0x0478", "0x0758", "0x0A38", "0x0D18"],
       "tileIndexSlots": 4,
       "tileIndexEmpty": -1,
-      "tileIndexChi": 255,
+      "tileIndexUnknown": 255,
       "fromDirectionBytes": ["0x0488", "0x0768", "0x0A48", "0x0D28"],
       "fromDirection": { "1": "shimocha", "2": "toimen", "3": "kamicha" },
       "countBytes": ["0x04FD", "0x07DD", "0x0ABD", "0x0D9D"],

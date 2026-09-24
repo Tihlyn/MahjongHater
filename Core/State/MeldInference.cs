@@ -1,8 +1,7 @@
 namespace MahjongHater.Core.State;
 
-// Reconstructs a meld from the closed-hand delta the struct shows after a call. The
-// addon exposes no open-meld record (XeldarAlz reached the same conclusion), but the
-// hand array is exact, so "which tiles left the closed hand" is exact too.
+// Reconstructs a missed meld from a closed-hand delta. Struct records retain counts
+// and some tile identities, but not every meld's exact composition.
 public static class MeldInference
 {
     // Tiles in before that are not in after (multiset difference). Exact matches (red
@@ -80,5 +79,5 @@ public static class MeldInference
     // Stable identity used to dedupe the repeated atkType=74 payloads and hand-delta
     // inference of the same meld.
     public static string Signature(Meld meld)
-        => $"{meld.Type}:{string.Join(",", meld.Tiles.Select(TileHelpers.ToIndex).OrderBy(i => i))}";
+        => $"{meld.Type}:{string.Join(",", meld.Tiles.OrderBy(t => t).Select(t => t.ToString()))}";
 }

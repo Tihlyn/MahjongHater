@@ -23,10 +23,9 @@ public sealed class EventTracker
     private readonly Queue<string> noteRing = new(NoteRingCap);
 
     private readonly List<Tile>[] seatDiscards = [[], [], [], []];
-    // Meld compositions per relative seat from type-13 (all seats) / atkType=74 (us);
-    // the struct holds counts and pon tiles but not chi tiles or red fives.
-    private readonly List<Meld>[] seatMelds = [[], [], [], []];
-    private readonly string?[] lastMeldSignature = new string?[4];
+    // Meld compositions from type-13 and added-kan upgrades from type-14.
+    // Struct records alone do not distinguish all meld kinds or retain red fives.
+    private readonly MeldLedger[] seatMelds = [new(), new(), new(), new()];
     private readonly Wind?[] seatWinds = new Wind?[4];
 
     // Global discard order this round (0-based, every seat), parallel to seatDiscards, so
@@ -93,9 +92,11 @@ public sealed class EventTracker
         this.logInfo = logInfo;
     }
 
-    public IReadOnlyList<Meld> Melds => this.seatMelds[0];
+    public IReadOnlyList<Meld> Melds => this.seatMelds[0].Melds;
 
-    public IReadOnlyList<Meld> SeatMeldsOf(int seat) => this.seatMelds[seat];
+    public IReadOnlyList<Meld> SeatMeldsOf(int seat) => this.seatMelds[seat].Melds;
+
+    internal IReadOnlyList<MeldObservation> MeldObservations(int seat) => this.seatMelds[seat].Entries;
 
     public IReadOnlyList<Tile> SeatDiscardsOf(int seat) => this.seatDiscards[seat];
 
@@ -290,7 +291,7 @@ public sealed class EventTracker
 
     // ──────────────────────────────────────── EVENTS ────────────────────────────────────────
 
-    public void OnRefresh(AtkFrame f, DateTime? now = null)
+    public void OnRefresh(AtkFrame f, DateTime? now = null, int? meldSlot = null)
     {
         var utc = now ?? DateTime.UtcNow;
         var type = f.EventType;
@@ -302,7 +303,7 @@ public sealed class EventTracker
 
         // The deal (type-21) also carries our 14 tiles; everything else with a tile run
         // after a discard/turn is a reveal candidate (draw recap, win screen).
-        if (type is not (21 or 13 or 25) && this.discardCounter > 0)
+        if (type is not (21 or 13 or 14 or 25) && this.discardCounter > 0)
             this.CaptureRevealRun(f);
 
         switch (type)
@@ -343,30 +344,60 @@ public sealed class EventTracker
                 break;
             }
 
-            case 13: // meld composition: [1]=caller, [3]=4 pon/5 chi, [5]=from-direction,
-                     // [6]=tile index or 255 (chi), [7]=tile count, [8..10]=icons (chi: claimed first)
+            case 13: // [1]=caller, [3]=4 pon/5 chi/6 kan, [5]=from-direction,
+                     // [6]=tile index or 255, [7]=tile count, [8..11]=icons
             {
                 var seat = f.Int(1);
-                if (seat is < 0 or > 3)
+                if (!f.IsInt(1) || seat is < 0 or > 3)
+                    break;
+                // Require the complete payload and a real meld shape. A truncated kan
+                // must never be booked as a pon, nor an unknown type guessed from its tiles.
+                var count = f.Int(7);
+                if (!f.IsInt(3) || !f.IsInt(5) || !f.IsInt(7) || count is not (3 or 4)
+                    || f.Int(5) is < 0 or > 3)
                     break;
                 var tiles = new List<Tile>(4);
-                var count = Math.Clamp(f.Int(7), 0, 4);
                 for (var i = 0; i < count; i++)
                 {
-                    if (!f.IsInt(8 + i) || !TileHelpers.TryTileFromIconId(f.Int(8 + i), out var t))
-                        break;
+                    if (!f.IsInt(8 + i) || !TileHelpers.TryTileFromIconId(f.Int(8 + i), out var t)) break;
                     tiles.Add(t);
                 }
-
-                if (tiles.Count < 3)
-                    break;
+                if (tiles.Count != count) break;
                 var from = f.Int(5);
-                var meldType = tiles.Count == 4 ? (from == 0 ? MeldType.Ankan : MeldType.Daiminkan)
-                    : f.Int(3) == 5 || !TileHelpers.SameKind(tiles[0], tiles[1]) ? MeldType.Chi
-                    : MeldType.Pon;
-                var ordered = meldType == MeldType.Chi ? tiles.OrderBy(TileHelpers.Normalize).ToArray() : tiles.ToArray();
-                if (this.TryAddMeld(seat, new Meld(meldType, ordered, meldType != MeldType.Ankan), $"type-13 from={from}"))
+                var ordered = tiles.OrderBy(TileHelpers.Normalize).ToArray();
+                var same = tiles.All(t => TileHelpers.SameKind(t, tiles[0]));
+                var run = count == 3 && ordered.All(t => !t.IsHonor && t.Suit == ordered[0].Suit)
+                    && ordered[1].Number == ordered[0].Number + 1 && ordered[2].Number == ordered[1].Number + 1;
+                MeldType? kind = (f.Int(3), count, from) switch
+                {
+                    (4, 3, > 0) when same => MeldType.Pon,
+                    (5, 3, > 0) when run => MeldType.Chi,
+                    (6, 4, 0) when same => MeldType.Ankan,
+                    (6, 4, > 0) when same => MeldType.Daiminkan,
+                    _ => null,
+                };
+                if (kind == null)
+                {
+                    this.Note($"unresolved meld event: type={f.Int(3)} count={count} from={from}");
+                    break;
+                }
+                // The live reader supplies the slot from the post-refresh struct count.
+                // Payload [4] repeats across melds and is NOT a slot or ordinal.
+                int? slot = meldSlot is >= 0 and < 4 ? meldSlot : null;
+                if (this.TryAddMeld(seat, new Meld(kind.Value, ordered, kind != MeldType.Ankan),
+                        $"type-13 from={from}", slot, from))
                     this.ClearCallWindow($"meld (type-13) seat={seat}");
+                break;
+            }
+
+            case 14: // added kan: [1]=seat, [2]=tile index, [3]=fourth tile icon
+            {
+                if (!f.IsInt(1) || f.Int(1) is < 0 or > 3 || !f.IsInt(2) || !f.IsInt(3)
+                    || !TileHelpers.TryTileFromIconId(f.Int(3), out var tile)
+                    || TileHelpers.ToIndex(tile) != f.Int(2)) break;
+                if (this.seatMelds[f.Int(1)].Upgrade(tile))
+                    this.Log($"[Meld] seat {f.Int(1)} type-14: Shouminkan {tile}");
+                this.ClearCallWindow("added kan (type-14)");
                 break;
             }
 
@@ -574,11 +605,9 @@ public sealed class EventTracker
         {
             var list = this.seatMelds[seat];
             var structCount = s.Seats[seat].MeldCount;
-            if (structCount is { } n ? list.Count > n : seat == 0 && list.Count > 0 && closedAll.Count >= 13)
+            if (structCount is >= 0 and <= 4 || (structCount == null && seat == 0 && closedAll.Count >= 13))
             {
-                this.Note($"seat {seat} melds [{string.Join(", ", list)}] exceed the struct ({structCount?.ToString() ?? "13+ closed"}) — trimming");
-                list.RemoveRange(structCount ?? 0, list.Count - (structCount ?? 0));
-                this.lastMeldSignature[seat] = list.Count > 0 ? MeldInference.Signature(list[^1]) : null;
+                list.Trim(structCount ?? 0);
             }
         }
 
@@ -606,7 +635,7 @@ public sealed class EventTracker
             var called = this.callTile ?? this.FreshOpponentDiscard(utc) ?? s.DrawnTile;
             var meld = MeldInference.Infer(this.prevClosedAll, closed, drop == 4 ? null : called)
                        ?? MeldInference.Infer(this.prevClosedAll, closed, null);
-            if (meld is not null && this.TryAddMeld(0, meld, "hand delta"))
+            if (meld is not null && this.TryAddMeld(0, meld, "hand delta", s.Us.MeldCount is > 0 and <= 4 ? s.Us.MeldCount - 1 : null))
                 this.ClearCallWindow("meld inferred from hand delta");
         }
 
@@ -783,14 +812,9 @@ public sealed class EventTracker
         this.callFromSeat = -1;
     }
 
-    private bool TryAddMeld(int seat, Meld meld, string source)
+    private bool TryAddMeld(int seat, Meld meld, string source, int? slot = null, int? from = null)
     {
-        var signature = MeldInference.Signature(meld);
-        var list = this.seatMelds[seat];
-        if (signature == this.lastMeldSignature[seat] || list.Count >= 4)
-            return false;
-        this.lastMeldSignature[seat] = signature;
-        list.Add(meld);
+        if (!this.seatMelds[seat].Record(meld, slot, from)) return false;
         this.Log($"[Meld] seat {seat} {source}: {meld.Type} [{string.Join(" ", meld.Tiles)}]");
         return true;
     }
@@ -818,7 +842,6 @@ public sealed class EventTracker
             list.Clear();
         foreach (var list in this.seatMelds)
             list.Clear();
-        Array.Clear(this.lastMeldSignature);
         this.eventWallRemaining = 70;
         this.lastOpponentDiscard = null;
         this.lastOpponentDiscardSeat = -1;

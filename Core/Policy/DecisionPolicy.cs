@@ -97,6 +97,13 @@ public sealed class DecisionPolicy : IPolicy
             return new ActionChoice(kind, tile, null, $"Declare {kind}.", steps.ToArray(), []);
         }
 
+        if (!state.Us.MeldsVerified)
+        {
+            const string why = "Meld composition is incomplete; waiting for a confirmed read.";
+            return state.CallWindowConfirmed && state.Can(LegalAction.Pass)
+                ? Pass(why, steps) : ActionChoice.NoneYet(why);
+        }
+
         ct.ThrowIfCancellationRequested();
         this.opponents.Update(state);
         ct.ThrowIfCancellationRequested();

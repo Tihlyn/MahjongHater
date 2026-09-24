@@ -83,7 +83,9 @@ public sealed class IncrementalStateKey
             Json(new { Dora = Tiles(s.DoraIndicators), Ura = Tiles(s.UraDoraIndicators) }),
             Json(s.Seats.Select(seat => new { seat.Seat, Discards = Tiles(seat.Discards), Melds = Melds(seat.Melds),
                 seat.Riichi, seat.RiichiDiscardIndex, seat.Score, seat.DiscardsVerified, seat.DiscardCount, seat.DiscardOrder,
-                seat.ClaimedDiscardIndices }).ToArray()),
+                seat.ClaimedDiscardIndices }).ToArray())
+                + (s.Seats.All(seat => seat.MeldsVerified) ? string.Empty
+                    : "|unresolvedMelds:" + string.Join(",", s.Seats.Select(seat => $"{seat.Seat}:{seat.MeldCount}:{seat.MeldsVerified}"))),
             Json(beliefs ?? []),
         ];
     }

@@ -120,11 +120,10 @@ public sealed record StructFrame(
                 for (var i = 0; i < n; i++)
                 {
                     var ti = idx[i];
-                    if (ti == layout.MeldTileIndexEmpty)
-                        continue;
                     var from = raw.MeldFromDirections is { } fd && i < fd.Length ? fd[i] : 0;
-                    var isChi = ti == layout.MeldTileIndexChi;
-                    melds.Add(new StructMeld(ti, isChi, !isChi && EmjLayout.TryTileFromIndex(ti, out var t) ? t : null, from));
+                    var needsComposition = ti == layout.MeldTileIndexUnknown;
+                    melds.Add(new StructMeld(ti, needsComposition, EmjLayout.TryTileFromIndex(ti, out var t) ? t : null, from)
+                    { IsEmpty = ti == layout.MeldTileIndexEmpty });
                 }
             }
 
@@ -185,10 +184,13 @@ public sealed record SeatPanelRaw(
     int[]? MeldTileIndices,
     int[]? MeldFromDirections);
 
-// A meld as the struct records it: the 34-index of the tile (pon/kan) or the chi marker
-// (tiles not stored — the type-13 event has them), and the seat it was claimed from
+// A meld as the struct records it: the 34-index of the tile (pon/kan) or an unresolved marker
+// (chi/concealed kan tiles not stored — the type-13 event has them), and the seat it was claimed from
 // relative to the caller in turn order (1 shimocha, 2 toimen, 3 kamicha).
-public sealed record StructMeld(int TileIndex, bool IsChi, Tile? Tile, int FromDirection);
+public sealed record StructMeld(int TileIndex, bool NeedsComposition, Tile? Tile, int FromDirection)
+{
+    public bool IsEmpty { get; init; }
+}
 
 public sealed record SeatPanel(
     int? ClosedTileCount,     // excludes the drawn/claimed tile
