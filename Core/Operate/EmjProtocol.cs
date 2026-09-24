@@ -98,6 +98,7 @@ public static class EmjProtocol
     // Rank-only; absent from NPC matches, seen after EmjTotalResult in ranked play.
     public const string RankResultAddon = "EmjRankResult";
 
+    // EmjTotalResult only. EmjRankResult has a separate "End match" button.
     public const uint ResultCloseNodeId = 26;
 
     public const int ResultCloseParam = 0;

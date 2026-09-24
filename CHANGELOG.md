@@ -4,6 +4,19 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+## [3.1.0.1] - 2026-09-24 (testing)
+
+### Fixed
+
+- Auto play now finds the visible, enabled "End match" button on ranked results.
+  It previously reused the total-results close button's node ID and stopped at
+  `EmjRankResult has no node 26`.
+
+### Changed
+
+- Auto play logs every decision reasoning step with the snapshot sequence when
+  attempting an action, including why a Kan was declined before choosing a discard.
+
 ## [3.0.0] - 2026-09-23
 
 ### Fixed

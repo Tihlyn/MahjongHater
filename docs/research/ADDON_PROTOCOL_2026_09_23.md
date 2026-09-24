@@ -216,7 +216,11 @@ was itself built on the mistaken reading above.
   measured command.
 - **`head 10`.** One fire, `updateState=true`, 06:11:03.229. Unidentified.
 - **`EmjRankResult`.** Never loaded in this NPC capture. Reusing `ResultCloseNodeId = 26` for
-  it is an assumption, not a measurement.
+  it was an assumption, not a measurement. **2026-09-24 follow-up:** ranked-match logs at
+  15:27:14 and 16:16:56 confirm that this addon has no node 26. The actuator now resolves
+  its visible, enabled `End match` button by label and dispatches the registered
+  addon-bound ButtonClick. Node 26 remains specific to `EmjTotalResult`. The ranked
+  button's node ID and live acceptance still need capture after this fix.
 - **The stuck table.** No capture yet with same-frame pointer coordinates, expected tile
   bounds, collision state, modal ownership and ImGui capture. Until then the `[15]` theory is
   one of several, and the `/mhater focus` output is evidence rather than a diagnosis.

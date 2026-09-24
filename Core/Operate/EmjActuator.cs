@@ -237,11 +237,8 @@ public sealed unsafe class EmjActuator
             }
         }
 
-        // Ending a finished match is not a labelled button in Emj at all. The 2026-09-23
-        // capture recorded the real sequence: the last recap hides the table, EmjTotalResult
-        // opens, and ButtonClick param=0 on its node 26 closes everything
-        // (docs/research/ADDON_PROTOCOL_2026_09_23.md). The plugin used to search the Emj node
-        // pool for the English string "End match", which is in the wrong addon entirely.
+        // The final recap opens EmjTotalResult (node 26). Ranked play then opens
+        // EmjRankResult, whose separate "End match" button must be resolved there.
         return this.CloseResultScreen();
     }
 
@@ -350,13 +347,8 @@ public sealed unsafe class EmjActuator
         return OperateResult.Fail(why);
     }
 
-    // What the recap surface actually IS, read rather than assumed. The controls here were
-    // identified by trial and error - node 97 is pressed without ever reading what it says,
-    // and "End match" is an English string search in a panel whose text outlives its prompts,
-    // which is the same mistake the call windows were built on. This reports the game's own
-    // statements (state code, which result addon is open, whether the control is addon-bound)
-    // alongside the text each control carries, so the labels can be identified from logs and
-    // the string search replaced by a structural target.
+    // Report the game state, visible result addon, and the recap control's label and
+    // activation binding. Result-screen dispatch separately logs its resolved button.
     public List<string> DescribeRecap(int stateCode)
     {
         var lines = new List<string>(6);
@@ -421,18 +413,52 @@ public sealed unsafe class EmjActuator
         if (ptr.IsNull)
             return OperateResult.Fail($"{name} vanished while resolving it");
         var result = (AtkUnitBase*)ptr.Address;
-        var close = EmjScanner.FindNodeById(result, EmjProtocol.ResultCloseNodeId);
-        if (close == null)
-            return OperateResult.Fail($"{name} has no node {EmjProtocol.ResultCloseNodeId} (the close button)");
-        if (!EmjOperator.HasAddonBoundActivation(result, close))
-            return OperateResult.Fail($"{name} node {EmjProtocol.ResultCloseNodeId} is not clickable right now");
+        var nodeId = EmjProtocol.ResultCloseNodeId;
+        var action = "close";
+        if (name == EmjProtocol.RankResultAddon)
+        {
+            var buttons = ReadResultButtons(result);
+            var resolved = ResultButtonResolver.RankEndMatch(buttons);
+            if (resolved is not { } endMatchId)
+                return OperateResult.Fail($"{name} needs one clickable End match button; buttons: ["
+                    + string.Join(", ", buttons.Select(b => $"{b.NodeId}:\"{b.Label}\" clickable={b.Clickable}")) + "]");
+            nodeId = endMatchId;
+            action = "End match";
+        }
 
+        var close = EmjScanner.FindNodeById(result, nodeId);
+        if (close == null)
+            return OperateResult.Fail($"{name} has no node {nodeId} ({action})");
+        if (!EmjOperator.HasAddonBoundActivation(result, close))
+            return OperateResult.Fail($"{name} node {nodeId} ({action}) is not clickable right now");
+
+        // The handler may close the addon and destroy its nodes; retain only copied values.
         var dispatch = EmjOperator.ActivateButton(result, close);
         if (!dispatch.Sent)
-            return OperateResult.Fail($"{name} close: {dispatch.Detail}");
-        var detail = $"{name} close (node {EmjProtocol.ResultCloseNodeId}): {dispatch.Detail}";
+            return OperateResult.Fail($"{name} {action}: {dispatch.Detail}");
+        var detail = $"{name} {action} (node {nodeId}): {dispatch.Detail}";
         this.reader.Tracker.Note($"op {detail}");
         return OperateResult.Sent(detail, nodeActivation: true);
+    }
+
+    private static List<ResultButton> ReadResultButtons(AtkUnitBase* addon)
+    {
+        var buttons = new List<ResultButton>();
+        var nodes = addon->UldManager.NodeList;
+        for (var i = 0; nodes != null && i < addon->UldManager.NodeListCount; i++)
+        {
+            var node = nodes[i];
+            if (node == null)
+                continue;
+            var button = node->GetAsAtkComponentButton();
+            if (button == null || button->ButtonTextNode == null)
+                continue;
+            buttons.Add(new ResultButton(node->NodeId, EmjScanner.ReadTextNode(button->ButtonTextNode),
+                button->IsEnabled && EmjOperator.HasAddonBoundActivation(addon, node)
+                && EmjOperator.IsChainVisible(addon, (AtkResNode*)button->ButtonTextNode, out _)));
+        }
+
+        return buttons;
     }
 
     // The match-result addon the game has on screen, or null while none is.

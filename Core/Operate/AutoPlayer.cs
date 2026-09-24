@@ -356,6 +356,8 @@ public sealed class AutoPlayer
                    (choice.Call is { } meld ? $" [{string.Join(" ", meld.Tiles)}]" : string.Empty) +
                    $" | {choice.Summary} | {(result.Ok ? "sent" : "REFUSED")}: {result.Detail}";
         this.Record(line);
+        foreach (var step in choice.Steps)
+            this.Record($"seq {state.Sequence} reason [{step.Stage}]: {step.Display}");
         this.LastDispatchStatus = result.Ok
             ? $"{choice.Kind} {choice.Tile?.ToString() ?? string.Empty} dispatched, waiting for the game".Replace("  ", " ")
             : $"{choice.Kind} refused: {result.Detail}";
