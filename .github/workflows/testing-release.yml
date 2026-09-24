@@ -1,0 +1,90 @@
+name: Testing release
+
+on:
+  push:
+    tags: ['testing-*']
+
+permissions:
+  contents: write
+
+# Share the stable release lock so repository updates cannot overwrite each other.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  testing:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Validate testing tag
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^testing-((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$') {
+            throw 'Expected testing-major.minor.patch.revision.'
+          }
+          "TESTING_VERSION=$($Matches[1])" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          python -B -m unittest discover -s tools -p test_make_repo_json.py
+          if ($LASTEXITCODE -ne 0) { throw 'Repository channel tests failed.' }
+      - uses: ./.github/actions/setup-dalamud
+        with:
+          track: ${{ vars.DALAMUD_TRACK || 'release' }}
+      - name: Build and test candidate
+        shell: pwsh
+        run: |
+          dotnet build MahjongHater.csproj -c Release -nologo "-p:Version=$env:TESTING_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw 'Testing build failed.' }
+          dotnet test MahjongHater.Tests -c Release -nologo "-p:Version=$env:TESTING_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw 'Testing build tests failed.' }
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: repository-main
+      - name: Prepare candidate and preserve stable entry
+        shell: pwsh
+        run: |
+          $package = 'bin/Release/net10.0-windows/MahjongHater'
+          $previous = git describe --tags --match 'v*' --abbrev=0 $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'No reachable stable release tag.' }
+          $notes = git log --reverse --format='- %s (%h)' "$previous..$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not generate testing notes.' }
+          $notes | Set-Content "$env:RUNNER_TEMP/testing-notes.md" -Encoding utf8
+          python tools/make_repo_json.py --manifest "$package/MahjongHater.json" --testing-version $env:TESTING_VERSION --tag $env:GITHUB_REF_NAME --base-repo repository-main/repo.json --output "$env:RUNNER_TEMP/repo.json" --testing-changelog ($notes -join "`n")
+          if ($LASTEXITCODE -ne 0) { throw 'Testing manifest validation failed; stable repository unchanged.' }
+          Copy-Item "$package/latest.zip" "$package/MahjongHater-$env:GITHUB_REF_NAME.zip"
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: MahjongHater ${{ env.TESTING_VERSION }} (testing)
+          prerelease: true
+          make_latest: false
+          body_path: ${{ runner.temp }}/testing-notes.md
+          fail_on_unmatched_files: true
+          files: |
+            bin/Release/net10.0-windows/MahjongHater/latest.zip
+            bin/Release/net10.0-windows/MahjongHater/MahjongHater-testing-*.zip
+      - name: Update testing channel
+        shell: pwsh
+        working-directory: repository-main
+        run: |
+          Copy-Item "$env:RUNNER_TEMP/repo.json" repo.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add repo.json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not stage repo.json.' }
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          if ($LASTEXITCODE -ne 1) { throw 'Could not inspect repo.json changes.' }
+          git commit -m "chore(testing): publish $env:TESTING_VERSION [skip ci]"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not commit testing metadata.' }
+          git pull --rebase origin main
+          if ($LASTEXITCODE -ne 0) { throw 'Repository changed; resolve the conflict before rerunning.' }
+          git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not push testing metadata.' }
