@@ -26,12 +26,12 @@
     "AcceptsFeedback": true,
     "DownloadLinkInstall": "https://github.com/Tihlyn/MahjongHater/releases/download/v3.0.0/latest.zip",
     "DownloadLinkUpdate": "https://github.com/Tihlyn/MahjongHater/releases/download/v3.0.0/latest.zip",
-    "DownloadLinkTesting": "https://github.com/Tihlyn/MahjongHater/releases/download/testing-3.1.0.1/latest.zip",
+    "DownloadLinkTesting": "https://github.com/Tihlyn/MahjongHater/releases/download/testing-3.1.0.2/latest.zip",
     "IsHide": false,
     "IsTestingExclusive": false,
-    "LastUpdate": 1790261110,
-    "TestingAssemblyVersion": "3.1.0.1",
+    "LastUpdate": 1790282286,
+    "TestingAssemblyVersion": "3.1.0.2",
     "TestingDalamudApiLevel": 15,
-    "TestingChangelog": "- chore(release): update repository for v3.0.0 [skip ci] (0c6f080)\n- fix(state): reconcile kan events without disrupting normal autoplay (e7550d2)\n- fix(logging): attribute hand outcomes after score settlement (658bb19)\n- Merge remote-tracking branch 'origin/main' (0f5c830)\n- feat(release): publish opt-in testing builds alongside stable (11682de)\n- chore(testing): publish 3.0.0.1 [skip ci] (c0a60a0)\n- fix(autoplay): log decision reasons and end ranked matches (083c339)"
+    "TestingChangelog": "- chore(release): update repository for v3.0.0 [skip ci] (0c6f080)\n- fix(state): reconcile kan events without disrupting normal autoplay (e7550d2)\n- fix(logging): attribute hand outcomes after score settlement (658bb19)\n- Merge remote-tracking branch 'origin/main' (0f5c830)\n- feat(release): publish opt-in testing builds alongside stable (11682de)\n- chore(testing): publish 3.0.0.1 [skip ci] (c0a60a0)\n- fix(autoplay): log decision reasons and end ranked matches (083c339)\n- chore(testing): publish 3.1.0.1 [skip ci] (b14438e)\n- feat(calls): validate call candidates and explain policy decisions (03b7fcf)"
   }
 ]
