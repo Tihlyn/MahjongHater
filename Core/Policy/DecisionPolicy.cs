@@ -126,6 +126,7 @@ public sealed class DecisionPolicy : IPolicy
         {
             var call = this.calls.Evaluate(state, this.opponents, ct);
             ct.ThrowIfCancellationRequested();
+            steps.AddRange(call.Diagnostics);
             steps.Add(call.Reason);
             if (call.Accept)
                 return new ActionChoice(call.Kind, state.CallTile ?? call.Meld?.Tiles[0], call.Meld,

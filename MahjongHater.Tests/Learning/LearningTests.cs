@@ -345,6 +345,51 @@ public sealed class LearningTests
     }
 
     [Fact]
+    public void Combined_claim_diagnostics_survive_learned_decision_into_action_steps()
+    {
+        var state = Snap("3455567m123p55z9s", LegalAction.Chi | LegalAction.Pon | LegalAction.MinKan | LegalAction.Pass) with
+        {
+            CallTile = Tile.Parse("5m"), CallFromSeat = 3, DrawnTile = null,
+            Phase = GamePhase.CallPrompt, CallWindowConfirmed = true,
+        };
+        var calls = new LearnedCallPolicy(new LearnedModel(SyntheticArtifact(2, 3)));
+        var action = new DecisionPolicy(calls: calls).Choose(state, default);
+        Assert.Contains(action.Steps, r => r.Stage == "call-shape" && r.Display.StartsWith("Validated Pon"));
+        Assert.Contains(action.Steps, r => r.Stage == "call-shape" && r.Display.StartsWith("Validated MinKan"));
+        Assert.Equal(3, action.Steps.Count(r => r.Stage == "call-shape" && r.Display.StartsWith("Validated Chi")));
+        Assert.Contains(action.Steps, r => r.Stage == "kan" && r.Display.Contains("decline by strategy"));
+        Assert.Contains(action.Steps, r => r.Stage == "learned-call" && r.Display.StartsWith("Match:"));
+        Assert.Contains(action.Steps, r => r.Stage == "call" && r.Display.Contains("Learned"));
+    }
+
+    [Fact]
+    public void Learned_call_mask_mismatch_cannot_resurrect_an_impossible_pon()
+    {
+        var state = Snap("123m456p67s115z89s", LegalAction.Pon | LegalAction.Pass) with
+        {
+            CallTile = Tile.Parse("5z"), CallFromSeat = 3, DrawnTile = null, Phase = GamePhase.CallPrompt,
+        };
+        var calls = new LearnedCallPolicy(new LearnedModel(SyntheticArtifact(2, 3)),
+            PolicyWeights.Default with { LearnedCallPassThreshold = 1.01, LearnedCallTrust = 1 });
+        var choice = calls.Evaluate(state, Model(state), default);
+        Assert.False(choice.Accept);
+        Assert.Contains(choice.Diagnostics, r => r.Stage == "learned-call" && r.Display.StartsWith("MISMATCH:"));
+        Assert.Contains(choice.Diagnostics, r => r.Display.Contains("Offered Pon has no constructible candidate"));
+    }
+
+    [Fact]
+    public void Own_turn_kan_logs_validation_and_explicitly_defers_learned_scoring()
+    {
+        var state = Snap("22221345m678p789s", LegalAction.AnKan | LegalAction.Discard);
+        var calls = new LearnedCallPolicy(new LearnedModel(SyntheticArtifact(2, 3)));
+        var choice = new DecisionPolicy(calls: calls).Choose(state, default);
+        Assert.Equal(ActionKind.Discard, choice.Kind);
+        Assert.Contains(choice.Steps, r => r.Stage == "call-shape" && r.Display.StartsWith("Validated AnKan"));
+        Assert.Contains(choice.Steps, r => r.Stage == "kan" && r.Display.Contains("decline:"));
+        Assert.Contains(choice.Steps, r => r.Stage == "learned-call" && r.Display.Contains("does not score"));
+    }
+
+    [Fact]
     public void Importer_records_reaction_decisions_for_seats_that_could_call()
     {
         using var temp = new TemporaryDirectory();

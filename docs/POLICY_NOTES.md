@@ -75,7 +75,12 @@ with nobody in riichi — hence the riichi gate on near-tenpai hands.)
 
 ## Calls (`CallPolicy`)
 
-- Options built from the prompt: pon (two copies, plain before red), daiminkan (open hand, three
+- `CallDescriptor` validates hand arithmetic, physical copies, existing melds, source seat,
+  riichi restrictions and exact chooser shapes before policy evaluation. Each candidate
+  records consumed tiles, remaining hand and resulting melds. Combined offers keep separate
+  candidates for Pon, Kan and every available Chi shape. Invalid construction is reported
+  separately from strategic rejection.
+- Options built from the prompt: pon (two copies, plain before red), daiminkan (three
   copies), chi (kamicha only, honors excluded; with the chooser open only the game's offered
   shapes), ankan (four in hand; in riichi only the drawn kind), shouminkan (open hand, not in
   riichi).
@@ -84,8 +89,16 @@ with nobody in riichi — hence the riichi gate on near-tenpai hands.)
   ≥ 9-tile honitsu skeleton whose melds fit the suit. A chi that breaks the only pair is skipped.
 - Kan must preserve shanten and ukeire (the claimed tile is removed from the seen set once); in
   riichi the wait kinds must be unchanged.
-- Ties: lower shanten, then pon > chi > kan. Otherwise decline ("no call improves the hand while
-  preserving a yaku route or safe kan shape").
+- Opening a closed hand with daiminkan is still declined by strategy, after recognizing its
+  valid shape. Learned tempo calls must also preserve Kan safety.
+- Ties: lower shanten, then pon > chi > kan. Each candidate logs its evaluation; Kan logs
+  before/after shanten and live improving tiles, or the specific construction/strategy blocker.
+- `LearnedCallPolicy` compares validated claim actions with both its prompt-based mask and
+  `LearningFeatures.ClaimOptions` shapes before inference. A mismatch falls back to validated
+  heuristic candidates and logs all three action sets. Its scoring mask contains only
+  validated candidates plus Pass. Own-turn Kans explicitly report that they use the heuristic.
+  Feature encoding and model weights are unchanged. These diagnostics reach `choice.Steps`
+  and therefore the autoplay log for each attempted action.
 
 ## Riichi (`RiichiPolicy`)
 

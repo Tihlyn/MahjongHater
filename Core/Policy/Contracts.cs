@@ -91,6 +91,8 @@ public enum PushFoldStance { Push, Fold }
 
 public sealed record CallDecision(bool Accept, ActionKind Kind, Meld? Meld, Reason Reason)
 {
+    public IReadOnlyList<Reason> Diagnostics { get; init; } = [];
+
     public static CallDecision Decline(string why) => new(false, ActionKind.Pass, null, new Reason("call", why));
 }
 

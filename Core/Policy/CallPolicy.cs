@@ -12,170 +12,126 @@ public sealed class CallPolicy : ICallPolicy
     }
 
     public CallDecision Evaluate(StateSnapshot state, IOpponentModel opponents, CancellationToken ct)
+        => this.Evaluate(state, CallDescriptor.Describe(state, ct), ct);
+
+    internal CallDecision Evaluate(StateSnapshot state, CallDescription description, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        var diagnostics = description.Reasons.ToList();
+        if (!description.Valid || description.Candidates.Count == 0)
+            return CallDecision.Decline(description.Valid
+                ? "No offered call has a constructible candidate."
+                : "Call construction is invalid; decline the call.") with { Diagnostics = diagnostics };
+
         var before = Shanten.Calculate(state.Hand.ToList(), state.OurMelds.Count);
         var choices = new List<(CallDecision Decision, int Shanten, int Priority)>();
         AnalysisResult? baseline = null;
-        foreach (var option in Options(state))
+        foreach (var option in description.Candidates)
         {
             ct.ThrowIfCancellationRequested();
-            var remaining = state.Hand.ToList();
-            foreach (var tile in option.Consumed)
-                remaining.Remove(tile);
-            var melds = state.OurMelds.ToList();
-            if (option.Replaced is not null)
-                melds.Remove(option.Replaced);
-            melds.Add(option.Meld);
-
             if (option.Meld.IsKan)
             {
-                baseline ??= this.analyzer.Analyze(PolicyInput.MakeHand(state), PolicyInput.Context(state), ct);
-                var afterState = state with { Hand = remaining, OurMelds = melds };
-                var context = PolicyInput.Context(afterState);
-                // The claimed discard now belongs to our meld, so count it only once.
-                if (option.Kind == ActionKind.MinKan && state.CallTile is { } claimed)
-                {
-                    var index = context.SeenTiles.FindIndex(t => TileHelpers.SameKind(t, claimed));
-                    if (index >= 0)
-                        context.SeenTiles.RemoveAt(index);
-                }
-                var after = this.analyzer.Analyze(PolicyInput.MakeHand(afterState), context, ct);
-                if (!baseline.IsValid || !after.IsValid || after.ShantenAfterDiscard > baseline.ShantenAfterDiscard
-                    || after.Ukeire < baseline.Ukeire)
-                    continue;
-                // Riichi kan must preserve the wait, not just its live tile count.
-                if (state.OurRiichi && !baseline.TenpaiWaits.Select(TileHelpers.ToIndex).Order()
-                        .SequenceEqual(after.TenpaiWaits.Select(TileHelpers.ToIndex).Order()))
-                    continue;
-                choices.Add((Accept(option, "Kan preserves shanten and live improving tiles."), after.ShantenAfterDiscard, 2));
+                var accept = this.EvaluateKan(state, option, ref baseline, ct, out var after, out var why);
+                diagnostics.Add(new Reason("kan", $"{option.Display}: {why}"));
+                if (accept) choices.Add((Accept(option, "Kan preserves shanten and live improving tiles."), after, 2));
                 continue;
             }
 
-            if (option.Kind == ActionKind.Chi && BreaksOnlyPair(state.Hand, remaining, option.Consumed))
+            if (option.Kind == ActionKind.Chi && BreaksOnlyPair(state.Hand, option.Remaining, option.Consumed))
+            {
+                diagnostics.Add(new Reason("call-evaluation", $"{option.Display}: decline; breaks the only pair."));
                 continue;
+            }
 
-            // Pon/chi require a discard before the new shanten and yaku route are useful.
-            var postDiscards = remaining.Distinct().Select(t => RemoveOne(remaining, t)).ToList();
             var bestAfter = int.MaxValue;
-            foreach (var kept in postDiscards)
+            var bestYakuAfter = int.MaxValue;
+            foreach (var tile in option.Remaining.Distinct())
             {
                 ct.ThrowIfCancellationRequested();
-                var shanten = Shanten.Calculate(kept, state.OurMelds.Count + 1);
-                if (shanten < before && HasOpenYakuRoute(state, kept, melds, option.Meld.Tiles[0]))
-                    bestAfter = Math.Min(bestAfter, shanten);
+                var kept = RemoveOne(option.Remaining, tile);
+                var shanten = Shanten.Calculate(kept, option.MeldsAfter.Count);
+                bestAfter = Math.Min(bestAfter, shanten);
+                if (HasOpenYakuRoute(state, kept, option.MeldsAfter, option.Meld.Tiles[0]))
+                    bestYakuAfter = Math.Min(bestYakuAfter, shanten);
             }
-
-            if (bestAfter < before)
-                choices.Add((Accept(option, $"Call improves {before}-shanten to {bestAfter}-shanten and retains an open yaku route."),
-                    bestAfter, option.Kind == ActionKind.Pon ? 0 : option.Kind == ActionKind.Chi ? 1 : 2));
+            var improves = bestYakuAfter < before;
+            diagnostics.Add(new Reason("call-evaluation", $"{option.Display}: shanten {before}->{bestAfter}; "
+                + (bestYakuAfter == int.MaxValue ? "decline; no open yaku route."
+                    : $"best with yaku route {bestYakuAfter}; {(improves ? "accept" : "decline; no shanten improvement")}.")));
+            if (improves)
+                choices.Add((Accept(option, $"Call improves {before}-shanten to {bestYakuAfter}-shanten and retains an open yaku route."),
+                    bestYakuAfter, option.Kind == ActionKind.Pon ? 0 : 1));
         }
 
         ct.ThrowIfCancellationRequested();
-        return choices.OrderBy(c => c.Shanten).ThenBy(c => c.Priority).Select(c => c.Decision).FirstOrDefault()
-            ?? CallDecision.Decline("No call improves the hand while preserving a yaku route or safe kan shape.");
+        var decision = choices.OrderBy(c => c.Shanten).ThenBy(c => c.Priority).Select(c => c.Decision).FirstOrDefault()
+            ?? CallDecision.Decline("All validated calls were declined by policy; see candidate evaluations.");
+        return decision with { Diagnostics = diagnostics };
     }
 
-    // Every claim (pon / chi / open kan of the offered tile) after which some discard keeps an
-    // open yaku route — the yaku-safety half of Evaluate without its "must lower shanten"
-    // half, for a caller (LearnedCallPolicy) that decides speed vs shape itself.
+    // The learned policy can relax the speed preference, but never construction or kan safety.
     public IReadOnlyList<CallDecision> Viable(StateSnapshot state, CancellationToken ct)
+        => this.Viable(state, CallDescriptor.Describe(state, ct), ct);
+
+    internal IReadOnlyList<CallDecision> Viable(StateSnapshot state, CallDescription description, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var viable = new List<CallDecision>();
-        foreach (var option in Options(state).Where(o => o.Kind is ActionKind.Pon or ActionKind.Chi or ActionKind.MinKan))
+        AnalysisResult? baseline = null;
+        foreach (var option in description.Candidates.Where(o => o.Kind is ActionKind.Pon or ActionKind.Chi or ActionKind.MinKan))
         {
             ct.ThrowIfCancellationRequested();
-            var remaining = state.Hand.ToList();
-            foreach (var tile in option.Consumed)
-                remaining.Remove(tile);
-            var melds = state.OurMelds.Append(option.Meld).ToList();
-            if (remaining.Distinct().Any(t => HasOpenYakuRoute(state, RemoveOne(remaining, t), melds, option.Meld.Tiles[0])))
-                viable.Add(Accept(option, "Call keeps an open yaku route."));
+            var keepsYaku = option.Meld.IsKan
+                ? this.EvaluateKan(state, option, ref baseline, ct, out _, out _)
+                    && HasOpenYakuRoute(state, option.Remaining, option.MeldsAfter, option.Meld.Tiles[0])
+                : option.Remaining.Distinct().Any(t => HasOpenYakuRoute(state, RemoveOne(option.Remaining, t), option.MeldsAfter, option.Meld.Tiles[0]));
+            if (keepsYaku) viable.Add(Accept(option, "Call keeps an open yaku route."));
         }
         return viable;
     }
 
-    private static IEnumerable<CallOption> Options(StateSnapshot state)
+    private bool EvaluateKan(StateSnapshot state, CallCandidate option, ref AnalysisResult? baseline,
+        CancellationToken ct, out int shanten, out string why)
     {
-        if (!state.OurRiichi && state.CallTile is { } called && state.CallFromSeat is >= 1 and <= 3)
+        shanten = int.MaxValue;
+        if (option.Kind == ActionKind.MinKan && !state.IsOpen)
         {
-            var copies = state.Hand.Where(t => TileHelpers.SameKind(t, called)).OrderBy(t => t.IsRedFive).ToArray();
-            if (state.Can(LegalAction.Pon) && copies.Length >= 2)
-                yield return Make(ActionKind.Pon, copies.Take(2).ToArray(), called, MeldType.Pon);
-            if (state.Can(LegalAction.MinKan) && state.IsOpen && copies.Length >= 3)
-                yield return Make(ActionKind.MinKan, copies.Take(3).ToArray(), called, MeldType.Daiminkan);
-            if (state.Can(LegalAction.Chi) && state.CallFromSeat == 3 && !called.IsHonor)
-            {
-                // With the chooser open only the game's shapes are on offer.
-                var starts = state.CallShapes.Count > 0
-                    ? state.CallShapes.Select(m => m.Tiles.Min(t => t.Number)).Distinct()
-                    : Enumerable.Range(Math.Max(1, called.Number - 2), Math.Min(7, called.Number) - Math.Max(1, called.Number - 2) + 1);
-                foreach (var start in starts)
-                {
-                    var consumed = new List<Tile>();
-                    foreach (var number in Enumerable.Range(start, 3).Where(n => n != called.Number))
-                    {
-                        var matches = state.Hand.Where(t => t.Suit == called.Suit && t.Number == number)
-                            .OrderBy(t => t.IsRedFive).ToArray();
-                        if (matches.Length > 0)
-                            consumed.Add(matches[0]);
-                    }
-
-                    if (consumed.Count == 2)
-                        yield return Make(ActionKind.Chi, consumed.ToArray(), called, MeldType.Chi);
-                }
-            }
+            why = "decline by strategy: do not open a closed hand with daiminkan (shape is valid).";
+            return false;
         }
-
-        if (state.Can(LegalAction.AnKan))
+        baseline ??= this.analyzer.Analyze(PolicyInput.MakeHand(state), PolicyInput.Context(state), ct);
+        var afterState = state with { Hand = option.Remaining, OurMelds = option.MeldsAfter, DrawnTile = null };
+        var context = PolicyInput.Context(afterState);
+        if (option.Kind == ActionKind.MinKan && state.CallTile is { } claimed)
         {
-            foreach (var group in state.Hand.GroupBy(TileHelpers.ToIndex).Where(g => g.Count() == 4))
-            {
-                if (state.OurRiichi && (!state.DrawnTile.HasValue || !TileHelpers.SameKind(group.First(), state.DrawnTile.Value)))
-                    continue;
-                yield return Make(ActionKind.AnKan, group.ToArray(), null, MeldType.Ankan);
-            }
+            var index = context.SeenTiles.FindIndex(t => TileHelpers.SameKind(t, claimed));
+            if (index >= 0) context.SeenTiles.RemoveAt(index);
         }
-
-        if (state.Can(LegalAction.ShouMinKan) && state.IsOpen && !state.OurRiichi)
+        var after = this.analyzer.Analyze(PolicyInput.MakeHand(afterState), context, ct);
+        if (!baseline.IsValid || !after.IsValid)
         {
-            foreach (var pon in state.OurMelds.Where(m => m.Type == MeldType.Pon && m.IsOpen))
-            {
-                foreach (var tile in state.Hand.Where(t => TileHelpers.SameKind(t, pon.Tiles[0])).Distinct())
-                {
-                    var template = Meld.MakeKan(tile, MeldType.Shouminkan);
-                    yield return new CallOption(ActionKind.ShouMinKan,
-                        WithCopies(template, pon.Tiles.Append(tile).ToArray()), [tile], pon);
-                }
-            }
+            why = $"decline: analysis invalid (before={baseline.IsValid}, after={after.IsValid}).";
+            return false;
         }
+        shanten = after.ShantenAfterDiscard;
+        var metrics = $"shanten {baseline.ShantenAfterDiscard}->{shanten}, live improving tiles {baseline.Ukeire}->{after.Ukeire}";
+        var rejection = shanten > baseline.ShantenAfterDiscard ? "shanten worsens"
+            : after.Ukeire < baseline.Ukeire ? "fewer live improving tiles"
+            : state.OurRiichi && !baseline.TenpaiWaits.Select(TileHelpers.ToIndex).Order()
+                .SequenceEqual(after.TenpaiWaits.Select(TileHelpers.ToIndex).Order()) ? "riichi waits change"
+            : null;
+        why = $"{metrics}; " + (rejection is null ? "accept." : $"decline: {rejection}.");
+        return rejection is null;
     }
 
-    private static CallOption Make(ActionKind kind, Tile[] consumed, Tile? called, MeldType type)
-    {
-        var tiles = called.HasValue ? consumed.Append(called.Value).ToArray() : consumed;
-        var template = type == MeldType.Chi ? Meld.MakeChi(tiles[0], tiles[1], tiles[2])
-            : type == MeldType.Pon ? Meld.MakePon(tiles[0], true) : Meld.MakeKan(tiles[0], type);
-        // Factories describe the shape; retain the actual red/plain copies and mark chi open.
-        return new CallOption(kind, WithCopies(template, tiles), consumed, null);
-    }
-
-    private static Meld WithCopies(Meld template, Tile[] tiles)
-    {
-        var meld = new Meld(template.Type, tiles, template.Type != MeldType.Ankan);
-        // Meld's constructor normalizes red fives. Restore physical copies on this new instance.
-        tiles.OrderBy(t => t).ToArray().CopyTo(meld.Tiles, 0);
-        return meld;
-    }
-
-    private static bool BreaksOnlyPair(IReadOnlyList<Tile> before, List<Tile> after, Tile[] consumed)
+    private static bool BreaksOnlyPair(IReadOnlyList<Tile> before, IReadOnlyList<Tile> after, IReadOnlyList<Tile> consumed)
     {
         var pairs = before.GroupBy(TileHelpers.ToIndex).Where(g => g.Count() == 2).ToArray();
         return pairs.Length == 1 && consumed.Any(t => TileHelpers.ToIndex(t) == pairs[0].Key)
             && !after.GroupBy(TileHelpers.ToIndex).Any(g => g.Count() == 2);
     }
 
-    private static bool HasOpenYakuRoute(StateSnapshot state, List<Tile> closed, List<Meld> melds, Tile called)
+    private static bool HasOpenYakuRoute(StateSnapshot state, IReadOnlyList<Tile> closed, IReadOnlyList<Meld> melds, Tile called)
     {
         bool Yakuhai(Tile t) => t.Suit == TileSuit.Dragon || t.Suit == TileSuit.Wind
             && (t.Number == (int)state.RoundWind || t.Number == (int)state.SeatWind);
@@ -190,15 +146,14 @@ public sealed class CallPolicy : ICallPolicy
             && melds.SelectMany(m => m.Tiles).All(t => t.Suit == suit || t.IsHonor));
     }
 
-    private static List<Tile> RemoveOne(List<Tile> tiles, Tile tile)
+    private static List<Tile> RemoveOne(IReadOnlyList<Tile> tiles, Tile tile)
     {
         var remaining = tiles.ToList();
         remaining.Remove(tile);
         return remaining;
     }
 
-    private static CallDecision Accept(CallOption option, string why) =>
+    private static CallDecision Accept(CallCandidate option, string why) =>
         new(true, option.Kind, option.Meld, new Reason("call", why));
 
-    private sealed record CallOption(ActionKind Kind, Meld Meld, Tile[] Consumed, Meld? Replaced);
 }

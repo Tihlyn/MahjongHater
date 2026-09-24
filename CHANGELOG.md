@@ -4,6 +4,23 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+## [3.1.0.2] - 2026-09-24 (testing)
+
+### Added
+
+- Call descriptors validate Chi, Pon and all Kan types before evaluation, including
+  combined offers, physical tile counts, meld construction and chooser shapes.
+- Autoplay reports each candidate's construction and rejection reason, Kan shanten/ukeire
+  comparisons, and agreement or mismatch with the learned policy's action views.
+- Project icon in the plugin package and repository listing.
+
+### Fixed
+
+- Learned calls can only score validated candidates; conflicting action views fall back to
+  the validated heuristic. Tempo calls also respect Kan safety checks.
+- Chi chooser validation checks the complete sequence and suit, and added Kan preserves
+  the upgraded pon's position and physical red tile copies.
+
 ## [3.1.0.1] - 2026-09-24 (testing)
 
 ### Fixed

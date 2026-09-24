@@ -13,5 +13,5 @@
   "CanUnloadAsync": true,
   "LoadPriority": 0,
   "DalamudApiLevel": 15,
-  "IconUrl": ""
+  "IconUrl": "https://raw.githubusercontent.com/Tihlyn/MahjongHater/main/Data/icon.png"
 }

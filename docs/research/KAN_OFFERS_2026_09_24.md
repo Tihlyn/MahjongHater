@@ -104,3 +104,45 @@ a generic decline explanation rather than the individual Kan comparison.
 For a definitive future audit, log one record per answered Kan window with
 the candidate, before/after shanten and ukeire, rejection reason, and final
 action. No gameplay or policy changes were made during this investigation.
+
+## Evening follow-up on testing 3.1.0.1
+
+The next two completed matches were **17:55:25–18:21:49** and
+**18:27:25–18:52:16** (UTC+02:00). The log confirms 3.1.0.1 loaded at
+16:47:47.621, before both matches.
+
+- The first match contains no logged native Kan prompt for us. Seat 2 declared
+  an added kan on 8p at 18:05:13 and a concealed kan on 4s at 18:06:36.
+- The second match contains **12 confirmed own-turn Kan windows**, generations
+  **66–77**, from **18:48:21.681 to 18:51:26.197**. Each has a logged call-policy
+  decline, a successful discard, a game-side discard event clearing the window,
+  and an acceptance message. The first offer followed our draw of 6m while our
+  hand was still closed; these were not the earlier match's added-kan offers.
+
+Example from original `dalamud.log` lines 57113 and 57117–57120:
+
+```text
+18:48:21.681 call window #66 (type-19): [Kan] tile=- claim=False
+18:48:24.837 seq 1671 SelfDeclare -> Discard 5s
+18:48:24.837 seq 1671 reason [call]: No call improves the hand while preserving a yaku route or safe kan shape.
+18:48:24.837 seq 1671 reason [discard]: Best attack discard 5s: 1-shanten, 17 live improving tiles.
+```
+
+The same call-rejection text appears for sequences 1684, 1696, 1711, 1724,
+1736, 1749, 1761, 1774, 1786, 1800 and 1821. Last occurrence: original
+log line 57670 at 18:51:30.273. Relevant excerpts are retained locally in
+`artifacts/kan-audit-20260924-evening/evidence.log`.
+
+This establishes **prompt recognition and entry into call evaluation**:
+`DecisionPolicy` adds the call reason only after evaluating legal call actions.
+However, `CallPolicy` returns the same generic text both when its option iterator
+produces no candidate and when all candidates fail the policy checks. Therefore
+these logs do **not** establish that a particular concealed-kan candidate was
+constructed, nor which shanten/ukeire check rejected it. Adding `choice.Steps`
+fixed omission of the existing reasoning; the reasoning itself still lacks that
+distinction. No policy/recognition fix is justified by these records alone.
+
+Separately, the ranked-results fix is now confirmed live: `EmjRankResult`'s
+`End Match` button is **node 18**, ButtonClick param 0. It became clickable and
+was dispatched at **18:21:48.934** and **18:52:16.456**, followed by leaving
+content at 18:21:49.017 and 18:52:16.540 respectively.

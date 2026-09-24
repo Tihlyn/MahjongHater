@@ -53,6 +53,7 @@
     <None Update="MahjongHater.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="Data/icon.png" CopyToOutputDirectory="PreserveNewest" />
     <!-- Layout ships next to the dll (editable) and is embedded as the fallback. -->
     <None Update="resources/layouts/*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

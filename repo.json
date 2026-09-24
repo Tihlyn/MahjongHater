@@ -21,7 +21,7 @@
     "LoadSync": false,
     "CanUnloadAsync": true,
     "LoadPriority": 0,
-    "IconUrl": "",
+    "IconUrl": "https://raw.githubusercontent.com/Tihlyn/MahjongHater/main/Data/icon.png",
     "Punchline": "Doman Mahjong advisor: discard, call and riichi recommendations with reasoning.",
     "AcceptsFeedback": true,
     "DownloadLinkInstall": "https://github.com/Tihlyn/MahjongHater/releases/download/v3.0.0/latest.zip",
