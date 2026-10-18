@@ -20,7 +20,7 @@ namespace MahjongHater.Core.Policy;
 public sealed class TenpaiReveals
 {
     public const int Groups = 4;
-    private const double PriorA = 1.5, PriorB = 2.0, PriorSeat = 0.7;
+    private const double PriorA = 1.5, PriorB = 2.0, PriorSeat = 0.7, MaxStep = 2;
 
     // One revealed seat: its group, the uncorrected estimate as a logit, its looseness, the truth.
     public sealed record Row(int Group, double Logit, double Looseness, bool Tenpai);
@@ -147,14 +147,18 @@ public sealed class TenpaiReveals
         return Math.Log(p / (1 - p));
     }
 
-    // MAP of (a, b) per group by Newton's method.
+    // MAP of (a, b) per group by Newton's method, steps capped and halved until the posterior
+    // improves (an uncapped step overshot to a = +673 on 691 rows of three-call seats).
     private void Fit()
     {
         for (var g = 0; g < Groups; g++)
         {
             double a = 0, b = 0;
             var group = this.rows.Where(r => r.Group == g).ToList();
-            for (var iteration = 0; iteration < 30 && group.Count > 0; iteration++)
+            double Objective(double x, double y) =>
+                -x * x / (2 * PriorA * PriorA) - y * y / (2 * PriorB * PriorB) + group.Sum(r => LogLikelihood(r.Logit + x + y * r.Looseness, r.Tenpai));
+            var current = Objective(a, b);
+            for (var iteration = 0; iteration < 50 && group.Count > 0; iteration++)
             {
                 double ga = -a / (PriorA * PriorA), gb = -b / (PriorB * PriorB);
                 double haa = -1 / (PriorA * PriorA), hab = 0, hbb = -1 / (PriorB * PriorB);
@@ -173,9 +177,15 @@ public sealed class TenpaiReveals
                 var det = haa * hbb - hab * hab;
                 var da = -(hbb * ga - hab * gb) / det;
                 var db = -(haa * gb - hab * ga) / det;
-                a += da;
-                b += db;
-                if (Math.Abs(da) + Math.Abs(db) < 1e-7)
+                var scale = Math.Min(1, MaxStep / Math.Max(Math.Abs(da), Math.Abs(db)));
+                while (scale > 1e-6 && Objective(a + scale * da, b + scale * db) < current)
+                    scale /= 2;
+                if (scale <= 1e-6)
+                    break;
+                a += scale * da;
+                b += scale * db;
+                current = Objective(a, b);
+                if (scale * (Math.Abs(da) + Math.Abs(db)) < 1e-7)
                     break;
             }
 
@@ -190,24 +200,38 @@ public sealed class TenpaiReveals
     {
         for (var seat = 1; seat <= 3; seat++)
         {
+            var rows = this.seatRows[seat];
+            double Base(Row r) => r.Logit + this.coefficients[r.Group, 0] + this.coefficients[r.Group, 1] * r.Looseness;
+            double Objective(double x) => -x * x / (2 * PriorSeat * PriorSeat) + rows.Sum(r => LogLikelihood(Base(r) + x, r.Tenpai));
             var e = 0d;
-            for (var iteration = 0; iteration < 30 && this.seatRows[seat].Count > 0; iteration++)
+            var current = Objective(e);
+            for (var iteration = 0; iteration < 50 && rows.Count > 0; iteration++)
             {
                 double grad = -e / (PriorSeat * PriorSeat), hess = -1 / (PriorSeat * PriorSeat);
-                foreach (var r in this.seatRows[seat])
+                foreach (var r in rows)
                 {
-                    var p = 1 / (1 + Math.Exp(-(r.Logit + this.coefficients[r.Group, 0] + this.coefficients[r.Group, 1] * r.Looseness + e)));
+                    var p = 1 / (1 + Math.Exp(-(Base(r) + e)));
                     grad += (r.Tenpai ? 1 : 0) - p;
                     hess -= p * (1 - p);
                 }
 
-                var step = -grad / hess;
+                var step = Math.Clamp(-grad / hess, -MaxStep, MaxStep);
+                while (Math.Abs(step) > 1e-9 && Objective(e + step) < current)
+                    step /= 2;
                 e += step;
+                current = Objective(e);
                 if (Math.Abs(step) < 1e-7)
                     break;
             }
 
             this.seatOffset[seat] = e;
         }
+    }
+
+    // log P(tenpai = y) for a logit z, without overflow.
+    private static double LogLikelihood(double z, bool y)
+    {
+        var x = y ? -z : z;
+        return -(x > 0 ? x + Math.Log(1 + Math.Exp(-x)) : Math.Log(1 + Math.Exp(x)));
     }
 }

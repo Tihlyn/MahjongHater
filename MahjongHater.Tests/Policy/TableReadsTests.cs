@@ -52,6 +52,25 @@ public class TableReadsTests
     }
 
     [Fact]
+    public void The_fit_converges_on_confident_estimates_that_were_mostly_wrong()
+    {
+        // The arena case that overshot to a = +673: v2's network reads three-call seats at
+        // 99.5-99.99 % (no river-tell cap), 41 % were tenpai, looseness near zero.
+        var random = new Random(7);
+        var rows = Enumerable.Range(0, 691).Select(i =>
+        {
+            var p = 0.995 + 0.0049 * random.NextDouble();
+            return new TenpaiReveals.Row(3, Math.Log(p / (1 - p)), 0.15 * random.NextDouble(), random.NextDouble() < 0.41);
+        }).ToList();
+        var store = new TenpaiReveals(rows);
+        var (a, b) = store.Coefficients(3);
+        Assert.InRange(a, -10, 0);
+        Assert.InRange(b, -5, 5);
+        var mean = rows.Average(r => Logistic(r.Logit + a + b * r.Looseness));
+        Assert.InRange(mean, 0.36, 0.46);
+    }
+
+    [Fact]
     public void A_draw_labels_the_last_estimate_and_skips_riichi_seats()
     {
         var store = new TenpaiReveals();
