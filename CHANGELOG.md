@@ -6,48 +6,48 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## [3.4.0.0] - 2026-10-18 (testing)
 
+### Fixed
+
+- Yakuman: hands shaped for a yakuman are valued as one, so the policy keeps the route
+  (discards, calls and dama on a yakuman wait) instead of trading it for speed, and a yakuman
+  tenpai no longer folds on the riichi tables' budget.
+- The tile that completes an opponent's visible daisangen or four-winds hand is treated as a
+  yakuman deal-in (and pao is noted).
+
 ### Added
 
-- Defense v3 (Settings → Defense v3, needs Defense v2): danger against open and dama hands
-  from what their calls and river show (flush, toitoi, yakuhai, tanyao), measured on 152 690
-  Tenhou Phoenix games (`resources/policy/open_danger.json`).
-- Tenpai tells: a run of drawn-and-discarded tiles, and a hand-cut live dora, live yakuhai or
-  late middle tile, raise the tenpai estimate of open and dama seats.
-- The riichi tile's neighbours, ippatsu and the last discard (houtei), and a kokushi-shaped
-  river are priced from the same replays.
-- Per-player play: each opponent gets a probability of being novice-like from its own river
-  (early middle tiles, whether it folds to a riichi), and its danger blends the steady and the
-  novice-like reading by that probability, leaning cautious while the evidence is thin.
-- Open hands are read several ways at once: a flush read from the river fades with each
-  in-suit discard instead of flipping at a cutoff.
-- The push budget is shared across every opponent by tenpai and value, including seats not
-  yet past the threat line: a cheap open hand behind a riichi no longer blocks tiles at the
-  riichi's line.
-- With no safe tile left, the least dangerous retreat is weighed against what attacking
-  gains instead of pushing any tile.
-- A good-wait mangan stays dama when the whole table is likely to fold to a riichi.
-- Keeps the last safe tile in hand mid-game while attacking, unless it costs nothing to lose.
+- Defense v3, experimental and off by default (Settings → Defense model v3, needs v2). It deals
+  in less than v2 on every arena field but places worse against novices, so v2 stays the
+  default until a live A/B says otherwise. What it adds:
+  - Danger against open and dama hands from what their calls and river show (flush, toitoi,
+    yakuhai, tanyao), measured on 152 690 Tenhou Phoenix games
+    (`resources/policy/open_danger.json`); a flush read fades with each in-suit discard
+    instead of flipping at a cutoff.
+  - Tenpai tells: a run of drawn-and-discarded tiles, and a hand-cut live dora, live yakuhai
+    or late middle tile, raise the tenpai estimate of open and dama seats. The riichi tile's
+    neighbours, ippatsu, the last discard (houtei) and a kokushi-shaped river are priced
+    from the same replays.
+  - Per-player play: each opponent gets a probability of being novice-like from its own
+    river (early middle tiles, whether it folds to a riichi), and its danger blends the
+    steady and the novice-like reading by that probability, leaning cautious while the
+    evidence is thin.
+  - The push budget is shared across the threatening seats by tenpai and value; a slow,
+    cheap hand no longer pushes into an expensive open hand, and an expensive slow hand may
+    push further. With no safe tile left, the least dangerous retreat is weighed against
+    what attacking gains instead of pushing any tile.
+  - A good-wait mangan stays dama when the whole table is likely to fold to a riichi, and
+    the last safe tile is kept in hand mid-game while attacking.
 - `win_offers.jsonl` journals every win offer and its outcome; `hand_rivers.jsonl` every
   seat's river per hand (`tools/hand_rivers.py` prints a per-player table); the deal-in
   calibration CSV records the hand read, tsumogiri streak and profile.
 - `Precompute arena`: duplicate-format matches against simulated novices, the Phoenix-trained
   network, a mix, or a `live`-like table, for policy A/B runs.
 
-### Fixed
+### Arena (guarded learned policy, duplicate matches, Δ placement vs Defense v2)
 
-- Yakuman (with Defense v2 or v3, not only v3): hands shaped for a yakuman are valued as one,
-  so the policy keeps the route (discards, calls and dama on a yakuman wait) instead of
-  trading it for speed; a yakuman tenpai no longer folds on the riichi tables' budget.
-- A slow, cheap hand no longer pushes into an expensive open hand; an expensive slow hand
-  may push further than before.
-- The tile that completes an opponent's visible daisangen or four-winds hand is treated as a
-  yakuman deal-in (and pao is noted).
-
-### Changed
-
-- Arena (guarded learned policy, duplicate matches vs Defense v2): average placement
-  −0.070 against novices (4th place 4.4 % → 2.1 %), −0.037 against Phoenix-level players
-  (deal-in 10.1 % → 8.8 %). MIXED_PLACEHOLDER
+- Defense v3: level on a live-like table (+0.003 ± 0.026) and against the Phoenix-trained
+  network (−0.015 ± 0.033), behind against novices (+0.044 ± 0.028); deal-in 8.2 → 7.2 %,
+  9.8 → 8.5 % and 2.5 → 2.0 %. Details: `docs/research/DEFENSE_V3_2026_10_18.md` §5.
 
 ## [3.2.0] - 2026-09-27
 

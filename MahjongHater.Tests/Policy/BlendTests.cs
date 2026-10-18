@@ -93,8 +93,8 @@ public class BlendTests
         var state = Board("123m456m4578p447s1z", turn: 10);
         var opponents = new Fixed(1, new() { [1] = (1, 6000), [2] = (0.15, 8000) }, (t, s) => t == Tile.Parse("1z") ? 0 : 0.05);
         var cheap = Candidate(shanten: 0, ukeire: 2) with { ValuePoints = 1300, MinPoints = 1000, WinProbability = 0.2 };
-        var continuous = new PushFoldPolicy(V3).Decide(state, opponents, [cheap]);
-        var floored = new PushFoldPolicy(V3 with { ContinuousThreats = false }).Decide(state, opponents, [cheap]);
+        var continuous = new PushFoldPolicy(V3 with { ContinuousThreats = true }).Decide(state, opponents, [cheap]);
+        var floored = new PushFoldPolicy(V3).Decide(state, opponents, [cheap]);
         Assert.Equal(0.15 * 8000 / 6000, continuous.SeatWeights![2], 6);
         Assert.False(floored.SeatWeights!.ContainsKey(2));
         Assert.DoesNotContain(2, continuous.ThreatSeats);   // the floor still decides who is a threat

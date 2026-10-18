@@ -7,8 +7,7 @@ public sealed class Configuration : IPluginConfiguration
 {
     private IDalamudPluginInterface? pluginInterface;
 
-    // 2 (3.4.0.0): Defense v3 became the default; older configs are switched on once in Load.
-    public int Version { get; set; } = 2;
+    public int Version { get; set; } = 1;
 
     public bool PluginEnabled { get; set; } = true;
 
@@ -28,8 +27,8 @@ public sealed class Configuration : IPluginConfiguration
 
     // Defense v3 on top of v2: hand reads vs open/dama seats, river tells, per-player profiles
     // and a value-aware, per-seat push budget (docs/research/DEFENSE_V3_2026_10_18.md). Needs
-    // DefenseV2.
-    public bool DefenseV3 { get; set; } = true;
+    // DefenseV2. Opt-in: in the 3.4 arena it dealt in less but placed worse than v2.
+    public bool DefenseV3 { get; set; }
 
     // Experimental offline discard lookup and optional public-state corpus capture.
     // Both take effect after a plugin reload.
@@ -75,21 +74,8 @@ public sealed class Configuration : IPluginConfiguration
     {
         var config = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         config.Initialize(pluginInterface);
-        var migrated = config.Migrate();
         config.ClampValues();
-        if (migrated)
-            config.Save();
         return config;
-    }
-
-    // Upgrades a saved configuration; true when anything changed.
-    public bool Migrate()
-    {
-        if (this.Version >= 2)
-            return false;
-        this.DefenseV3 = true;
-        this.Version = 2;
-        return true;
     }
 
     public void Initialize(IDalamudPluginInterface pluginInterface)

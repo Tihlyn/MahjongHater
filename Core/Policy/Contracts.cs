@@ -368,7 +368,8 @@ public sealed record PolicyWeights
     public bool ReadMixture { get; init; } = true;
     // Seat budget over every opponent, not only those past ThreatTenpaiFloor: a 15 % tenpai
     // seat adds 15 % of its value-weighted danger. The floor still decides when defense starts.
-    public bool ContinuousThreats { get; init; } = true;
+    // Off: in the 3.4 live arena it cost 0.05 placement (it folds to seats that are rarely tenpai).
+    public bool ContinuousThreats { get; init; }
     // With no safe tile to fold with, compare the least costly retreat against the attack
     // instead of pushing every tile: a tile may cost what the retreat costs plus the extra win
     // value it buys (per PushExposureTurns).
