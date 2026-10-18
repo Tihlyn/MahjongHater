@@ -54,6 +54,12 @@ public sealed class OpponentProfiles(double decay = 0.9)
     private readonly int[] counted = new int[4];
     private readonly int[] handMiddle = new int[4];
     private readonly int[] handEarly = new int[4];
+    // Fold read: genbutsu among the seat's discards after another riichi, finished hands
+    // decayed like the evidence, and the current hand's.
+    private readonly double[] foldSafe = new double[4];
+    private readonly double[] foldCount = new double[4];
+    private readonly int[] handFoldSafe = new int[4];
+    private readonly int[] handFoldCount = new int[4];
 
     // Call with each snapshot. A seat whose river got shorter started a new hand; its previous
     // hand's evidence is banked. A fresh East 1 with everyone on 25 000 is a new match.
@@ -81,6 +87,10 @@ public sealed class OpponentProfiles(double decay = 0.9)
                 this.counted[s] += this.handEarly[s];
                 this.handEvidence[s] = 0;
                 this.handCounted[s] = false;
+                this.foldSafe[s] = this.foldSafe[s] * decay + this.handFoldSafe[s];
+                this.foldCount[s] = this.foldCount[s] * decay + this.handFoldCount[s];
+                this.handFoldSafe[s] = 0;
+                this.handFoldCount[s] = 0;
             }
 
             this.lastDiscards[s] = seat.Discards.Count;
@@ -96,6 +106,7 @@ public sealed class OpponentProfiles(double decay = 0.9)
                 counted = true;
             }
 
+            (this.handFoldSafe[s], this.handFoldCount[s]) = FoldCounts(seat, state) ?? (0, 0);
             if (FoldShare(seat, state) is { } share)
             {
                 var fifth = Math.Min(4, (int)(5 * share));
@@ -115,6 +126,20 @@ public sealed class OpponentProfiles(double decay = 0.9)
     }
 
     public bool NoviceLike(int seat, PolicyWeights w) => this.NoviceProbability(seat) >= w.NoviceProbabilityThreshold;
+
+    // Share of the seat's discards after another riichi that were genbutsu, this match: the
+    // posterior mean with FoldPriorStrength discards' worth of a steady player's share.
+    public double FoldRate(int seat, PolicyWeights w)
+    {
+        var safe = this.foldSafe[seat] + this.handFoldSafe[seat];
+        var n = this.foldCount[seat] + this.handFoldCount[seat];
+        return (w.FoldPriorStrength * w.SteadyFoldShare + safe) / (w.FoldPriorStrength + n);
+    }
+
+    // How much of a steady player's folding the seat shows: 1 at the steady share, 0 at what a
+    // player who never folds throws as genbutsu by chance. 1 until it has had to fold.
+    public double Steadiness(int seat, PolicyWeights w) =>
+        Math.Clamp((this.FoldRate(seat, w) - w.NonFolderShare) / Math.Max(1e-6, w.SteadyFoldShare - w.NonFolderShare), 0, 1);
 
     // P(novice) for a decision that pays off only if the seat really is novice-like (lifting the
     // push cap): shrunk by caution × 4q(1 - q), so undecided evidence counts for less.
@@ -145,6 +170,10 @@ public sealed class OpponentProfiles(double decay = 0.9)
         Array.Clear(this.counted);
         Array.Clear(this.handMiddle);
         Array.Clear(this.handEarly);
+        Array.Clear(this.foldSafe);
+        Array.Clear(this.foldCount);
+        Array.Clear(this.handFoldSafe);
+        Array.Clear(this.handFoldCount);
     }
 
     private static bool IsMiddle(Tile t) => !t.IsHonor && t.Number is >= 3 and <= 7;
@@ -152,7 +181,13 @@ public sealed class OpponentProfiles(double decay = 0.9)
     // Share of the seat's discards after the first other riichi that were genbutsu to it (the
     // riichi seat's own discards or anything thrown after the declaration); null with fewer
     // than three such discards, when the seat declared first, or without global discard order.
-    internal static double? FoldShare(SeatState seat, StateSnapshot state)
+    internal static double? FoldShare(SeatState seat, StateSnapshot state) =>
+        FoldCounts(seat, state, untilOwnRiichi: false) is { Count: >= FoldMinDiscards } f ? (double)f.Safe / f.Count : null;
+
+    // The counts behind FoldShare. `untilOwnRiichi`: stop at the seat's own later riichi, whose
+    // discards are forced rather than a choice (the fold read; the classifier's Phoenix
+    // histogram was counted without it).
+    public static (int Safe, int Count)? FoldCounts(SeatState seat, StateSnapshot state, bool untilOwnRiichi = true)
     {
         if (seat.DiscardOrder.Count != seat.Discards.Count)
             return null;
@@ -174,13 +209,15 @@ public sealed class OpponentProfiles(double decay = 0.9)
             var order = seat.DiscardOrder[i];
             if (order <= at)
                 continue;
+            if (untilOwnRiichi && seat.Riichi && seat.RiichiDiscardIndex >= 0 && i > seat.RiichiDiscardIndex)
+                break;
             var kind = TileHelpers.ToIndex(seat.Discards[i]);
             n++;
             if (own.Contains(kind) || all.Any(d => d.Kind == kind && d.Order > at && d.Order < order))
                 safe++;
         }
 
-        return n >= FoldMinDiscards ? (double)safe / n : null;
+        return (safe, n);
     }
 
     private static double[] BetaBinomial(int n, double mean, double concentration)

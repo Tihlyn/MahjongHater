@@ -139,6 +139,20 @@ public interface IOpponentModel
     // V3: posterior that the seat is a novice-like player (OpponentProfiles); the prior when
     // nothing is known.
     double NoviceProbability(int seat) => OpponentProfiles.Prior;
+
+    // 1 when the seat folds to a riichi like a steady player, 0 when it never does
+    // (OpponentProfiles.Steadiness); 1 when nothing is known.
+    double Steadiness(int seat) => 1;
+
+    // Factor on our win estimate's K that our own results on this population show
+    // (WinReveals); 1 when unknown or switched off.
+    double WinRateFactor(bool open) => 1;
+
+    // We are discarding into tenpai with this hazard (HandValue.TenpaiHazard); the hand's first
+    // tenpai becomes a WinReveals row when the hand ends.
+    void OurTenpai(bool open, double hazard)
+    {
+    }
 }
 
 // Final-placement distribution for us (1st..4th) if every relative seat's score moved by
@@ -268,8 +282,9 @@ public sealed record PolicyWeights
     // WinRateK (closed) and WinRateKOpen are fitted on arena outcomes of our first tenpai of a
     // hand against the Phoenix-trained network (2026-10-18, `Precompute calibrate`: riichi 1.26
     // ± 0.09, open 1.01 ± 0.08; 47 % of riichi won). The old 0.8 predicted 34 % for those 47 %.
-    // Tables that fold less win more (3.6 / 2.0 against arena novices); that part needs a
-    // per-seat fold read and is not in the estimate yet.
+    // Tables that fold less win more (3.6 / 2.0 against arena novices): WinReveals learns that
+    // factor from our own results. A per-seat term (opponents in riichi or not folding) fitted
+    // to zero on 3 590 arena tenpai, so there is none.
     public double WinRateK { get; init; } = 1.25;
     public double WinRateKOpen { get; init; } = 1.0;
     public double TenpaiRateK { get; init; } = 1.0;
@@ -391,6 +406,26 @@ public sealed record PolicyWeights
     public int SafeTileKeepFromTurn { get; init; } = 6;
     public double SafeTileKeepUkeire { get; init; } = 1.5;
     public double SafeTileKeepUkeireFar { get; init; } = 3;
+
+    // --- Table reads (Defense v2 and v3) ---
+    // What the table shows about each seat, measured against arena ground truth
+    // (`Precompute calibrate`, docs/research/DEFENSE_V3_2026_10_18.md §6).
+    // Fold read (OpponentProfiles.Steadiness): the share of a seat's discards after another
+    // riichi that are genbutsu, with FoldPriorStrength discards' worth of the steady share as
+    // the prior; NonFolderShare is what a player who never folds throws as genbutsu by chance.
+    // Arena: Phoenix-trained seats 72.7 %, casual (fold 35 %) 58.4 %, never-fold novices 46.0 %.
+    // A 4-hand match gives about three such discards per opponent, so the read moves little; it
+    // is the looseness TenpaiReveals conditions on.
+    public double SteadyFoldShare { get; init; } = 0.73;
+    public double NonFolderShare { get; init; } = 0.46;
+    public double FoldPriorStrength { get; init; } = 6;
+    // Tenpai corrected by what draws revealed (TenpaiReveals), when the model has a store.
+    public bool TenpaiReveals { get; init; }
+    // Our win estimate scaled by the factor our own tenpai results on these tables show
+    // (WinReveals), when the model has a store.
+    public bool WinReveals { get; init; }
+    // Open, non-riichi hands are worth this share of the read value (1 = as read).
+    public double OpenValueScale { get; init; } = 1;
 
     public static PolicyWeights Default { get; } = new();
 }

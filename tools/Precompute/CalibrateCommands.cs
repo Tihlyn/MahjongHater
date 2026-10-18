@@ -10,13 +10,13 @@ using MahjongHater.Core.Simulation;
 // hands, plus its own tenpai win estimate with how the hand ended. Read-only: no policy change.
 internal static class CalibrateCommands
 {
-    public const string Usage = "calibrate <seeds> <novice|learned|mixed|live> <model.json|-> <arm> [threads] [rows.csv] [hands=4] [first-seed=1]";
+    public const string Usage = "calibrate <seeds> <novice|learned|mixed|live> <model.json|-> <arm> [threads] [rows.csv] [hands=4] [first-seed=1] [warmup=200]";
 
     public static bool Handles(string command) => command == "calibrate";
 
     // One opponent seat at one of our discards.
     private sealed record SeatRow(string Type, string State, int Turn, int Hand, double Tenpai, bool ShapeTenpai, bool RonTenpai,
-        double Value, double TrueValue, double Novice, (double Danger, bool Hit)[] Tiles);
+        double Value, double TrueValue, double Novice, double Steady, (double Danger, bool Hit)[] Tiles);
 
     // Our first tenpai discard of a hand; resolved when the hand ends.
     // Table: the opponents' true types in relative seat order (n novice, c casual, l learned);
@@ -25,6 +25,9 @@ internal static class CalibrateCommands
     {
         public string Table { get; init; } = "";
         public double[] Novice { get; init; } = [];
+        // The fold read and riichi of each opponent, relative seat order.
+        public double[] Steady { get; init; } = [];
+        public bool[] OpponentRiichi { get; init; } = [];
     }
 
     public static int Run(string[] args, CancellationToken ct)
@@ -38,18 +41,21 @@ internal static class CalibrateCommands
         var csv = args.Length > 6 && args[6] != "-" ? args[6] : null;
         var rules = new SimulationRules { HandsInMatch = args.Length > 7 ? int.Parse(args[7], CultureInfo.InvariantCulture) : 4 };
         var first = args.Length > 8 ? int.Parse(args[8], CultureInfo.InvariantCulture) : 1;
+        var warmup = args.Length > 9 ? int.Parse(args[9], CultureInfo.InvariantCulture) : 200;
         if (field is not ("novice" or "learned" or "mixed" or "live")) throw new ArgumentException("opponents must be novice, learned, mixed or live");
         if ((field != "novice" || arm.StartsWith("guarded", StringComparison.Ordinal)) && model is null)
             throw new ArgumentException("learned opponents and guarded arms need a model");
 
+        var population = ArenaCommands.Warmup(arm, field, model, rules, warmup, threads, ct);
         var jobs = Enumerable.Range(first, seedCount).SelectMany(seed => Enumerable.Range(0, 4).Select(seat => (Seed: seed, Seat: seat))).ToArray();
         var seats = new List<SeatRow>();
         var wins = new List<(WinRow Row, bool Won, bool Ron)>();
+        var folds = new Dictionary<string, (long Safe, long Count)>();
         var done = 0;
         Parallel.For(0, jobs.Length, new ParallelOptions { MaxDegreeOfParallelism = threads, CancellationToken = ct }, i =>
         {
             var (seed, us) = jobs[i];
-            var (candidate, opponents, weights) = ArenaCommands.MakeCandidate(arm, model);
+            var (candidate, opponents, weights) = ArenaCommands.MakeCandidate(arm, model, population?.Stores().Tenpai, population?.Stores().Wins);
             var types = new string[4];
             var table = new IArenaSeat[4];
             for (var s = 0; s < 4; s++)
@@ -60,6 +66,7 @@ internal static class CalibrateCommands
 
             var localSeats = new List<SeatRow>();
             var localWins = new List<WinRow>();
+            var handFolds = new Dictionary<(int Hand, int Seat), (int Safe, int Count)>();
             SimGame? current = null;
             var hand = 0;
             var tenpaiSeen = false;
@@ -72,9 +79,14 @@ internal static class CalibrateCommands
                     return;
                 if (!ReferenceEquals(game, current)) { current = game; hand++; tenpaiSeen = false; }
                 var ourTiles = game.Players[us].Hand.Select(TileHelpers.ToIndex).Distinct().ToArray();
+                var snapshot = SimulationObservation.Observe(game, legal).Snapshot;
                 for (var o = 0; o < 4; o++)
                     if (o != us)
+                    {
                         localSeats.Add(Observe(game, o, (o - us + 4) % 4, types[o], hand, ourTiles, opponents));
+                        if (OpponentProfiles.FoldCounts(snapshot.Seats[(o - us + 4) % 4], snapshot) is { } f)
+                            handFolds[(hand, o)] = f;
+                    }
                 if (!tenpaiSeen && OurTenpai(game, us, action, weights) is { } row)
                 {
                     tenpaiSeen = true;
@@ -84,6 +96,9 @@ internal static class CalibrateCommands
                         Novices = types.Count(t => t is "novice" or "casual"),
                         Table = string.Concat(relative.Select(o => types[o][0])),
                         Novice = Enumerable.Range(1, 3).Select(opponents.NoviceProbability).ToArray(),
+                        Steady = Enumerable.Range(1, 3).Select(opponents.Steadiness).ToArray(),
+                        OpponentRiichi = relative.Select(o => game.Players[o].Riichi).ToArray(),
+                        Predicted = HandValue.WinProbability(0, row.Ukeire, 0, row.Wall, weights, row.Open, opponents.WinRateFactor(row.Open)),
                     });
                 }
             });
@@ -93,6 +108,11 @@ internal static class CalibrateCommands
             {
                 seats.AddRange(localSeats);
                 wins.AddRange(resolved.Select(r => (r.w, r.Item2, r.Item2 && r.Item3)));
+                foreach (var ((_, o), f) in handFolds)
+                {
+                    var t = folds.GetValueOrDefault(types[o]);
+                    folds[types[o]] = (t.Safe + f.Safe, t.Count + f.Count);
+                }
             }
 
             var n = Interlocked.Increment(ref done);
@@ -101,7 +121,7 @@ internal static class CalibrateCommands
         Console.Error.WriteLine();
 
         Console.WriteLine($"calibrate: {seedCount} seeds x 4 seats, {rules.HandsInMatch}-hand matches, opponents={field}, arm={arm}, {seats.Count} seat rows");
-        Report(seats, wins);
+        Report(seats, wins, folds);
         if (csv is not null)
         {
             WriteCsv(csv, seats);
@@ -123,8 +143,9 @@ internal static class CalibrateCommands
         var state = p.Riichi ? "riichi" : open == 0 ? "dama" : open >= 3 ? "open3+" : $"open{open}";
         var tiles = ourTiles.Select(k => (opponents.Danger(TileHelpers.FromIndex(k), relative), ron.ContainsKey(k))).ToArray();
         return new SeatRow(type, state, p.River.Count, hand, opponents.TenpaiProbability(relative), waits != 0, ron.Count > 0,
-            opponents.Value(relative), ron.Count > 0 ? ron.Values.Average() : 0, opponents.NoviceProbability(relative), tiles);
+            opponents.Value(relative), ron.Count > 0 ? ron.Values.Average() : 0, opponents.NoviceProbability(relative), opponents.Steadiness(relative), tiles);
     }
+
 
     // Our hand after this discard, when it is tenpai: the policy's own win estimate.
     private static WinRow? OurTenpai(SimGame game, int us, SimAction action, PolicyWeights w)
@@ -146,7 +167,7 @@ internal static class CalibrateCommands
             HandValue.WinProbability(0, ukeire, 0, wall, w, open), game, us);
     }
 
-    private static void Report(List<SeatRow> rows, List<(WinRow Row, bool Won, bool Ron)> wins)
+    private static void Report(List<SeatRow> rows, List<(WinRow Row, bool Won, bool Ron)> wins, Dictionary<string, (long Safe, long Count)> folds)
     {
         var types = rows.Select(r => r.Type).Distinct().Order().ToArray();
         string[] states = ["dama", "open1", "open2", "open3+", "riichi"];
@@ -256,6 +277,19 @@ internal static class CalibrateCommands
         }
 
         Console.WriteLine();
+        Console.WriteLine("Fold read: genbutsu share of discards after another riichi (raw, all hands), and the steadiness the model reads, by hand of the match.");
+        Console.WriteLine($"{"type",-8} {"raw",16} " + string.Join(" ", Enumerable.Range(1, 5).Select(h => $"{(h == 5 ? "hand 5+" : $"hand {h}"),9}")));
+        foreach (var type in types)
+        {
+            var (safe, count) = folds.GetValueOrDefault(type);
+            Console.WriteLine($"{type,-8} {(count > 0 ? (double)safe / count : 0),6:P1} (n {count,6}) " + string.Join(" ", Enumerable.Range(1, 5).Select(h =>
+            {
+                var g = rows.Where(r => r.Type == type && (h == 5 ? r.Hand >= 5 : r.Hand == h)).ToList();
+                return g.Count < 30 ? $"{"-",9}" : $"{g.Average(r => r.Steady),9:0.00}";
+            })));
+        }
+
+        Console.WriteLine();
         Console.WriteLine("Our first tenpai of a hand: predicted win (HandValue.WinProbability) vs won, by novices at the table.");
         Console.WriteLine($"{"novices",-8} {"kind",-7} {"n",7} {"pred",7} {"won",7} {"by ron",7} {"ratio",6}");
         foreach (var group in wins.GroupBy(w => (w.Row.Novices, Kind: w.Row.Riichi ? "riichi" : w.Row.Open ? "open" : "dama")).OrderBy(g => g.Key.Novices).ThenBy(g => g.Key.Kind))
@@ -268,19 +302,20 @@ internal static class CalibrateCommands
 
     private static void WriteWins(string path, List<(WinRow Row, bool Won, bool Ron)> wins)
     {
-        var text = new StringBuilder("table,kind,wall,ukeire,pred,won,ron,q1,q2,q3\n");
+        var text = new StringBuilder("table,kind,wall,ukeire,pred,won,ron,q1,q2,q3,s1,s2,s3,r1,r2,r3\n");
+        static string Join(IEnumerable<double> v) => string.Join(",", v.Select(x => x.ToString("0.###", CultureInfo.InvariantCulture)));
         foreach (var (r, won, ron) in wins)
             text.Append(string.Create(CultureInfo.InvariantCulture,
-                $"{r.Table},{(r.Riichi ? "riichi" : r.Open ? "open" : "dama")},{r.Wall},{r.Ukeire},{r.Predicted:0.####},{(won ? 1 : 0)},{(ron ? 1 : 0)},{string.Join(",", r.Novice.Select(q => q.ToString("0.###", CultureInfo.InvariantCulture)))}\n"));
+                $"{r.Table},{(r.Riichi ? "riichi" : r.Open ? "open" : "dama")},{r.Wall},{r.Ukeire},{r.Predicted:0.####},{(won ? 1 : 0)},{(ron ? 1 : 0)},{Join(r.Novice)},{Join(r.Steady)},{string.Join(",", r.OpponentRiichi.Select(x => x ? 1 : 0))}\n"));
         File.WriteAllText(path, text.ToString());
     }
 
     private static void WriteCsv(string path, List<SeatRow> rows)
     {
-        var text = new StringBuilder("type,state,turn,hand,tenpai,shape_tenpai,ron_tenpai,value,true_value,novice,tiles,pred_hits,hits\n");
+        var text = new StringBuilder("type,state,turn,hand,tenpai,shape_tenpai,ron_tenpai,value,true_value,novice,steady,tiles,pred_hits,hits\n");
         foreach (var r in rows)
             text.Append(string.Create(CultureInfo.InvariantCulture,
-                $"{r.Type},{r.State},{r.Turn},{r.Hand},{r.Tenpai:0.####},{(r.ShapeTenpai ? 1 : 0)},{(r.RonTenpai ? 1 : 0)},{r.Value:0},{r.TrueValue:0},{r.Novice:0.####},{r.Tiles.Length},{r.Tiles.Sum(t => t.Danger):0.####},{r.Tiles.Count(t => t.Hit)}\n"));
+                $"{r.Type},{r.State},{r.Turn},{r.Hand},{r.Tenpai:0.####},{(r.ShapeTenpai ? 1 : 0)},{(r.RonTenpai ? 1 : 0)},{r.Value:0},{r.TrueValue:0},{r.Novice:0.####},{r.Steady:0.###},{r.Tiles.Length},{r.Tiles.Sum(t => t.Danger):0.####},{r.Tiles.Count(t => t.Hit)}\n"));
         File.WriteAllText(path, text.ToString());
     }
 }

@@ -218,6 +218,8 @@ public sealed class DecisionPolicy : IPolicy
             }
         }
 
+        if (best.ShantenAfter == 0)
+            this.opponents.OurTenpai(state.IsOpen, HandValue.TenpaiHazard(best.Ukeire, state.WallRemaining, this.weights, state.IsOpen));
         var action = ActionKind.Discard;
         if (stance == PushFoldStance.Push && state.Can(LegalAction.Riichi) && best.ShantenAfter == 0)
         {

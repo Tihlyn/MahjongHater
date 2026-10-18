@@ -26,6 +26,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IFramework framework;
     private readonly EmjActuator actuator;
     private readonly WinOfferJournal winOffers = new();
+    private TenpaiReveals? reveals;
+    private WinReveals? wins;
     private readonly SimulationDatabase? simulationDatabase;
 
     public Plugin(
@@ -53,7 +55,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             DefenseModel = !this.Configuration.DefenseV2 ? DefenseModel.Legacy : this.Configuration.DefenseV3 ? DefenseModel.V3 : DefenseModel.V2,
         };
-        IPolicy policy = new DecisionPolicy(weights: weights);
+        IPolicy policy = new DecisionPolicy(opponents: new OpponentModel(weights, reveals: this.LoadReveals(weights, weights.DefenseModel.ToString()), wins: this.wins), weights: weights);
         this.Reader.PolicyTag = weights.DefenseModel.ToString();
         if (this.Configuration.LearnedPolicyEnabled)
         {
@@ -71,10 +73,11 @@ public sealed class Plugin : IDalamudPlugin
                 // "learned-guarded" (docs/research/EVALUATION_RUNS.md): the network's discard
                 // ordering and tenpai head inside the measured danger budget; danger itself stays
                 // on the Houou tables, riichi/calls/wins on the heuristic rules.
-                var opponents = new MahjongHater.Core.Learning.LearnedOpponentModel(model, weights, useLearnedDanger: false);
+                var tag = weights.DefenseModel == DefenseModel.V3 ? "learned-guarded-v3" : "learned-guarded";
+                var opponents = new MahjongHater.Core.Learning.LearnedOpponentModel(model, weights, useLearnedDanger: false, this.LoadReveals(weights, tag), this.wins);
                 policy = new DecisionPolicy(opponents: opponents, discards: new MahjongHater.Core.Learning.LearnedDiscardPolicy(model, weights),
                     calls: new MahjongHater.Core.Learning.LearnedCallPolicy(model, weights), weights: weights);
-                this.Reader.PolicyTag = weights.DefenseModel == DefenseModel.V3 ? "learned-guarded-v3" : "learned-guarded";
+                this.Reader.PolicyTag = tag;
                 this.LearnedPolicy = new LearnedPolicyState(true,
                     $"{Path.GetFileName(path)} ({model.Rules.HandsInMatch}-hand, {model.Schema switch { 1 => "schema 1", _ => "schema 2" }}, {model.Status})",
                     Path.GetDirectoryName(path) ?? string.Empty);
@@ -443,6 +446,8 @@ public sealed class Plugin : IDalamudPlugin
     private void AppendHandResult(HandResult result)
     {
         this.AppendWinOffers(this.winOffers.HandEnded(result, DateTime.UtcNow));
+        if (result.Outcome != "unknown")
+            this.wins?.HandEnded(result.Outcome.StartsWith("win-", StringComparison.Ordinal));
         try
         {
             var path = this.HandResultPath;
@@ -498,9 +503,75 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    // One CSV row per opponent per finished hand; the file grows across sessions.
+    private string RevealPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "tenpai_reveals.csv");
+
+    private string WinRevealPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "win_reveals.csv");
+
+    // What the tables have shown, kept across sessions per policy: tenpai revealed at draws
+    // (TenpaiReveals) and our own tenpai results (WinReveals, in this.wins). Each policy's
+    // estimates are corrected against its own rows; Legacy keeps none. Replaces the stores the
+    // previous call made, so only the policy finally in use is fed.
+    private TenpaiReveals? LoadReveals(PolicyWeights weights, string tag)
+    {
+        this.reveals = null;
+        this.wins = null;
+        if (weights.DefenseModel == DefenseModel.Legacy)
+            return null;
+        var tenpai = this.ReadRows(this.RevealPath, tag, TenpaiReveals.FromCsv);
+        var won = this.ReadRows(this.WinRevealPath, tag, WinReveals.FromCsv);
+        this.reveals = new TenpaiReveals(tenpai) { RowAdded = row => this.AppendRow(this.RevealPath, "tag,group,logit,looseness,tenpai", $"{tag},{TenpaiReveals.ToCsv(row)}") };
+        this.wins = new WinReveals(won) { RowAdded = row => this.AppendRow(this.WinRevealPath, "tag,open,hazard,won", $"{tag},{WinReveals.ToCsv(row)}") };
+        this.pluginLog.Information($"[Calibration] {tenpai.Count} revealed tenpai and {won.Count} own tenpai row(s) for {tag}.");
+        return this.reveals;
+    }
+
+    private List<T> ReadRows<T>(string path, string tag, Func<string, T?> parse) where T : class
+    {
+        var rows = new List<T>();
+        try
+        {
+            if (File.Exists(path))
+                foreach (var line in File.ReadLines(path).Skip(1))
+                    if (line.Split(',', 2) is [var t, var rest] && t == tag && parse(rest) is { } row)
+                        rows.Add(row);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            this.pluginLog.Warning(ex, $"[Calibration] Failed to read {Path.GetFileName(path)}; starting without it.");
+        }
+
+        return rows;
+    }
+
+    private void AppendRow(string path, string header, string line)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var lines = new List<string>(2);
+            if (!File.Exists(path))
+                lines.Add(header);
+            lines.Add(line);
+            File.AppendAllLines(path, lines);
+        }
+        catch (Exception ex)
+        {
+            this.pluginLog.Warning(ex, $"[Calibration] Failed to append to {Path.GetFileName(path)}.");
+        }
+    }
+
+    // One CSV row per opponent per finished hand; the file grows across sessions. A draw's
+    // rows are what the draw screen showed, so they also go to the policy's reveal store.
     private void AppendCalibration(IReadOnlyList<TenpaiSample> samples)
     {
+        if (this.reveals is { } store && samples.Count > 0 && samples.All(x => x.Source == "draw"))
+        {
+            var shown = new bool?[4];
+            foreach (var sample in samples.Where(x => x.Seat is >= 1 and <= 3))
+                shown[sample.Seat] = sample.Tenpai;
+            store.Draw(shown);
+        }
+
         try
         {
             var path = this.CalibrationPath;
