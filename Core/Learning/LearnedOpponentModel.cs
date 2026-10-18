@@ -56,6 +56,7 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
     public int LiveSuji(int seat) => this.fallback.LiveSuji(seat);
     public string Profile(int seat) => this.fallback.Profile(seat);
     public bool NoviceLike(int seat) => this.fallback.NoviceLike(seat);
+    public double NoviceProbability(int seat) => this.fallback.NoviceProbability(seat);
     public double[]? Placement(StateSnapshot state, int[] scoreDeltas) =>
         !state.LayoutHealthy || state.Seats.Any(s => !s.DiscardsVerified) ? null : network.Placement(state, scoreDeltas);
     public DangerEstimate Explain(Tile tile, int seat)

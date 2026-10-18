@@ -82,7 +82,7 @@ public sealed class SimulationPolicy
             };
         }).OrderBy(c => c.ShantenAfter).ThenByDescending(c => c.Score).ThenBy(c => c.Tile).ToArray();
         var budget = new PushFoldPolicy(this.weights).Decide(s, this.opponents, candidates);
-        var eligible = budget.NoThreat ? candidates : candidates.Where(c => budget.ThreatSeats.All(seat => this.opponents.Danger(c.Tile, seat) <= budget.MaxDanger)).ToArray();
+        var eligible = candidates.Where(c => budget.Allows(c.Tile, this.opponents)).ToArray();
         var best = eligible.Length > 0 ? eligible[0] : candidates.OrderBy(c => this.opponents.ExpectedDealInCost(c.Tile)).ThenBy(c => c.ShantenAfter).First();
         var riichi = legal.FirstOrDefault(a => a.Kind == SimActionKind.Riichi && a.Tile == best.Tile.ToString());
         if (eligible.Length > 0 && riichi is not null && new RiichiPolicy(this.weights).ShouldDeclare(s, this.opponents, best, out _))

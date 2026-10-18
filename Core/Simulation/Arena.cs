@@ -30,12 +30,16 @@ public sealed class PolicySeat(string name, IPolicy policy) : IArenaSeat
     }
 }
 
-// A worst-case Novice-queue opponent (the most novice-like live player on 2026-10-18 threw 36 %
-// early middles; this seat throws more): plays for
-// tile efficiency only, never folds, takes any call that keeps a yaku, declares riichi on any
-// wait, and throws a random tile part of the time.
-public sealed class NoviceSeat(int seed, double randomDiscard = 0.35, double callRate = 0.75) : IArenaSeat
+// A Novice-queue opponent: plays for tile efficiency, throws a random tile part of the time,
+// takes a yaku-keeping call at `callRate`, declares riichi on any wait at `riichiRate`, and
+// after someone else's riichi throws genbutsu (when it holds one) at `foldRate` per discard.
+// The defaults are the worst case (calls everything, never folds); Casual matches the most
+// novice-like live player on 2026-10-18 (36 % early middles, called 1 hand in 8, about a
+// third of its discards after a riichi genbutsu).
+public sealed class NoviceSeat(int seed, double randomDiscard = 0.35, double callRate = 0.75, double foldRate = 0, double riichiRate = 1) : IArenaSeat
 {
+    public static NoviceSeat Casual(int seed) => new(seed, randomDiscard: 0.35, callRate: 0.3, foldRate: 0.35, riichiRate: 0.7);
+
     private readonly Random random = new(seed);
     private readonly HandAnalyzer analyzer = new();
     private readonly CallPolicy calls = new();
@@ -62,7 +66,12 @@ public sealed class NoviceSeat(int seed, double randomDiscard = 0.35, double cal
         if (discards.Count == 0)
             return pass ?? legal[0];
         string tile;
-        if (this.random.NextDouble() < randomDiscard)
+        var riichiSeats = state.Seats.Where(s => s.Seat != 0 && s.Riichi).ToList();
+        var genbutsu = riichiSeats.Count == 0 || state.Us.Riichi ? [] : discards
+            .Where(d => riichiSeats.All(r => r.Discards.Any(t => TileHelpers.SameKind(t, Tile.Parse(d.Tile!))))).ToList();
+        if (genbutsu.Count > 0 && this.random.NextDouble() < foldRate)
+            tile = genbutsu[this.random.Next(genbutsu.Count)].Tile!;
+        else if (this.random.NextDouble() < randomDiscard)
             tile = discards[this.random.Next(discards.Count)].Tile!;
         else
         {
@@ -70,7 +79,7 @@ public sealed class NoviceSeat(int seed, double randomDiscard = 0.35, double cal
             tile = result.IsValid && result.BestDiscard is { } best ? best.ToString() : discards[0].Tile!;
         }
 
-        if (legal.FirstOrDefault(a => a.Kind == SimActionKind.Riichi && a.Tile == tile) is { } riichi)
+        if (legal.FirstOrDefault(a => a.Kind == SimActionKind.Riichi && a.Tile == tile) is { } riichi && this.random.NextDouble() < riichiRate)
             return riichi;
         return discards.FirstOrDefault(a => a.Tile == tile) ?? discards[0];
     }

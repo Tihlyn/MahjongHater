@@ -110,6 +110,8 @@ public sealed class OpponentModel : IOpponentModel
 
     public bool NoviceLike(int seat) => this.weights.DefenseModel == DefenseModel.V3 && this.profiles.NoviceLike(CheckSeat(seat), this.weights);
 
+    public double NoviceProbability(int seat) => this.weights.DefenseModel == DefenseModel.V3 ? this.profiles.NoviceProbability(CheckSeat(seat)) : 0;
+
     public double ExpectedDealInCost(Tile tile)
     {
         var current = Volatile.Read(ref this.model);

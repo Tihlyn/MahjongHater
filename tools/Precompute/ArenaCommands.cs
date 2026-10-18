@@ -6,7 +6,10 @@ using MahjongHater.Core.Simulation;
 // Duplicate-format A/B of live policies against simulated opponents (docs/research/DEFENSE_V3_2026_10_18.md).
 internal static class ArenaCommands
 {
-    public const string Usage = "arena <seeds> <novice|learned|mixed> <model.json|-> [arms=heuristic-V2,heuristic-V3] [threads] [hands=4|8] [first-seed=1]";
+    // novice: worst-case novices; learned: the Phoenix-trained network; mixed: both, alternating
+    // seats; live: each opponent a casual novice one time in three (the 2026-10-18 human match),
+    // else the network.
+    public const string Usage = "arena <seeds> <novice|learned|mixed|live> <model.json|-> [arms=heuristic-V2,heuristic-V3] [threads] [hands=4|8] [first-seed=1]";
 
     public static bool Handles(string command) => command == "arena";
 
@@ -20,7 +23,7 @@ internal static class ArenaCommands
         var threads = args.Length > 5 ? int.Parse(args[5]) : Math.Max(1, Environment.ProcessorCount - 1);
         var rules = new SimulationRules { HandsInMatch = args.Length > 6 ? int.Parse(args[6]) : 4 };
         var first = args.Length > 7 ? int.Parse(args[7]) : 1;
-        if (field is not ("novice" or "learned" or "mixed")) throw new ArgumentException("opponents must be novice, learned or mixed");
+        if (field is not ("novice" or "learned" or "mixed" or "live")) throw new ArgumentException("opponents must be novice, learned, mixed or live");
         if ((field != "novice" || arms.Any(a => a.StartsWith("guarded", StringComparison.Ordinal))) && model is null)
             throw new ArgumentException("learned opponents and guarded arms need a model");
         if (model is not null && (model.Rules.HandsInMatch != rules.HandsInMatch))
@@ -29,7 +32,10 @@ internal static class ArenaCommands
 
         IArenaSeat Opponent(int seed, int seat)
         {
-            var learned = field == "learned" || field == "mixed" && seat % 2 == 1;
+            var casual = field == "live" && new Random(unchecked(seed * 7919 + seat)).NextDouble() < 1 / 3d;
+            var learned = field == "learned" || field == "mixed" && seat % 2 == 1 || field == "live" && !casual;
+            if (casual)
+                return NoviceSeat.Casual(unchecked(seed * 31 + seat));
             if (!learned)
                 return new NoviceSeat(unchecked(seed * 31 + seat));
             var w = PolicyWeights.Default;

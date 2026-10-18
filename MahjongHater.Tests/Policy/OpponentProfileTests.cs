@@ -19,7 +19,7 @@ public class OpponentProfileTests
     public void Random_looking_rivers_read_as_novice_and_tidy_ones_do_not()
     {
         var p = new OpponentProfiles();
-        // Seat 1 opens with middles hand after hand (Novice queue, 2026-10-18: 50-83 %);
+        // Seat 1 opens with middles hand after hand (five of six, three hands running);
         // seat 2 throws honors and terminals first (Phoenix: 16 %).
         foreach (var (a, b, hand) in new[] { ("5m4p6s3m7p2z", "1z9m2z1p8s5m", 1), ("6p5s4m7m2z3s", "9p1s3z4z9s6p", 2), ("4s5p3p6m7s1z", "1m2z9s8p1p7z", 3) })
         {
@@ -30,6 +30,53 @@ public class OpponentProfileTests
         Assert.True(p.NoviceLike(1, V3), $"seat 1 at {p.EarlyMiddleRate(1):P0}");
         Assert.False(p.NoviceLike(2, V3), $"seat 2 at {p.EarlyMiddleRate(2):P0}");
         Assert.StartsWith("novice-like", p.Describe(1, V3));
+    }
+
+    // 2026-10-18 human match, middles among each hand's first six discards per player:
+    // the Python prototype of this classifier gave P(novice) 0.82 / 0.03 / 0.17.
+    [Theory]
+    [InlineData(new[] { 1, 4, 2, 0, 2, 0, 6, 0 }, 0.82, true)]
+    [InlineData(new[] { 0, 0, 1, 1, 0, 0, 0, 0 }, 0.03, false)]
+    [InlineData(new[] { 0, 2, 2, 0, 0, 4, 0, 0 }, 0.17, false)]
+    public void Live_players_read_as_the_prototype_did(int[] middles, double expected, bool novice)
+    {
+        var p = new OpponentProfiles();
+        var hand = 1;
+        foreach (var k in middles)
+        {
+            // k middles then outside tiles, six discards.
+            var river = string.Concat("345675".Take(k).Select(c => c + "m")) + string.Concat("191919".Take(6 - k).Select(c => c + "p"));
+            p.Observe(Hand(river, "", ++hand));
+            p.Observe(Hand("", "", ++hand));
+        }
+
+        Assert.Equal(expected, p.NoviceProbability(1), 2);
+        Assert.Equal(novice, p.NoviceLike(1, V3));
+    }
+
+    [Fact]
+    public void Pushing_through_a_riichi_reads_as_novice_and_folding_as_steady()
+    {
+        // Seat 2 declares on its third discard (global order 11). Seat 1 then throws three tiles:
+        // genbutsu every time, or none.
+        StateSnapshot Fold(string seat1) => Seat(Seat(Snap(), 2, "1z9m5p", riichi: true, riichiIndex: 2), 1, "2z8s" + seat1) with
+        {
+            Seats = [.. Seat(Seat(Snap(), 2, "1z9m5p", riichi: true, riichiIndex: 2), 1, "2z8s" + seat1).Seats.Select(s => s.Seat switch
+            {
+                1 => s with { DiscardOrder = [2, 6, 12, 14, 18] },
+                2 => s with { DiscardOrder = [3, 7, 11] },
+                _ => s,
+            })],
+        };
+        var folded = Fold("1z9m5p");
+        var pushed = Fold("4s6m3p");
+        Assert.Equal(1.0, OpponentProfiles.FoldShare(folded.Seats[1], folded));
+        Assert.Equal(0.0, OpponentProfiles.FoldShare(pushed.Seats[1], pushed));
+        var a = new OpponentProfiles();
+        a.Observe(folded);
+        var b = new OpponentProfiles();
+        b.Observe(pushed);
+        Assert.True(a.NoviceProbability(1) < OpponentProfiles.Prior && b.NoviceProbability(1) > OpponentProfiles.Prior);
     }
 
     [Fact]

@@ -55,6 +55,10 @@ public sealed record DiscardCandidate(
 
     public int MinPoints { get; init; }
 
+    // V3, tenpai with riichi legal: the lowest ron value over the waits without declaring
+    // (0 = no yaku dama); -1 when not computed.
+    public int DamaMinPoints { get; init; } = -1;
+
     public double WinProbability { get; init; }
 
     public double ExpectedValue { get; init; }
@@ -131,6 +135,10 @@ public interface IOpponentModel
 
     // V3: the seat plays like the Novice queue (OpponentProfiles).
     bool NoviceLike(int seat) => false;
+
+    // V3: posterior that the seat is a novice-like player (OpponentProfiles); the prior when
+    // nothing is known.
+    double NoviceProbability(int seat) => OpponentProfiles.Prior;
 }
 
 // Final-placement distribution for us (1st..4th) if every relative seat's score moved by
@@ -308,6 +316,15 @@ public sealed record PolicyWeights
     // A non-tenpai push may not risk more than it can win: the unconditional budget is capped
     // at P(win) × our value / (threat value × PushExposureTurns). 0 turns the cap off.
     public double PushEvCapWeight { get; init; } = 1;
+    // V3: a tile's danger is summed over every threat, weighted by tenpai × value against the
+    // primary's (PushFoldDecision.Allows), instead of each threat being held to the primary's
+    // line on its own and a flat ×TwoRiichiFactor for two riichi.
+    public bool SeatBudget { get; init; } = true;
+    // V3: stay dama on a good wait already worth this much by ron without riichi (×1.5 as
+    // dealer) when no opponent reads novice-like: steady players fold to a riichi, so the
+    // declaration mostly costs rons; novice-like ones keep pushing, so it costs nothing.
+    // 0 turns it off.
+    public int DamaVsFoldersPoints { get; init; } = 8000;
     // The same cap when the primary threat is novice-like. Their calls and riichi are cheap and
     // often noten, so the read value overstates what a push risks: the arena (2026-10-18, 800
     // duplicate matches) placed 0.06 better without the cap against novices and 0.05 worse
@@ -324,10 +341,10 @@ public sealed record PolicyWeights
     // Fallback when open_danger.json has no two-dragon-melds/dragon cell: P(hit | tenpai) of
     // the tile that finishes a visible yakuman.
     public double YakumanTileRate { get; init; } = 0.0274;
-    // Opponent profiling (OpponentProfiles): early-middle share at which a seat reads as
-    // novice-like (Phoenix 16.4 %, random ~44 %), and the provisional danger factor on its
-    // suji/honor tiles (more non-ryanmen waits) until dealin_calibration.csv can fit it.
-    public double NoviceEarlyMiddleRate { get; init; } = 0.30;
+    // Opponent profiling (OpponentProfiles): P(novice) at which a seat reads as novice-like,
+    // and the provisional danger factor on its suji/honor tiles (more non-ryanmen waits) until
+    // dealin_calibration.csv can fit it.
+    public double NoviceProbabilityThreshold { get; init; } = 0.5;
     public double NoviceBadWaitFactor { get; init; } = 1.3;
     // Cap on the all-last "a trailing riichi is worth what it needs" floor (baiman).
     public double PlacementFloorMax { get; init; } = 16000;

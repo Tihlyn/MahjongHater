@@ -60,13 +60,19 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
 
             double score, valuePoints = 0, winProbability = 0, ev = 0;
             var minPoints = 0;
+            var damaMin = -1;
             YakumanRoute? route = null;
             if (v2)
             {
                 // Everything in points per hand: what the hand is worth times the chance of
                 // cashing it, minus what the dangerous discards a push costs are expected to lose.
                 if (option.Eval.ShantenAfter == 0)
+                {
                     (valuePoints, minPoints) = HandValue.TenpaiPoints(state, tile, option.Waits, visible!, this.weights, ct);
+                    if (this.weights.DefenseModel == DefenseModel.V3 && this.weights.DamaVsFoldersPoints > 0
+                        && !state.OurRiichi && !state.IsOpen && state.Can(LegalAction.Riichi))
+                        damaMin = HandValue.TenpaiPoints(state, tile, option.Waits, visible!, this.weights, ct, riichi: false).Min;
+                }
                 else
                     valuePoints = HandValue.EstimatePoints(state, option.ValueEstimate, this.weights);
                 if (this.weights.DefenseModel == DefenseModel.V3)
@@ -101,6 +107,7 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
                 DangerSeat = primary,
                 ValuePoints = valuePoints,
                 MinPoints = minPoints,
+                DamaMinPoints = damaMin,
                 WinProbability = winProbability,
                 ExpectedValue = ev,
                 Yakuman = route,

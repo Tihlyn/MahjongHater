@@ -7,6 +7,19 @@ namespace MahjongHater.Core.Policy;
 public sealed record PushFoldDecision(double MaxDanger, IReadOnlyList<int> ThreatSeats, int PrimaryThreat, int SafeTiles, Reason Reason)
 {
     public bool NoThreat => this.ThreatSeats.Count == 0;
+
+    // V3 seat budget: each threat's weight against the primary's, tenpai × value relative to
+    // the primary's (1 for the primary). Null: every threat is held to MaxDanger on its own.
+    public IReadOnlyDictionary<int, double>? SeatWeights { get; init; }
+
+    // Whether a tile is within budget. With seat weights the dangers add up: two riichi of
+    // equal value halve what each may carry, and a 30 % open hand behind a riichi counts at
+    // 30 % of it instead of being held to the riichi's line.
+    public bool Allows(Tile tile, IOpponentModel opponents) =>
+        this.NoThreat
+        || (this.SeatWeights is { } weights
+            ? weights.Sum(w => opponents.Danger(tile, w.Key) * w.Value) <= this.MaxDanger
+            : this.ThreatSeats.All(s => opponents.Danger(tile, s) <= this.MaxDanger));
 }
 
 public sealed class PushFoldPolicy : IPushFoldPolicy
@@ -116,8 +129,10 @@ public sealed class PushFoldPolicy : IPushFoldPolicy
             }
         }
 
-        // Two riichi: a tile has to pass both, and the second one halves what we accept.
-        if (threats.Count(t => state.Seats[t].Riichi) >= 2)
+        // Two riichi: a tile has to pass both, and the second one halves what we accept. The
+        // seat budget adds the dangers up instead, which is the same halving for equal riichi.
+        var seatBudget = w.DefenseModel == DefenseModel.V3 && w.SeatBudget;
+        if (!seatBudget && threats.Count(t => state.Seats[t].Riichi) >= 2)
         {
             budget *= w.TwoRiichiFactor;
             notes.Add("two riichi");
@@ -226,8 +241,18 @@ public sealed class PushFoldPolicy : IPushFoldPolicy
         // A seat that is only probably tenpai discounts the danger proportionally
         // (10 % against a 50 % tenpai is 5 % against a riichi).
         var maxDanger = Math.Clamp(budget / Math.Max(tenpaiT, w.ThreatTenpaiFloor), 0, 1);
+        Dictionary<int, double>? seatWeights = null;
+        if (seatBudget)
+        {
+            double Exposure(int seat) => (state.Seats[seat].Riichi ? 1 : opponents.TenpaiProbability(seat)) * Math.Max(1000, opponents.Value(seat));
+            var reference = Math.Max(tenpaiT, w.ThreatTenpaiFloor) * Math.Max(1000, opponents.Value(primary));
+            seatWeights = threats.ToDictionary(s => s, s => s == primary ? 1 : Exposure(s) / reference);
+            if (threats.Count > 1)
+                notes.Add("summed over " + string.Join(", ", threats.Where(s => s != primary).Select(s => $"seat {s} ×{seatWeights[s]:0.00}")));
+        }
+
         var reason = new Reason("push/fold", $"Budget {maxDanger:P0}: {string.Join(", ", notes)}; {safeTiles} safe tile(s).");
-        return new PushFoldDecision(maxDanger, threats, primary, safeTiles, reason);
+        return new PushFoldDecision(maxDanger, threats, primary, safeTiles, reason) { SeatWeights = seatWeights };
     }
 
     // Fukuchi ch. 2 "When in tenpai": minimum hand value (points) to cut a 10 % and a 5 %

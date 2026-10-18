@@ -12,8 +12,10 @@ public static class HandValue
 
     // Expected ron value in points of the hand after `discard`, averaged over the live copies
     // of each wait; `min` is the cheapest wait. 0 when nothing is tenpai.
+    // `riichi`: price the waits with (true) or without (false) a riichi; null = with one
+    // whenever it is legal.
     public static (double Expected, int Min) TenpaiPoints(StateSnapshot state, Tile discard, IReadOnlyList<Tile> waits,
-        int[] visible, PolicyWeights w, CancellationToken ct)
+        int[] visible, PolicyWeights w, CancellationToken ct, bool? riichi = null)
     {
         if (waits.Count == 0)
             return (0, 0);
@@ -29,14 +31,14 @@ public static class HandValue
         var doras = state.DoraIndicators.Select(TileDangerModel.DoraOf).ToList();
         var detector = new YakuDetector(state.Ruleset);
         var isDealer = state.DealerSeat == 0;
-        var riichi = state.OurRiichi || (!state.IsOpen && state.Can(LegalAction.Riichi));
+        var declared = riichi ?? (state.OurRiichi || (!state.IsOpen && state.Can(LegalAction.Riichi)));
         double weighted = 0, weight = 0;
         var min = int.MaxValue;
         foreach (var wait in waits)
         {
             ct.ThrowIfCancellationRequested();
             var live = Math.Max(0, 4 - visible[TileHelpers.ToIndex(wait)]);
-            var points = PointsForWait(state, closed, wait, doras, detector, isDealer, riichi, w);
+            var points = PointsForWait(state, closed, wait, doras, detector, isDealer, declared, w);
             if (points <= 0)
                 continue;
             min = Math.Min(min, points);

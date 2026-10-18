@@ -141,6 +141,7 @@ public sealed class Plugin : IDalamudPlugin
         this.Reader.CalibrationSink = this.AppendCalibration;
         this.Reader.DealInSink = this.AppendDealIns;
         this.Reader.HandResultSink = this.AppendHandResult;
+        this.Reader.RiverSink = this.AppendRivers;
 
         this.actuator = new EmjActuator(gameGui, this.Reader);
         this.AutoPlayer = new AutoPlayer(this.Reader, this.AnalysisService, this.actuator,
@@ -457,6 +458,22 @@ public sealed class Plugin : IDalamudPlugin
             this.pluginLog.Warning(ex, "[Calibration] Failed to append the hand result.");
         }
     }
+
+    private void AppendRivers(string line)
+    {
+        try
+        {
+            var path = this.RiverPath;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.AppendAllLines(path, [line]);
+        }
+        catch (Exception ex)
+        {
+            this.pluginLog.Warning(ex, "[Calibration] Failed to append the hand rivers.");
+        }
+    }
+
+    private string RiverPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "hand_rivers.jsonl");
 
     // One CSV row per (own discard, threatening seat); the file grows across sessions.
     private void AppendDealIns(IReadOnlyList<DealInSample> samples)

@@ -184,7 +184,7 @@ public sealed class DecisionPolicy : IPolicy
             steps.Add(decision.Reason);
             var eligible = decision.NoThreat
                 ? candidates
-                : candidates.Where(c => decision.ThreatSeats.All(s => this.opponents.Danger(c.Tile, s) <= decision.MaxDanger)).ToList();
+                : candidates.Where(c => decision.Allows(c.Tile, this.opponents)).ToList();
             if (eligible.Count > 0)
             {
                 stance = PushFoldStance.Push;

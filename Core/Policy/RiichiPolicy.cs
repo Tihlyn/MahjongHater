@@ -27,10 +27,20 @@ public sealed class RiichiPolicy : IRiichiPolicy
                 ? $"Every wait is already a yakuman ({best.MinPoints} by ron): stay dama, riichi adds nothing and warns the table."
             : best.Ukeire == 0 ? "Wait is dead (no live winning tiles)."
             : best.Ukeire < this.weights.RiichiMinUkeire ? "Too few live winning tiles."
-            : null;
+            : this.DamaAgainstFolders(state, opponents, best);
         reason = new Reason("riichi", why ?? (riichiSeats.Count > 0 && best.Ukeire >= this.weights.GoodWaitTiles
             ? $"Chase the riichi: good wait with {best.Ukeire} live winning tiles."
             : $"Declare riichi with {best.Ukeire} live winning tiles."));
         return why is null;
+    }
+
+    private string? DamaAgainstFolders(StateSnapshot state, IOpponentModel opponents, DiscardCandidate best)
+    {
+        var w = this.weights;
+        var needs = state.DealerSeat == 0 ? w.DamaVsFoldersPoints * 3 / 2 : w.DamaVsFoldersPoints;
+        if (w.DefenseModel != DefenseModel.V3 || w.DamaVsFoldersPoints <= 0 || best.DamaMinPoints < needs
+            || best.Ukeire < w.GoodWaitTiles || Enumerable.Range(1, 3).Any(opponents.NoviceLike))
+            return null;
+        return $"Dama: {best.DamaMinPoints} by ron without riichi on a good wait, and the table folds to a riichi.";
     }
 }
