@@ -112,6 +112,8 @@ public sealed class DecisionPolicy : IPolicy
             var seat = state.Seats[s];
             var who = s == state.DealerSeat ? $"seat {s} (dealer)" : $"seat {s}";
             var live = this.opponents.LiveSuji(s) is var ls and >= 0 ? $", {ls} live suji" : string.Empty;
+            if (this.opponents.Profile(s) is { Length: > 0 } profile && profile != "unprofiled")
+                live += $", {profile}";
             if (seat.Riichi)
             {
                 var tile = seat.RiichiDiscardIndex >= 0 && seat.RiichiDiscardIndex < seat.Discards.Count ? $" on {seat.Discards[seat.RiichiDiscardIndex]}" : string.Empty;
@@ -119,7 +121,10 @@ public sealed class DecisionPolicy : IPolicy
             }
 
             var melds = seat.Melds.Count(m => m.IsOpen);
-            return $"{who} tenpai {this.opponents.TenpaiProbability(s):P0}{(melds > 0 ? $", {melds} call(s), ~{this.opponents.Value(s):0} pts" : string.Empty)}{live}";
+            var read = this.weights.DefenseModel == DefenseModel.V3 && melds > 0
+                ? $", {HandRead.Of(seat, TileDangerModel.SeatWindOf(s, state.DealerSeat), state.RoundWind).Describe()}" : string.Empty;
+            var streak = this.weights.DefenseModel == DefenseModel.V3 && seat.TsumogiriStreak >= 2 ? $", {seat.TsumogiriStreak} tsumogiri in a row" : string.Empty;
+            return $"{who} tenpai {this.opponents.TenpaiProbability(s):P0}{streak}{(melds > 0 ? $", {melds} call(s), ~{this.opponents.Value(s):0} pts" : string.Empty)}{read}{live}";
         }))));
 
         if ((state.Legal & Calls) != 0)
@@ -170,7 +175,7 @@ public sealed class DecisionPolicy : IPolicy
         }
         steps.Add(new Reason("discard", $"Best attack discard {best.Tile}: {best.ShantenAfter}-shanten, {best.Ukeire} live improving tiles."));
         PushFoldStance stance;
-        if (this.weights.DefenseModel == DefenseModel.V2)
+        if (this.weights.DefenseModel != DefenseModel.Legacy)
         {
             // Danger budget: keep attacking with any tile every threat accepts; otherwise
             // give up a shanten for a safe tile (mawashi) or fold outright (betaori).

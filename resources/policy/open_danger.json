@@ -240,15 +240,165 @@
     "rate": 0.01714,
     "cost": 6073
    },
+   "flush:honor|honor:vis1": {
+    "n": 158290,
+    "rate": 0.06828,
+    "cost": 5980
+   },
+   "flush:honor|honor:vis2": {
+    "n": 270559,
+    "rate": 0.01642,
+    "cost": 6232
+   },
+   "flush:honor|honor:vis3": {
+    "n": 487622,
+    "rate": 0.00093,
+    "cost": 6736
+   },
    "flush:in-suit": {
     "n": 1215097,
     "rate": 0.05862,
     "cost": 4809
    },
+   "flush:in-suit|nonsuji:19": {
+    "n": 288961,
+    "rate": 0.04046,
+    "cost": 5040
+   },
+   "flush:in-suit|nonsuji:28": {
+    "n": 258479,
+    "rate": 0.06055,
+    "cost": 4565
+   },
+   "flush:in-suit|nonsuji:37": {
+    "n": 221533,
+    "rate": 0.07527,
+    "cost": 4825
+   },
+   "flush:in-suit|nonsuji:456": {
+    "n": 313858,
+    "rate": 0.07777,
+    "cost": 4788
+   },
+   "flush:in-suit|suji:19": {
+    "n": 43242,
+    "rate": 0.01233,
+    "cost": 5761
+   },
+   "flush:in-suit|suji:28": {
+    "n": 37827,
+    "rate": 0.02345,
+    "cost": 5123
+   },
+   "flush:in-suit|suji:37": {
+    "n": 36179,
+    "rate": 0.03181,
+    "cost": 5174
+   },
+   "flush:in-suit|suji:456": {
+    "n": 15018,
+    "rate": 0.01545,
+    "cost": 5466
+   },
    "flush:off-suit": {
     "n": 2302179,
     "rate": 0.04663,
     "cost": 3431
+   },
+   "flush:off-suit|nonsuji:19": {
+    "n": 439409,
+    "rate": 0.03278,
+    "cost": 3282
+   },
+   "flush:off-suit|nonsuji:28": {
+    "n": 413875,
+    "rate": 0.05401,
+    "cost": 3130
+   },
+   "flush:off-suit|nonsuji:37": {
+    "n": 362949,
+    "rate": 0.06658,
+    "cost": 3453
+   },
+   "flush:off-suit|nonsuji:456": {
+    "n": 547388,
+    "rate": 0.06766,
+    "cost": 3496
+   },
+   "flush:off-suit|suji:19": {
+    "n": 164908,
+    "rate": 0.00756,
+    "cost": 4886
+   },
+   "flush:off-suit|suji:28": {
+    "n": 145260,
+    "rate": 0.01853,
+    "cost": 3904
+   },
+   "flush:off-suit|suji:37": {
+    "n": 142986,
+    "rate": 0.02714,
+    "cost": 3680
+   },
+   "flush:off-suit|suji:456": {
+    "n": 85404,
+    "rate": 0.01843,
+    "cost": 4602
+   },
+   "g:honor:vis1": {
+    "n": 158290,
+    "rate": 0.06828,
+    "cost": 5980
+   },
+   "g:honor:vis2": {
+    "n": 270559,
+    "rate": 0.01642,
+    "cost": 6232
+   },
+   "g:honor:vis3": {
+    "n": 487622,
+    "rate": 0.00093,
+    "cost": 6736
+   },
+   "g:nonsuji:19": {
+    "n": 728370,
+    "rate": 0.03583,
+    "cost": 4070
+   },
+   "g:nonsuji:28": {
+    "n": 672354,
+    "rate": 0.05653,
+    "cost": 3721
+   },
+   "g:nonsuji:37": {
+    "n": 584482,
+    "rate": 0.06987,
+    "cost": 4013
+   },
+   "g:nonsuji:456": {
+    "n": 861246,
+    "rate": 0.07134,
+    "cost": 4010
+   },
+   "g:suji:19": {
+    "n": 208150,
+    "rate": 0.00855,
+    "cost": 5148
+   },
+   "g:suji:28": {
+    "n": 183087,
+    "rate": 0.01954,
+    "cost": 4207
+   },
+   "g:suji:37": {
+    "n": 179165,
+    "rate": 0.02809,
+    "cost": 4022
+   },
+   "g:suji:456": {
+    "n": 100422,
+    "rate": 0.01798,
+    "cost": 4713
    },
    "genbutsu": {
     "n": 2073521,

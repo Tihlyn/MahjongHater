@@ -350,10 +350,16 @@ def analyse_game(raw):
                 ctx = 'open:' + read[0][0]
             safe_after = os_.riichi_order >= 0 and any(kind(t) == k for x in seats for t, _, od in x.discards if od > os_.riichi_order and not (x is s and od == order))
             if k in own or safe_after:
-                cls = 'genbutsu'
+                cls = generic = 'genbutsu'
             else:
+                generic = tile_class(k, os_, visible, None)
                 cls = tile_class(k, os_, visible, read if ctx.startswith('open:flush') else None)
-            for key in [(ctx, cls), (ctx, 'ALL'), (ctx, bucket_turn(ndisc), cls)]:
+            keys = [(ctx, cls), (ctx, 'ALL'), (ctx, bucket_turn(ndisc), cls)]
+            if cls != generic:
+                # Flush reads: the generic suji class too, alone and crossed with the suit
+                # class, so the plugin can scale its riichi-based estimate by a like-for-like ratio.
+                keys += [(ctx, 'g:' + generic), (ctx, f'{cls}|{generic}')]
+            for key in keys:
                 out[key][0] += 1
                 out[key][1] += hit
                 out[key][2] += value

@@ -58,6 +58,9 @@ public sealed record DiscardCandidate(
     public double WinProbability { get; init; }
 
     public double ExpectedValue { get; init; }
+
+    // V3: a yakuman the kept tiles are shaped for (valued in ValuePoints when not tenpai).
+    public YakumanRoute? Yakuman { get; init; }
 }
 
 // What the hand looks like right now, independent of the action: shown between turns
@@ -122,6 +125,9 @@ public interface IOpponentModel
 
     // Suji lines still live against the seat (18 at the start), -1 when unknown.
     int LiveSuji(int seat) => -1;
+
+    // V3: one line on how the seat has played this match ("novice-like (55 % early middles)").
+    string Profile(int seat) => string.Empty;
 }
 
 // Final-placement distribution for us (1st..4th) if every relative seat's score moved by
@@ -133,10 +139,13 @@ public interface IPlacementModel
 }
 
 // Which danger/push-fold implementation runs; Legacy is the v1.3 behaviour for A/B runs.
+// V3 is V2 plus hand reads against open/dama seats, the tsumogiri tenpai tell and the
+// value-aware push cap (docs/research/DEFENSE_V3_2026_10_18.md).
 public enum DefenseModel
 {
     Legacy,
     V2,
+    V3,
 }
 
 public interface IDiscardPolicy
@@ -291,6 +300,29 @@ public sealed record PolicyWeights
     public double PlacementStakesWeight { get; init; } = 1;
     public double PlacementStakesMin { get; init; } = 0.33;
     public double PlacementStakesMax { get; init; } = 3;
+
+    // --- Defense v3 ---
+    // A non-tenpai push may not risk more than it can win: the unconditional budget is capped
+    // at P(win) × our value / (threat value × PushExposureTurns). 0 turns the cap off.
+    public double PushEvCapWeight { get; init; } = 1;
+    // Ceiling for a non-riichi tenpai estimate after the tsumogiri adjustment.
+    public double TenpaiMaxWithTsumogiri { get; init; } = 0.95;
+    // Tenpai worth this much pushes any tile; haneman-class tenpai may cut up to the budget below;
+    // a slow expensive hand can be lifted by its EV to at most MaxRaisedBudget.
+    public double PushAnyTenpaiPoints { get; init; } = 24000;
+    public double HanemanTenpaiPoints { get; init; } = 12000;
+    public double HanemanTenpaiBudget { get; init; } = 0.2;
+    public double MaxRaisedBudget { get; init; } = 0.25;
+    // Fallback when open_danger.json has no two-dragon-melds/dragon cell: P(hit | tenpai) of
+    // the tile that finishes a visible yakuman.
+    public double YakumanTileRate { get; init; } = 0.0274;
+    // Opponent profiling (OpponentProfiles): early-middle share at which a seat reads as
+    // novice-like (Phoenix 16.4 %, random ~44 %), and the provisional danger factor on its
+    // suji/honor tiles (more non-ryanmen waits) until dealin_calibration.csv can fit it.
+    public double NoviceEarlyMiddleRate { get; init; } = 0.30;
+    public double NoviceBadWaitFactor { get; init; } = 1.3;
+    // Cap on the all-last "a trailing riichi is worth what it needs" floor (baiman).
+    public double PlacementFloorMax { get; init; } = 16000;
 
     public static PolicyWeights Default { get; } = new();
 }

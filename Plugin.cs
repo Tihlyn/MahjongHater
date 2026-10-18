@@ -51,10 +51,10 @@ public sealed class Plugin : IDalamudPlugin
         this.Reader = new EmjStateReader(gameGui, pluginLog, addonLifecycle, this.Configuration, layout);
         var weights = PolicyWeights.Default with
         {
-            DefenseModel = this.Configuration.DefenseV2 ? DefenseModel.V2 : DefenseModel.Legacy,
+            DefenseModel = !this.Configuration.DefenseV2 ? DefenseModel.Legacy : this.Configuration.DefenseV3 ? DefenseModel.V3 : DefenseModel.V2,
         };
         IPolicy policy = new DecisionPolicy(weights: weights);
-        this.Reader.PolicyTag = this.Configuration.DefenseV2 ? "V2" : "Legacy";
+        this.Reader.PolicyTag = weights.DefenseModel.ToString();
         if (this.Configuration.LearnedPolicyEnabled)
         {
             try
@@ -74,7 +74,7 @@ public sealed class Plugin : IDalamudPlugin
                 var opponents = new MahjongHater.Core.Learning.LearnedOpponentModel(model, weights, useLearnedDanger: false);
                 policy = new DecisionPolicy(opponents: opponents, discards: new MahjongHater.Core.Learning.LearnedDiscardPolicy(model, weights),
                     calls: new MahjongHater.Core.Learning.LearnedCallPolicy(model, weights), weights: weights);
-                this.Reader.PolicyTag = "learned-guarded";
+                this.Reader.PolicyTag = weights.DefenseModel == DefenseModel.V3 ? "learned-guarded-v3" : "learned-guarded";
                 this.LearnedPolicy = new LearnedPolicyState(true,
                     $"{Path.GetFileName(path)} ({model.Rules.HandsInMatch}-hand, {model.Schema switch { 1 => "schema 1", _ => "schema 2" }}, {model.Status})",
                     Path.GetDirectoryName(path) ?? string.Empty);
@@ -465,6 +465,10 @@ public sealed class Plugin : IDalamudPlugin
         {
             var path = this.DealInPath;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            // The columns grew (v3: read, tsumogiri streak, profile): keep the old rows apart
+            // instead of mixing two layouts under one header.
+            if (File.Exists(path) && File.ReadLines(path).FirstOrDefault() is { } header && header != DealInCalibration.CsvHeader)
+                File.Move(path, Path.Combine(Path.GetDirectoryName(path)!, $"dealin_calibration.{DateTime.UtcNow:yyyyMMddHHmmss}.csv"));
             var lines = new List<string>(samples.Count + 1);
             if (!File.Exists(path))
                 lines.Add(DealInCalibration.CsvHeader);

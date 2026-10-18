@@ -6,6 +6,7 @@ public sealed class OpponentModel : IOpponentModel
 {
     private readonly PolicyWeights weights;
     private readonly TileDangerModel danger;
+    private readonly OpponentProfiles profiles = new();
     private Model model = new(new double[4], new DangerEstimate[4, 34], new double[4], new bool[4], -1, [-1, -1, -1, -1]);
 
     public OpponentModel(PolicyWeights? weights = null, TileDangerModel? danger = null)
@@ -25,10 +26,17 @@ public sealed class OpponentModel : IOpponentModel
         var dangers = new DangerEstimate[4, 34];
         var values = new double[4];
         var riichi = new bool[4];
-        var views = this.weights.DefenseModel == DefenseModel.V2 ? TileDangerModel.BuildViews(state, visible) : null;
+        bool[]? novice = null;
+        if (this.weights.DefenseModel == DefenseModel.V3)
+        {
+            this.profiles.Observe(state);
+            novice = [false, this.profiles.NoviceLike(1, this.weights), this.profiles.NoviceLike(2, this.weights), this.profiles.NoviceLike(3, this.weights)];
+        }
+
+        var views = this.weights.DefenseModel != DefenseModel.Legacy ? TileDangerModel.BuildViews(state, visible, novice) : null;
         foreach (var seat in state.Seats.Where(s => s.Seat is >= 1 and <= 3))
         {
-            probabilities[seat.Seat] = TenpaiEstimator.Estimate(seat, this.weights);
+            probabilities[seat.Seat] = TenpaiEstimator.WithTsumogiri(TenpaiEstimator.Estimate(seat, this.weights), seat, this.weights);
             riichi[seat.Seat] = seat.Riichi;
 
             if (views is not null)
@@ -52,6 +60,10 @@ public sealed class OpponentModel : IOpponentModel
                     ? this.danger.Estimate(tile, views[seat.Seat], visible, state.DoraIndicators)
                     : this.LegacyDanger(tile, seat, state, visible);
             }
+
+            if (this.weights.DefenseModel == DefenseModel.V3 && views is not null)
+                foreach (var (kind, name) in views[seat.Seat].YakumanTiles)
+                    dangers[seat.Seat, kind] = this.YakumanDanger(dangers[seat.Seat, kind], kind, name, seat, state, visible, values[seat.Seat]);
         }
 
         // The seat to defend against first: a riichi (the dealer's first), else the
@@ -86,6 +98,10 @@ public sealed class OpponentModel : IOpponentModel
 
     public int LiveSuji(int seat) => Volatile.Read(ref this.model).LiveSuji[CheckSeat(seat)];
 
+    public string Profile(int seat) => this.weights.DefenseModel == DefenseModel.V3 ? this.profiles.Describe(CheckSeat(seat), this.weights) : string.Empty;
+
+    public bool NoviceLike(int seat) => this.weights.DefenseModel == DefenseModel.V3 && this.profiles.NoviceLike(CheckSeat(seat), this.weights);
+
     public double ExpectedDealInCost(Tile tile)
     {
         var current = Volatile.Read(ref this.model);
@@ -94,6 +110,24 @@ public sealed class OpponentModel : IOpponentModel
         for (var seat = 1; seat <= 3; seat++)
             cost += current.Probabilities[seat] * current.Dangers[seat, kind].Probability * current.Values[seat];
         return cost;
+    }
+
+    // The tile that finishes a visible yakuman. Phoenix replays: the third dragon into a
+    // tenpai seat with two dragon sets hit 2.7 % of the time for 19 600 on average (shousangen
+    // included), and Doman applies pao to whoever feeds the pon. The danger becomes cost-
+    // equivalent — probability × yakuman / the seat's usual value — so the budget, betaori and
+    // expected-cost ranking all see a 32 000 tile for what it is.
+    private DangerEstimate YakumanDanger(DangerEstimate current, int kind, string name, SeatState seat, StateSnapshot state, int[] visible, double seatValue)
+    {
+        if (current.Probability <= 0 || visible[kind] >= 4)
+            return current;
+        var measured = OpenDangerTable.Default.YakumanTileRate() ?? this.weights.YakumanTileRate;
+        var p = Math.Max(current.Probability, measured);
+        var yakuman = YakumanRoutes.Points(seat.Seat == state.DealerSeat);
+        var equivalent = Math.Clamp(p * yakuman / Math.Max(1000, seatValue), 0, 1);
+        var pao = visible[kind] <= 2 ? ", pao if it is pon'd" : string.Empty;
+        return new DangerEstimate(equivalent, this.danger.RankOf(equivalent), $"yakuman/{name}",
+            $"finishes {name} ({p:P1} × {yakuman} vs ~{seatValue:0}){pao}");
     }
 
     // v1.3 constants (kept for A/B runs behind DefenseModel.Legacy): flat class rates,

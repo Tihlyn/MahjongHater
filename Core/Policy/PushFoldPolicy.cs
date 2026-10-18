@@ -99,6 +99,23 @@ public sealed class PushFoldPolicy : IPushFoldPolicy
 
         var notes = new List<string> { shape, $"{value:0} pts", phase, riichi ? (dealerThreat ? "dealer riichi" : "riichi") : $"tenpai {tenpaiT:P0}" };
 
+        // V3: the table tops out at "cut a 10 % tile", which kept a 48 000 yakuman tenpai on a
+        // 12 % budget. Against a ~7 000 riichi a tenpai worth this much wins the exchange on
+        // almost any tile (0.3 × 32 000 to win vs 0.3 × 7 000 per deal-in).
+        if (w.DefenseModel == DefenseModel.V3 && best.ShantenAfter == 0)
+        {
+            if (value >= w.PushAnyTenpaiPoints)
+            {
+                budget = 1;
+                notes.Add(best.Yakuman is not null || value >= 32000 ? "yakuman-class tenpai, push" : "sanbaiman-class tenpai, push");
+            }
+            else if (value >= w.HanemanTenpaiPoints && budget < w.HanemanTenpaiBudget)
+            {
+                budget = w.HanemanTenpaiBudget;
+                notes.Add("haneman-class tenpai");
+            }
+        }
+
         // Two riichi: a tile has to pass both, and the second one halves what we accept.
         if (threats.Count(t => state.Seats[t].Riichi) >= 2)
         {
@@ -113,6 +130,7 @@ public sealed class PushFoldPolicy : IPushFoldPolicy
         // "leading: fold", "4th: push" with the actual scores, for any hand of the match.
         var scored = state.Seats.Any(s => s.Score != 0);
         var stakesApplied = false;
+        var stakesFactor = 1.0;
         if (scored && w.PlacementStakesWeight > 0 && opponents is IPlacementModel placement)
         {
             var threatPoints = Math.Max(1000, opponents.Value(primary));
@@ -132,6 +150,7 @@ public sealed class PushFoldPolicy : IPushFoldPolicy
                     : Math.Clamp(gain / loss / pointsRatio, w.PlacementStakesMin, w.PlacementStakesMax);
                 factor = Math.Pow(factor, w.PlacementStakesWeight);
                 budget *= factor;
+                stakesFactor = factor;
                 stakesApplied = true;
                 notes.Add($"placement stakes ×{factor:0.00} (win {gain:+0.00;-0.00}, deal-in {-loss:+0.00;-0.00})");
             }
@@ -162,6 +181,30 @@ public sealed class PushFoldPolicy : IPushFoldPolicy
         {
             budget = Math.Max(budget, dealerThreat ? w.PreDrawBudgetVsDealer : w.PreDrawBudget);
             notes.Add("last draws, keep tenpai");
+        }
+
+        // V3: a hand that is not tenpai may not risk more than it can win. The tables above
+        // are calibrated on a riichi of average value; against an expensive open hand a cheap,
+        // slow hand kept its 1-shanten/2-shanten budget (2026-10-18 08:04: 2-shanten worth
+        // 1 000 pushed a 7 % budget into a dealer's two-call ~10 000). Expected loss per push
+        // ≈ tenpai × danger × threat value × exposure turns; expected gain ≈ P(win) × value.
+        if (w.DefenseModel == DefenseModel.V3 && w.PushEvCapWeight > 0 && best.ShantenAfter >= 1)
+        {
+            var threatValue = Math.Max(1000, opponents.Value(primary));
+            var gain = best.WinProbability * value * stakesFactor * w.PushEvCapWeight;
+            var cap = gain / (threatValue * Math.Max(1, w.PushExposureTurns));
+            if (cap < budget)
+            {
+                budget = cap;
+                notes.Add($"EV cap {cap:P1} (win {best.WinProbability:P0} × {value:0} vs ~{threatValue:0})");
+            }
+            else if (value >= w.HanemanTenpaiPoints && cap > budget)
+            {
+                // The same comparison lifts a slow but expensive hand (a yakuman 1-shanten
+                // folded on the riichi tables' 7 %).
+                budget = Math.Min(cap, w.MaxRaisedBudget);
+                notes.Add($"EV raise {budget:P1} (win {best.WinProbability:P0} × {value:0} vs ~{threatValue:0})");
+            }
         }
 
         // Nothing safe to fold with: attacking is the only option; one safe tile mid-game

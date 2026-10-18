@@ -31,7 +31,7 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
         if (!result.IsValid)
             return candidates;
         var primary = opponents.PrimaryThreat();
-        var v2 = this.weights.DefenseModel == DefenseModel.V2;
+        var v2 = this.weights.DefenseModel != DefenseModel.Legacy;
         int[]? visible = null;
         if (v2)
         {
@@ -60,6 +60,7 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
 
             double score, valuePoints = 0, winProbability = 0, ev = 0;
             var minPoints = 0;
+            YakumanRoute? route = null;
             if (v2)
             {
                 // Everything in points per hand: what the hand is worth times the chance of
@@ -68,6 +69,14 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
                     (valuePoints, minPoints) = HandValue.TenpaiPoints(state, tile, option.Waits, visible!, this.weights, ct);
                 else
                     valuePoints = HandValue.EstimatePoints(state, option.ValueEstimate, this.weights);
+                if (this.weights.DefenseModel == DefenseModel.V3)
+                {
+                    var kept = state.Hand.ToList();
+                    kept.Remove(tile);
+                    route = YakumanRoutes.Of(kept, state.OurMelds);
+                    if (route is not null && option.Eval.ShantenAfter >= 1)
+                        valuePoints = Math.Max(valuePoints, YakumanRoutes.Points(state.DealerSeat == 0) * route.ValueShare);
+                }
                 winProbability = HandValue.WinProbability(option.Eval.ShantenAfter, option.Eval.Ukeire, option.Eval.Ukeire2, state.WallRemaining, this.weights);
                 var cost = opponents.ExpectedDealInCost(tile);
                 ev = winProbability * valuePoints - this.weights.PushExposureTurns * cost;
@@ -94,8 +103,19 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
                 MinPoints = minPoints,
                 WinProbability = winProbability,
                 ExpectedValue = ev,
+                Yakuman = route,
             });
         }
+
+        // A yakuman route on the table: tile efficiency alone throws it away (an honor pair for
+        // a ryanmen), so inside each shanten level rank by point EV for this decision.
+        var minShanten = candidates.Count > 0 ? candidates.Min(c => c.ShantenAfter) : 0;
+        if (candidates.Any(c => c.Yakuman is not null && c.ShantenAfter == minShanten))
+            candidates = candidates.Select(c => c with
+            {
+                Score = c.ExpectedValue,
+                Note = c.Yakuman is { } y ? $"{c.Note}; keeps {y.Name}" : c.Note,
+            }).ToList();
 
         // Shanten stays the primary key (the push/fold layer decides when to give one up);
         // inside a level the point-EV (v2) or the analyzer score (legacy) orders the tiles.

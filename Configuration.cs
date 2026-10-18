@@ -25,6 +25,10 @@ public sealed class Configuration : IPluginConfiguration
     // v1.3 heuristics, kept for A/B auto-play runs.
     public bool DefenseV2 { get; set; } = true;
 
+    // Defense v3 on top of v2: hand reads vs open/dama seats, the tsumogiri tenpai tell and a
+    // value-aware push cap. Off until the arena A/B clears it; needs DefenseV2.
+    public bool DefenseV3 { get; set; }
+
     // Experimental offline discard lookup and optional public-state corpus capture.
     // Both take effect after a plugin reload.
     public bool PrecomputedPolicyEnabled { get; set; }

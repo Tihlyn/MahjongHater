@@ -152,11 +152,12 @@ public static class ThreatValue
         var doraHan = meldTiles.Count(t => doras.Any(d => TileHelpers.SameKind(d, t))) + meldTiles.Count(t => t.IsRedFive);
 
         if (seat.Riichi)
-            return (isDealer ? w.DealerRiichiValue : w.RiichiValue) + w.OpponentDoraValue * doraHan;
+            return Math.Max((isDealer ? w.DealerRiichiValue : w.RiichiValue) + w.OpponentDoraValue * doraHan, PlacementFloor(seat, state, w));
 
         var open = seat.Melds.Where(m => m.IsOpen).ToList();
+        var measured = w.DefenseModel == DefenseModel.V3 ? MeasuredPoints(seat, state, isDealer, doraHan) : null;
         if (open.Count == 0)
-            return isDealer ? w.DamaDealerValue : w.DamaValue;
+            return Math.Max(isDealer ? w.DamaDealerValue : w.DamaValue, measured ?? 0);
 
         var seatWind = TileDangerModel.SeatWindOf(seat.Seat, state.DealerSeat);
         var han = 0.0;
@@ -182,6 +183,37 @@ public static class ThreatValue
         han += doraHan;
         var fu = open.Any(m => m.Type == MeldType.Chi) ? 30 : 40;
         var points = HandValue.PointsFor(han, fu, isDealer);
-        return Math.Max(points, isDealer ? w.OpenFloorDealerValue : w.OpenFloorValue);
+        return Math.Max(Math.Max(points, isDealer ? w.OpenFloorDealerValue : w.OpenFloorValue), measured ?? 0);
+    }
+
+    // V3, last hand of the match: a trailing seat that declares riichi is playing for the
+    // points that move it up, so its hand is worth at least that (capped at baiman). A ron on
+    // us moves the gap by twice the payment, so it needs half the gap to the seat above.
+    public static double PlacementFloor(SeatState seat, StateSnapshot state, PolicyWeights w)
+    {
+        if (w.DefenseModel != DefenseModel.V3 || !state.IsAllLast || !seat.Riichi || state.Seats.All(s => s.Score == 0))
+            return 0;
+        var above = state.Seats.Where(s => s.Seat != seat.Seat && s.Score > seat.Score).Select(s => s.Score).DefaultIfEmpty(int.MinValue).Min();
+        if (above == int.MinValue)
+            return 0;
+        var gap = above - seat.Score;
+        var needed = above == state.Us.Score ? gap / 2.0 : gap;
+        return Math.Min(needed, w.PlacementFloorMax);
+    }
+
+    // What a hit against this read actually cost in Phoenix replays, scaled by the dora its
+    // melds show (an open hand with three visible dora averaged ~10 000 against ~3 600 with
+    // none). The replay average mixes dealers in at about one in four; split it back out.
+    private static double? MeasuredPoints(SeatState seat, StateSnapshot state, bool isDealer, int visibleDora)
+    {
+        var table = OpenDangerTable.Default;
+        var read = HandRead.Of(seat, TileDangerModel.SeatWindOf(seat.Seat, state.DealerSeat), state.RoundWind);
+        if (table.Cost(read) is not { } cost || cost <= 0)
+            return null;
+        if (read.Kind != ReadKind.Closed)
+            cost *= table.VisibleDoraFactor(visibleDora);
+        const double dealerShare = 0.25, dealerMultiplier = 1.5;
+        var nonDealer = cost / (1 - dealerShare + dealerShare * dealerMultiplier);
+        return isDealer ? nonDealer * dealerMultiplier : nonDealer;
     }
 }

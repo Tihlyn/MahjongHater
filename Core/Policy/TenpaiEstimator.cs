@@ -43,4 +43,17 @@ public static class TenpaiEstimator
     }
 
     public static double Estimate(SeatState seat, PolicyWeights w) => Estimate(TenpaiFeatures.From(seat), w);
+
+    // V3: fold the seat's trailing tsumogiri run into any tenpai estimate (logistic or the
+    // network's head, neither of which sees it) as a likelihood ratio on the odds. In Phoenix
+    // replays a late two-call hand is 45 % tenpai after a tedashi and 81 % after three
+    // tsumogiri in a row; a late dama 7 % → 23 % (resources/policy/open_danger.json).
+    public static double WithTsumogiri(double p, SeatState seat, PolicyWeights w, OpenDangerTable? table = null)
+    {
+        if (seat.Riichi || w.DefenseModel != DefenseModel.V3 || p <= 0 || p >= 1)
+            return p;
+        var ratio = (table ?? OpenDangerTable.Default).TenpaiOddsRatio(seat.Melds.Count(m => m.IsOpen), seat.Discards.Count, seat.TsumogiriStreak);
+        var odds = p / (1 - p) * ratio;
+        return Math.Clamp(odds / (1 + odds), 0, w.TenpaiMaxWithTsumogiri);
+    }
 }
