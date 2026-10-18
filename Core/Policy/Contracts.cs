@@ -312,6 +312,13 @@ public sealed record PolicyWeights
     public double PlacementStakesMin { get; init; } = 0.33;
     public double PlacementStakesMax { get; init; } = 3;
 
+    // --- Yakuman handling (with Defense v2 or v3; Legacy keeps v1.3) ---
+    // Value yakuman routes before tenpai and keep them (discards, learned discards and calls),
+    // stay dama when every wait is a yakuman, push any tile with tenpai worth PushAnyTenpaiPoints,
+    // and price the tile that completes an opponent's visible daisangen/four winds as a yakuman.
+    // An attacking fix, so it does not wait on the Defense v3 setting.
+    public bool YakumanHandling { get; init; } = true;
+
     // --- Defense v3 ---
     // A non-tenpai push may not risk more than it can win: the unconditional budget is capped
     // at P(win) × our value / (threat value × PushExposureTurns). 0 turns the cap off.
@@ -346,6 +353,26 @@ public sealed record PolicyWeights
     // dealin_calibration.csv can fit it.
     public double NoviceProbabilityThreshold { get; init; } = 0.5;
     public double NoviceBadWaitFactor { get; init; } = 1.3;
+    // Profile blend (V3): use P(novice) continuously instead of the NoviceProbabilityThreshold
+    // switch — danger mixes the steady and novice-like estimates, the push cap and dama rule
+    // follow the probability. ProfileCaution leans undecided seats (q near 50 %) toward the
+    // more dangerous estimate and away from novice-only allowances (0 = plain mixture).
+    public bool ProfileBlend { get; init; } = true;
+    public double ProfileCaution { get; init; } = 0.5;
+    // Per-hand fade of a seat's banked profile evidence (1 = never forget).
+    public double ProfileDecay { get; init; } = 0.9;
+    // Dama vs folders with the blend: stay dama only while P(every opponent folds) — the
+    // product of 1 - P(novice) — reaches this.
+    public double DamaFoldProbability { get; init; } = 0.5;
+    // Open-hand danger from several reads at once (HandRead.Alternatives) instead of one.
+    public bool ReadMixture { get; init; } = true;
+    // Seat budget over every opponent, not only those past ThreatTenpaiFloor: a 15 % tenpai
+    // seat adds 15 % of its value-weighted danger. The floor still decides when defense starts.
+    public bool ContinuousThreats { get; init; } = true;
+    // With no safe tile to fold with, compare the least costly retreat against the attack
+    // instead of pushing every tile: a tile may cost what the retreat costs plus the extra win
+    // value it buys (per PushExposureTurns).
+    public bool RetreatEv { get; init; } = true;
     // Cap on the all-last "a trailing riichi is worth what it needs" floor (baiman).
     public double PlacementFloorMax { get; init; } = 16000;
     // One more han on a deal-in: a riichi's ippatsu turn and the hand's last discard (houtei).

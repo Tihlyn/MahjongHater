@@ -75,7 +75,7 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
                 }
                 else
                     valuePoints = HandValue.EstimatePoints(state, option.ValueEstimate, this.weights);
-                if (this.weights.DefenseModel == DefenseModel.V3)
+                if (this.weights.YakumanHandling)
                 {
                     var kept = state.Hand.ToList();
                     kept.Remove(tile);

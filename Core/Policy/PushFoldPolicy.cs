@@ -112,17 +112,18 @@ public sealed class PushFoldPolicy : IPushFoldPolicy
 
         var notes = new List<string> { shape, $"{value:0} pts", phase, riichi ? (dealerThreat ? "dealer riichi" : "riichi") : $"tenpai {tenpaiT:P0}" };
 
-        // V3: the table tops out at "cut a 10 % tile", which kept a 48 000 yakuman tenpai on a
+        // The table tops out at "cut a 10 % tile", which kept a 48 000 yakuman tenpai on a
         // 12 % budget. Against a ~7 000 riichi a tenpai worth this much wins the exchange on
-        // almost any tile (0.3 × 32 000 to win vs 0.3 × 7 000 per deal-in).
-        if (w.DefenseModel == DefenseModel.V3 && best.ShantenAfter == 0)
+        // almost any tile (0.3 × 32 000 to win vs 0.3 × 7 000 per deal-in). Part of the yakuman
+        // handling; the haneman step is V3.
+        if ((w.DefenseModel == DefenseModel.V3 || w.YakumanHandling) && best.ShantenAfter == 0)
         {
-            if (value >= w.PushAnyTenpaiPoints)
+            if (value >= w.PushAnyTenpaiPoints && w.YakumanHandling)
             {
                 budget = 1;
                 notes.Add(best.Yakuman is not null || value >= 32000 ? "yakuman-class tenpai, push" : "sanbaiman-class tenpai, push");
             }
-            else if (value >= w.HanemanTenpaiPoints && budget < w.HanemanTenpaiBudget)
+            else if (w.DefenseModel == DefenseModel.V3 && value >= w.HanemanTenpaiPoints && budget < w.HanemanTenpaiBudget)
             {
                 budget = w.HanemanTenpaiBudget;
                 notes.Add("haneman-class tenpai");
@@ -204,30 +205,73 @@ public sealed class PushFoldPolicy : IPushFoldPolicy
         // 1 000 pushed a 7 % budget into a dealer's two-call ~10 000). Expected loss per push
         // ≈ tenpai × danger × threat value × exposure turns; expected gain ≈ P(win) × value.
         // Only when every threat is novice-like: on a mixed table a steady player in tenpai
-        // behind a novice primary still prices the push.
-        var capWeight = threats.All(opponents.NoviceLike) ? w.PushEvCapNoviceWeight : w.PushEvCapWeight;
-        if (w.DefenseModel == DefenseModel.V3 && capWeight > 0 && best.ShantenAfter >= 1)
+        // behind a novice primary still prices the push. With the profile blend the weight runs
+        // between the two by the threats' exposure-weighted P(novice), cautiously shrunk.
+        // The cap at a given weight (0 = no cap); the budget it leaves and its note.
+        (double Budget, string? Note) Capped(double capWeight, double current)
         {
+            if (w.DefenseModel != DefenseModel.V3 || capWeight <= 0 || best.ShantenAfter < 1)
+                return (current, null);
             var threatValue = Math.Max(1000, opponents.Value(primary));
-            var gain = best.WinProbability * value * stakesFactor * capWeight;
-            var cap = gain / (threatValue * Math.Max(1, w.PushExposureTurns));
-            if (cap < budget)
+            var cap = best.WinProbability * value * stakesFactor * capWeight / (threatValue * Math.Max(1, w.PushExposureTurns));
+            if (cap < current)
+                return (cap, $"EV cap {cap:P1} (win {best.WinProbability:P0} × {value:0} vs ~{threatValue:0})");
+            // The same comparison lifts a slow but expensive hand (a yakuman 1-shanten folded
+            // on the riichi tables' 7 %).
+            if (value >= w.HanemanTenpaiPoints && cap > current)
             {
-                budget = cap;
-                notes.Add($"EV cap {cap:P1} (win {best.WinProbability:P0} × {value:0} vs ~{threatValue:0})");
+                var raised = Math.Min(cap, w.MaxRaisedBudget);
+                return (raised, $"EV raise {raised:P1} (win {best.WinProbability:P0} × {value:0} vs ~{threatValue:0})");
             }
-            else if (value >= w.HanemanTenpaiPoints && cap > budget)
-            {
-                // The same comparison lifts a slow but expensive hand (a yakuman 1-shanten
-                // folded on the riichi tables' 7 %).
-                budget = Math.Min(cap, w.MaxRaisedBudget);
-                notes.Add($"EV raise {budget:P1} (win {best.WinProbability:P0} × {value:0} vs ~{threatValue:0})");
-            }
+
+            return (current, null);
         }
 
+        if (w.DefenseModel == DefenseModel.V3 && w.ProfileBlend)
+        {
+            // Blend: the steady-table and novice-table budgets mixed by the threats' exposure-
+            // weighted P(novice), cautiously shrunk while undecided.
+            var exposure = threats.Select(t => (Seat: t, E: (state.Seats[t].Riichi ? 1 : opponents.TenpaiProbability(t)) * Math.Max(1000, opponents.Value(t)))).ToList();
+            var total = exposure.Sum(x => x.E);
+            var q = total <= 0 ? 0 : exposure.Sum(x => x.E * OpponentProfiles.Permissive(opponents.NoviceProbability(x.Seat), w.ProfileCaution)) / total;
+            var steady = Capped(w.PushEvCapWeight, budget);
+            var novice = Capped(w.PushEvCapNoviceWeight, budget);
+            budget = (1 - q) * steady.Budget + q * novice.Budget;
+            if (steady.Note is not null)
+                notes.Add(q >= 0.05 ? $"{steady.Note}, {q:P0} toward the novice-table {novice.Budget:P1}" : steady.Note);
+            else if (novice.Note is not null && q >= 0.05)
+                notes.Add($"{q:P0} toward {novice.Note}");
+        }
+        else
+        {
+            var (capped, note) = Capped(threats.All(opponents.NoviceLike) ? w.PushEvCapNoviceWeight : w.PushEvCapWeight, budget);
+            budget = capped;
+            if (note is not null)
+                notes.Add(note);
+        }
+
+        // Seat weights: each seat's exposure (tenpai × value) against the primary's. Without
+        // ContinuousThreats only the seats past the floor count.
+        double Exposure(int seat) => (state.Seats[seat].Riichi ? 1 : opponents.TenpaiProbability(seat)) * Math.Max(1000, opponents.Value(seat));
+        var reference = Math.Max(tenpaiT, w.ThreatTenpaiFloor) * Math.Max(1000, opponents.Value(primary));
+        var weighted = w.ContinuousThreats ? Enumerable.Range(1, 3).Where(s => s == primary || Exposure(s) > 0).ToList() : threats;
+        var seatWeights = seatBudget ? weighted.ToDictionary(s => s, s => s == primary ? 1 : Exposure(s) / reference) : null;
+
         // Nothing safe to fold with: attacking is the only option; one safe tile mid-game
-        // is not a fold either.
-        if (safeTiles == 0)
+        // is not a fold either. With RetreatEv "attacking is the only option" is checked: the
+        // least costly tile is the retreat, and a tile may cost what it costs plus the extra
+        // win value attacking buys over it, spread over the turns a push stays exposed.
+        if (safeTiles == 0 && seatWeights is not null && w.DefenseModel == DefenseModel.V3 && w.RetreatEv)
+        {
+            double Cost(DiscardCandidate c) => seatWeights.Sum(x => opponents.Danger(c.Tile, x.Key) * x.Value) * reference;
+            double Gain(DiscardCandidate c) => c.WinProbability * (c.ShantenAfter == 0 ? Math.Max(c.MinPoints, c.ValuePoints * 0.8) : c.ValuePoints) * stakesFactor;
+            var retreat = candidates.MinBy(Cost)!;
+            var limit = Cost(retreat) + Math.Max(0, Gain(best) - Gain(retreat)) / Math.Max(1, w.PushExposureTurns);
+            var evBudget = limit / reference * Math.Max(tenpaiT, w.ThreatTenpaiFloor);
+            budget = Math.Max(budget, evBudget);
+            notes.Add($"no safe tiles: retreat {retreat.Tile} costs ~{Cost(retreat):0}, attack buys ~{Math.Max(0, Gain(best) - Gain(retreat)):0}");
+        }
+        else if (safeTiles == 0)
         {
             budget = 1;
             notes.Add("no safe tiles");
@@ -241,15 +285,8 @@ public sealed class PushFoldPolicy : IPushFoldPolicy
         // A seat that is only probably tenpai discounts the danger proportionally
         // (10 % against a 50 % tenpai is 5 % against a riichi).
         var maxDanger = Math.Clamp(budget / Math.Max(tenpaiT, w.ThreatTenpaiFloor), 0, 1);
-        Dictionary<int, double>? seatWeights = null;
-        if (seatBudget)
-        {
-            double Exposure(int seat) => (state.Seats[seat].Riichi ? 1 : opponents.TenpaiProbability(seat)) * Math.Max(1000, opponents.Value(seat));
-            var reference = Math.Max(tenpaiT, w.ThreatTenpaiFloor) * Math.Max(1000, opponents.Value(primary));
-            seatWeights = threats.ToDictionary(s => s, s => s == primary ? 1 : Exposure(s) / reference);
-            if (threats.Count > 1)
-                notes.Add("summed over " + string.Join(", ", threats.Where(s => s != primary).Select(s => $"seat {s} ×{seatWeights[s]:0.00}")));
-        }
+        if (seatWeights is not null && seatWeights.Count > 1)
+            notes.Add("summed over " + string.Join(", ", seatWeights.Where(x => x.Key != primary).Select(x => $"seat {x.Key} ×{x.Value:0.00}")));
 
         var reason = new Reason("push/fold", $"Budget {maxDanger:P0}: {string.Join(", ", notes)}; {safeTiles} safe tile(s).");
         return new PushFoldDecision(maxDanger, threats, primary, safeTiles, reason) { SeatWeights = seatWeights };

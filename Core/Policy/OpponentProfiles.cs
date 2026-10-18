@@ -19,14 +19,18 @@ namespace MahjongHater.Core.Policy;
 //  * after another seat's riichi (ours included), the share of its discards that were
 //    genbutsu to it, in fifths, once three were made. Steady: Phoenix. Novice: provisional,
 //    centred near 35 % (the same player's live share); hand_rivers.jsonl is there to fit it.
-// Prior 25 %, temper 0.7: Phoenix player-games read as novice 2.1 % of the time after 8 hands
-// and 0 % after 16; the live novice-like player 82 %, the two steady ones 3 % and 17 %.
+// Prior 25 %, temper 0.7: Phoenix player-games read as novice about 2 % of the time (archive
+// n24: 2.2 % after 8 hands, 2.6 % after 16); the live novice-like player 82 %, the two steady
+// ones 3 % and 17 %.
+// Finished hands fade by `decay` per hand (default 0.9), so a seat that changes how it plays
+// is followed within a few hands; on 5 000 Phoenix games (n24) it moves the mean P(novice)
+// after 16 hands from 4 % to 7 % and keeps the live novice-like player at 75 %.
 //
 // A novice-like seat's discards say little about its hand: the early-outside read is off and
 // a flush is read from calls only. Suji keeps its furiten protection (the game enforces it),
 // but non-ryanmen waits are commoner, so suji/honor danger gets a provisional factor that
 // dealin_calibration.csv (profile column) is there to fit.
-public sealed class OpponentProfiles
+public sealed class OpponentProfiles(double decay = 0.9)
 {
     public const double PhoenixEarlyMiddle = 0.164;
     public const double Prior = 0.25;
@@ -71,7 +75,7 @@ public sealed class OpponentProfiles
             var s = seat.Seat;
             if (seat.Discards.Count < this.lastDiscards[s])
             {
-                this.banked[s] += this.handEvidence[s];
+                this.banked[s] = this.banked[s] * decay + this.handEvidence[s];
                 this.hands[s] += this.handCounted[s] ? 1 : 0;
                 this.middle[s] += this.handMiddle[s];
                 this.counted[s] += this.handEarly[s];
@@ -111,6 +115,10 @@ public sealed class OpponentProfiles
     }
 
     public bool NoviceLike(int seat, PolicyWeights w) => this.NoviceProbability(seat) >= w.NoviceProbabilityThreshold;
+
+    // P(novice) for a decision that pays off only if the seat really is novice-like (lifting the
+    // push cap): shrunk by caution × 4q(1 - q), so undecided evidence counts for less.
+    public static double Permissive(double q, double caution) => q * (1 - Math.Clamp(caution, 0, 1) * 4 * q * (1 - q));
 
     // Hands that gave evidence (six discards, or three after a riichi), this one included.
     public int Observed(int seat) => this.hands[seat] + (this.handCounted[seat] ? 1 : 0);

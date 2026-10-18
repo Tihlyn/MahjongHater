@@ -12,6 +12,7 @@ namespace MahjongHater.Tests.Policy;
 public class YakumanTests
 {
     private static readonly PolicyWeights V2 = PolicyWeights.Default with { DefenseModel = DefenseModel.V2 };
+    private static readonly PolicyWeights Off = V2 with { YakumanHandling = false };
     private static readonly PolicyWeights V3 = PolicyWeights.Default with { DefenseModel = DefenseModel.V3 };
 
     private static Meld Pon(string t) => Meld.MakePon(Tile.Parse(t), true);
@@ -50,6 +51,10 @@ public class YakumanTests
         var v3 = new HeuristicDiscardPolicy(weights: V3).Rank(state, Model(state, V3), default);
         Assert.False(v3[0].Tile.IsHonor, $"v3 threw {v3[0].Tile}");
         Assert.Equal("Shousuushii", v3[0].Yakuman?.Name);
+        var v2 = new HeuristicDiscardPolicy(weights: V2).Rank(state, Model(state, V2), default);
+        Assert.Equal("Shousuushii", v2[0].Yakuman?.Name);   // yakuman handling is not a V3 setting
+        var off = new HeuristicDiscardPolicy(weights: Off).Rank(state, Model(state, Off), default);
+        Assert.True(off[0].Tile.IsHonor, $"off threw {off[0].Tile}");
     }
 
     [Fact]
@@ -67,7 +72,8 @@ public class YakumanTests
         var state = Seat(Snap("123m456m4578p447s1z"), 1, "1m9m2m8m1p9p", riichi: true, riichiIndex: 5) with { WallRemaining = 30 };
         var tenpai = Candidate(shanten: 0, ukeire: 3) with { ValuePoints = 32000, MinPoints = 32000, Yakuman = new YakumanRoute("Daisangen", 1) };
         Assert.Equal(1, new PushFoldPolicy(V3).Decide(state, Model(state, V3), [tenpai]).MaxDanger, 6);
-        Assert.True(new PushFoldPolicy(V2).Decide(state, Model(state, V2), [tenpai]).MaxDanger < 0.2);
+        Assert.Equal(1, new PushFoldPolicy(V2).Decide(state, Model(state, V2), [tenpai]).MaxDanger, 6);   // not a V3 setting
+        Assert.True(new PushFoldPolicy(Off).Decide(state, Model(state, Off), [tenpai]).MaxDanger < 0.2);
     }
 
     [Fact]
@@ -88,7 +94,8 @@ public class YakumanTests
         var best = Candidate("1m", shanten: 0, ukeire: 3) with { ValuePoints = 32000, MinPoints = 32000 };
         Assert.False(new RiichiPolicy(V3).ShouldDeclare(state, Model(state, V3), best, out var why));
         Assert.Contains("dama", why.Display);
-        Assert.True(new RiichiPolicy(V2).ShouldDeclare(state, Model(state, V2), best, out _));
+        Assert.False(new RiichiPolicy(V2).ShouldDeclare(state, Model(state, V2), best, out _));
+        Assert.True(new RiichiPolicy(Off).ShouldDeclare(state, Model(state, Off), best, out _));
     }
 
     [Fact]
@@ -96,8 +103,9 @@ public class YakumanTests
     {
         var state = Seat(Snap("123m456m4578p447s7z"), 2, "1m9m2p8p3s4s5m6m", melds: [Pon("5z"), Pon("6z")]);
         var v3 = Model(state, V3).Explain(Tile.Parse("7z"), 2);
-        var v2 = Model(state, V2).Explain(Tile.Parse("7z"), 2);
-        Assert.True(v3.Probability > v2.Probability * 3, $"v3 {v3.Probability} vs v2 {v2.Probability}");
+        var off = Model(state, Off).Explain(Tile.Parse("7z"), 2);
+        Assert.True(v3.Probability > off.Probability * 3, $"v3 {v3.Probability} vs off {off.Probability}");
+        Assert.Contains("Daisangen", Model(state, V2).Explain(Tile.Parse("7z"), 2).Why);
         Assert.True(v3.Rank >= DangerRank.E, v3.Rank.ToString());
         Assert.Contains("Daisangen", v3.Why);
         Assert.Contains("pao", v3.Why);

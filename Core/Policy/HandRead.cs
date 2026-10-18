@@ -35,7 +35,46 @@ public sealed record HandRead(ReadKind Kind, TileSuit? FlushSuit, IReadOnlyList<
     };
 
     // `callsOnly`: read a flush from the calls alone (a novice-like river says nothing).
-    public static HandRead Of(SeatState seat, Wind seatWind, Wind roundWind, bool callsOnly = false)
+    public static HandRead Of(SeatState seat, Wind seatWind, Wind roundWind, bool callsOnly = false) =>
+        Classify(seat, seatWind, roundWind, callsOnly, riverFlush: null);
+
+    // V3: the reads the danger model blends, with weights summing to 1. Of() decides a flush
+    // from the river on hard cutoffs (in-suit share 15 % / 20 %), so one tile flips the read and
+    // every danger with it. Here a river-only flush is a probability that runs from 1 at a clean
+    // river to 0 a tenth past the cutoff, and the hand counts as both reads in proportion. A
+    // flush shown by two calls in one suit stays certain.
+    public static IReadOnlyList<(HandRead Read, double Weight)> Alternatives(SeatState seat, Wind seatWind, Wind roundWind, bool callsOnly = false)
+    {
+        var read = Of(seat, seatWind, roundWind, callsOnly);
+        if (callsOnly || RiverFlush(seat) is not { } river || Of(seat, seatWind, roundWind, callsOnly: true).Kind == ReadKind.Flush)
+            return [(read, 1)];
+        var flush = Math.Clamp(0.5 + (river.Cutoff - river.Share) / 0.2, 0, 1);
+        if (flush <= 0)
+            return [(read, 1)];
+        var withFlush = Classify(seat, seatWind, roundWind, false, riverFlush: true);
+        var without = Classify(seat, seatWind, roundWind, false, riverFlush: false);
+        if (flush >= 1 || withFlush.Kind == without.Kind)
+            return [(flush >= 0.5 ? withFlush : without, 1)];
+        return [(withFlush, flush), (without, 1 - flush)];
+    }
+
+    // The suit a one-suit-or-honor caller's river avoids, its in-suit share and the cutoff Of()
+    // applies to it; null when the calls span two suits or fewer than four number tiles are out.
+    private static (TileSuit Suit, double Share, double Cutoff)? RiverFlush(SeatState seat)
+    {
+        var melds = seat.Melds.Where(m => m.IsOpen).ToList();
+        var meldSuits = melds.Select(m => m.Tiles[0]).Where(t => !t.IsHonor).Select(t => t.Suit).Distinct().ToList();
+        var numberDiscards = seat.Discards.Where(t => !t.IsHonor).ToList();
+        if (melds.Count == 0 || meldSuits.Count > 1 || numberDiscards.Count < 4)
+            return null;
+        var suit = meldSuits.Count == 1 ? meldSuits[0]
+            : new[] { TileSuit.Man, TileSuit.Pin, TileSuit.Sou }.OrderBy(s => numberDiscards.Count(t => t.Suit == s)).ThenBy(s => s).First();
+        return (suit, (double)numberDiscards.Count(t => t.Suit == suit) / numberDiscards.Count, meldSuits.Count == 1 ? 0.2 : 0.15);
+    }
+
+    // `riverFlush`: null applies Of()'s cutoffs; true reads the river's suit as a flush
+    // whatever the share; false never reads a flush from the river.
+    private static HandRead Classify(SeatState seat, Wind seatWind, Wind roundWind, bool callsOnly, bool? riverFlush)
     {
         var melds = seat.Melds.Where(m => m.IsOpen).ToList();
         if (melds.Count == 0)
@@ -48,19 +87,21 @@ public sealed record HandRead(ReadKind Kind, TileSuit? FlushSuit, IReadOnlyList<
         if (meldSuits.Count <= 1)
         {
             var suit = meldSuits.Count == 1 ? meldSuits[0] : (TileSuit?)null;
-            if (suit is null && numberDiscards.Count >= 4 && !callsOnly)
+            if (suit is null && numberDiscards.Count >= 4 && !callsOnly && riverFlush != false)
             {
                 // Honor calls only: a flush when the number discards avoid one suit.
                 var least = new[] { TileSuit.Man, TileSuit.Pin, TileSuit.Sou }
                     .Select(s => (Suit: s, Count: numberDiscards.Count(t => t.Suit == s))).OrderBy(x => x.Count).ThenBy(x => x.Suit).First();
-                if (least.Count <= numberDiscards.Count * 0.15)
+                if (least.Count <= numberDiscards.Count * 0.15 || riverFlush == true)
                     suit = least.Suit;
             }
 
             if (suit is { } s)
             {
                 var inSuit = numberDiscards.Count(t => t.Suit == s);
-                if (melds.Count >= 2 || (!callsOnly && numberDiscards.Count >= 4 && inSuit <= numberDiscards.Count * 0.2))
+                var fromRiver = !callsOnly && numberDiscards.Count >= 4 && riverFlush != false
+                                && (inSuit <= numberDiscards.Count * 0.2 || riverFlush == true);
+                if (melds.Count >= 2 || fromRiver)
                 {
                     tags.Add(ReadKind.Flush);
                     flushSuit = s;

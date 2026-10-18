@@ -76,8 +76,15 @@ public class DefenseV3Tests
     public void A_riichi_seat_is_read_exactly_as_in_v2()
     {
         var state = Seat(Snap("123m456m4578p447s1z"), 1, "1m9m2m8m1p9p", riichi: true, riichiIndex: 5);
+        var hard = V3 with { ProfileBlend = false };
         foreach (var tile in new[] { "1z", "1s", "5s", "3p", "7m" })
-            Assert.Equal(Danger(state, tile, V2), Danger(state, tile, V3), 9);
+        {
+            Assert.Equal(Danger(state, tile, V2), Danger(state, tile, hard), 9);
+            // Blended, an unprofiled seat (P(novice) 25 %) only leans toward the novice-like
+            // reading of honors and suji (×1.3 at most).
+            var blended = Danger(state, tile, V3);
+            Assert.InRange(blended, Danger(state, tile, V2) - 1e-9, Danger(state, tile, V2) * V3.NoviceBadWaitFactor + 1e-9);
+        }
     }
 
     [Fact]
@@ -134,9 +141,14 @@ public class DefenseV3Tests
         var model = Model(state, V3);
         Assert.True(model.NoviceLike(2), model.Profile(2));
         var slow = Candidate(shanten: 2, ukeire: 17) with { ValuePoints = 1000, WinProbability = 0.05 };
-        Assert.DoesNotContain("EV cap", new PushFoldPolicy(V3).Decide(state, model, [slow]).Reason.Display);
+        var hard = V3 with { ProfileBlend = false };
+        Assert.DoesNotContain("EV cap", new PushFoldPolicy(hard).Decide(state, Model(state, hard), [slow]).Reason.Display);
         var capped = V3 with { PushEvCapNoviceWeight = 1 };
-        Assert.Contains("EV cap", new PushFoldPolicy(capped).Decide(state, Model(state, capped), [slow]).Reason.Display);
+        var full = new PushFoldPolicy(capped).Decide(state, Model(state, capped), [slow]);
+        Assert.Contains("EV cap", full.Reason.Display);
+        // Blended, the cap loosens by the threat's (cautious) P(novice) instead of switching off.
+        var blended = new PushFoldPolicy(V3).Decide(state, model, [slow]);
+        Assert.True(blended.MaxDanger > full.MaxDanger, $"{blended.Reason.Display} / {full.Reason.Display}");
     }
 
     [Fact]

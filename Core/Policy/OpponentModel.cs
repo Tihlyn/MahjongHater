@@ -6,13 +6,14 @@ public sealed class OpponentModel : IOpponentModel
 {
     private readonly PolicyWeights weights;
     private readonly TileDangerModel danger;
-    private readonly OpponentProfiles profiles = new();
+    private readonly OpponentProfiles profiles;
     private Model model = new(new double[4], new DangerEstimate[4, 34], new double[4], new bool[4], -1, [-1, -1, -1, -1]);
 
     public OpponentModel(PolicyWeights? weights = null, TileDangerModel? danger = null)
     {
         this.weights = weights ?? PolicyWeights.Default;
         this.danger = danger ?? new TileDangerModel(weights: this.weights);
+        this.profiles = new OpponentProfiles(this.weights.ProfileDecay);
     }
 
     public void Update(StateSnapshot state)
@@ -27,13 +28,18 @@ public sealed class OpponentModel : IOpponentModel
         var values = new double[4];
         var riichi = new bool[4];
         bool[]? novice = null;
-        if (this.weights.DefenseModel == DefenseModel.V3)
+        double[]? noviceWeight = null;
+        var v3 = this.weights.DefenseModel == DefenseModel.V3;
+        if (v3)
         {
             this.profiles.Observe(state);
             novice = [false, this.profiles.NoviceLike(1, this.weights), this.profiles.NoviceLike(2, this.weights), this.profiles.NoviceLike(3, this.weights)];
+            if (this.weights.ProfileBlend)
+                noviceWeight = [0, this.profiles.NoviceProbability(1), this.profiles.NoviceProbability(2), this.profiles.NoviceProbability(3)];
         }
 
-        var views = this.weights.DefenseModel != DefenseModel.Legacy ? TileDangerModel.BuildViews(state, visible, novice) : null;
+        var views = this.weights.DefenseModel != DefenseModel.Legacy
+            ? TileDangerModel.BuildViews(state, visible, novice, noviceWeight, readMixture: v3 && this.weights.ReadMixture) : null;
         foreach (var seat in state.Seats.Where(s => s.Seat is >= 1 and <= 3))
         {
             probabilities[seat.Seat] = TenpaiEstimator.WithRiverTells(TenpaiEstimator.Estimate(seat, this.weights), seat, state, this.weights);
@@ -61,10 +67,11 @@ public sealed class OpponentModel : IOpponentModel
                     : this.LegacyDanger(tile, seat, state, visible);
             }
 
-            if (this.weights.DefenseModel == DefenseModel.V3 && views is not null)
-            {
+            if (this.weights.YakumanHandling && views is not null)
                 foreach (var (kind, name) in views[seat.Seat].YakumanTiles)
                     dangers[seat.Seat, kind] = this.YakumanDanger(dangers[seat.Seat, kind], kind, name, seat, state, visible, values[seat.Seat]);
+            if (this.weights.DefenseModel == DefenseModel.V3 && views is not null)
+            {
                 if (KokushiRead(seat) && TileDangerModel.KokushiPossible(visible))
                 {
                     probabilities[seat.Seat] = Math.Max(probabilities[seat.Seat], OpenDangerTable.Default.KokushiReadTenpai(seat.Discards.Count) ?? 0);

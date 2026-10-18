@@ -4,7 +4,7 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
-## [3.3.0.0] - 2026-10-18 (testing)
+## [3.4.0.0] - 2026-10-18 (testing)
 
 ### Added
 
@@ -15,19 +15,29 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
   late middle tile, raise the tenpai estimate of open and dama seats.
 - The riichi tile's neighbours, ippatsu and the last discard (houtei), and a kokushi-shaped
   river are priced from the same replays.
-- Opponent profiles: seats that discard like the Novice queue are read as such per seat,
-  so mixed tables are handled seat by seat.
+- Per-player play: each opponent gets a probability of being novice-like from its own river
+  (early middle tiles, whether it folds to a riichi), and its danger blends the steady and the
+  novice-like reading by that probability, leaning cautious while the evidence is thin.
+- Open hands are read several ways at once: a flush read from the river fades with each
+  in-suit discard instead of flipping at a cutoff.
+- The push budget is shared across every opponent by tenpai and value, including seats not
+  yet past the threat line: a cheap open hand behind a riichi no longer blocks tiles at the
+  riichi's line.
+- With no safe tile left, the least dangerous retreat is weighed against what attacking
+  gains instead of pushing any tile.
+- A good-wait mangan stays dama when the whole table is likely to fold to a riichi.
 - Keeps the last safe tile in hand mid-game while attacking, unless it costs nothing to lose.
-- `win_offers.jsonl` journals every win offer and its outcome; the deal-in calibration CSV
-  records the hand read, tsumogiri streak and profile.
+- `win_offers.jsonl` journals every win offer and its outcome; `hand_rivers.jsonl` every
+  seat's river per hand (`tools/hand_rivers.py` prints a per-player table); the deal-in
+  calibration CSV records the hand read, tsumogiri streak and profile.
 - `Precompute arena`: duplicate-format matches against simulated novices, the Phoenix-trained
-  network or a mix, for policy A/B runs.
+  network, a mix, or a `live`-like table, for policy A/B runs.
 
 ### Fixed
 
-- Yakuman: hands shaped for a yakuman are valued as one, so the policy keeps the route
-  (discards, calls and dama on a yakuman wait) instead of trading it for speed; a yakuman
-  tenpai no longer folds on the riichi tables' budget.
+- Yakuman (with Defense v2 or v3, not only v3): hands shaped for a yakuman are valued as one,
+  so the policy keeps the route (discards, calls and dama on a yakuman wait) instead of
+  trading it for speed; a yakuman tenpai no longer folds on the riichi tables' budget.
 - A slow, cheap hand no longer pushes into an expensive open hand; an expensive slow hand
   may push further than before.
 - The tile that completes an opponent's visible daisangen or four-winds hand is treated as a

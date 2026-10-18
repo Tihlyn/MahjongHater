@@ -81,6 +81,7 @@ public class SeatBudgetTests
         public double Danger(Tile tile, int seat) => 0;
         public double ExpectedDealInCost(Tile tile) => 0;
         public bool NoviceLike(int seat) => novices.Contains(seat);
+        public double NoviceProbability(int seat) => novices.Contains(seat) ? 0.9 : 0.05;
     }
 
     [Fact]

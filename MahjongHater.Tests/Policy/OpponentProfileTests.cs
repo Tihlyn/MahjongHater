@@ -33,14 +33,18 @@ public class OpponentProfileTests
     }
 
     // 2026-10-18 human match, middles among each hand's first six discards per player:
-    // the Python prototype of this classifier gave P(novice) 0.82 / 0.03 / 0.17.
+    // the Python prototype of this classifier gave P(novice) 0.82 / 0.03 / 0.17 without decay
+    // and 0.75 / 0.06 / 0.20 with the default 0.9 per hand.
     [Theory]
-    [InlineData(new[] { 1, 4, 2, 0, 2, 0, 6, 0 }, 0.82, true)]
-    [InlineData(new[] { 0, 0, 1, 1, 0, 0, 0, 0 }, 0.03, false)]
-    [InlineData(new[] { 0, 2, 2, 0, 0, 4, 0, 0 }, 0.17, false)]
-    public void Live_players_read_as_the_prototype_did(int[] middles, double expected, bool novice)
+    [InlineData(new[] { 1, 4, 2, 0, 2, 0, 6, 0 }, 1.0, 0.82, true)]
+    [InlineData(new[] { 0, 0, 1, 1, 0, 0, 0, 0 }, 1.0, 0.03, false)]
+    [InlineData(new[] { 0, 2, 2, 0, 0, 4, 0, 0 }, 1.0, 0.17, false)]
+    [InlineData(new[] { 1, 4, 2, 0, 2, 0, 6, 0 }, 0.9, 0.75, true)]
+    [InlineData(new[] { 0, 0, 1, 1, 0, 0, 0, 0 }, 0.9, 0.06, false)]
+    [InlineData(new[] { 0, 2, 2, 0, 0, 4, 0, 0 }, 0.9, 0.20, false)]
+    public void Live_players_read_as_the_prototype_did(int[] middles, double decay, double expected, bool novice)
     {
-        var p = new OpponentProfiles();
+        var p = new OpponentProfiles(decay);
         var hand = 1;
         foreach (var k in middles)
         {
