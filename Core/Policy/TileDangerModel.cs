@@ -23,7 +23,7 @@ public readonly record struct DangerEstimate(double Probability, DangerRank Rank
 // What the danger model knows about one opponent for one snapshot: which tiles are
 // genbutsu (own discards, anything discarded after its riichi, the tile just passed to us),
 // its riichi declaration tile, early discards, how many suji are still live, and its winds.
-public sealed class SeatThreatView
+public sealed record SeatThreatView
 {
     public required int Seat { get; init; }
 
@@ -43,6 +43,37 @@ public sealed class SeatThreatView
 
     public int OpenMelds { get; init; }
 
+    // V3: what the seat's calls and discards say it is building, the seat's own discards
+    // (suji as the open-hand tables count it) and copies visible to everyone (not our hand).
+    public HandRead Read { get; init; } = HandRead.Closed;
+
+    // V3: the reads blended for danger (HandRead.Alternatives), and the calls-only reads used
+    // for the seat's novice-like interpretation. Empty: Read alone.
+    public IReadOnlyList<(HandRead Read, double Weight)> Reads { get; init; } = [];
+
+    public IReadOnlyList<(HandRead Read, double Weight)> NoviceReads { get; init; } = [];
+
+    public bool[] OwnDiscards { get; init; } = new bool[34];
+
+    public int[] PublicCopies { get; init; } = new int[34];
+
+    // V3: tiles that finish a yakuman the seat's melds already show (the third dragon after
+    // two dragon sets, the fourth wind after three wind sets), with the yakuman's name.
+    public IReadOnlyDictionary<int, string> YakumanTiles { get; init; } = new Dictionary<int, string>();
+
+    // V3: the seat's early discards look random (OpponentProfiles), so behavioural reads of
+    // its river are off.
+    public bool NoviceLike { get; init; }
+
+    // V3 profile blend: P(novice) for the seat. Its danger is the steady and the novice-like
+    // estimate mixed in this proportion, leaning toward the higher one while the evidence is
+    // undecided. 0: NoviceLike alone decides.
+    public double NoviceWeight { get; init; }
+
+    // Whether the riichi declaration tile was the tile just drawn (null when unknown). A
+    // hand-discarded riichi tile says something about the wait around it; a tsumogiri one does not.
+    public bool? RiichiTileTsumogiri { get; init; }
+
     public bool IsGenbutsu(Tile tile) => this.Genbutsu[TileHelpers.ToIndex(tile)];
 
     public bool IsRiichiTile(int kind) => this.RiichiTile is { } r && TileHelpers.ToIndex(r) == kind;
@@ -54,16 +85,93 @@ public sealed class SeatThreatView
 public sealed class TileDangerModel
 {
     private readonly DealInRateTable table;
+    private readonly OpenDangerTable open;
     private readonly PolicyWeights weights;
 
-    public TileDangerModel(DealInRateTable? table = null, PolicyWeights? weights = null)
+    public TileDangerModel(DealInRateTable? table = null, PolicyWeights? weights = null, OpenDangerTable? open = null)
     {
         this.table = table ?? DealInRateTable.Default;
         this.weights = weights ?? PolicyWeights.Default;
+        this.open = open ?? OpenDangerTable.Default;
     }
 
     // visible[kind] counts every copy we can see (our hand, all discards, all melds, indicators).
     public DangerEstimate Estimate(Tile tile, SeatThreatView seat, int[] visible, IReadOnlyList<Tile> doraIndicators)
+    {
+        if (this.weights.DefenseModel != DefenseModel.V3 || seat.NoviceWeight <= 0)
+            return this.EstimateAs(tile, seat, visible, doraIndicators);
+
+        // Profile blend: the seat is a steady player with probability 1 - q and novice-like with
+        // q; its danger is the mixture. While q is undecided (near 50 %) the mixture leans toward
+        // the more dangerous reading by ProfileCaution × 4q(1 - q): a wrong "steady" costs a
+        // deal-in, a wrong "novice" only a slower hand.
+        var q = Math.Clamp(seat.NoviceWeight, 0, 1);
+        var steady = this.EstimateAs(tile, seat with { NoviceLike = false }, visible, doraIndicators);
+        var novice = this.EstimateAs(tile, seat with { NoviceLike = true, Reads = seat.NoviceReads }, visible, doraIndicators);
+        var mix = (1 - q) * steady.Probability + q * novice.Probability;
+        var p = Clamp(mix + this.weights.ProfileCaution * 4 * q * (1 - q) * (Math.Max(steady.Probability, novice.Probability) - mix));
+        if (Math.Abs(steady.Probability - novice.Probability) < 1e-9)
+            return steady;
+        var lead = q >= 0.5 ? novice : steady;
+        return new DangerEstimate(p, p <= 0 ? lead.Rank : this.RankOf(p), lead.Class,
+            $"{lead.Why}; P(novice) {q:P0}: steady {steady.Probability:P1} / novice-like {novice.Probability:P1}");
+    }
+
+    private DangerEstimate EstimateAs(Tile tile, SeatThreatView seat, int[] visible, IReadOnlyList<Tile> doraIndicators)
+    {
+        var estimate = this.EstimateAgainstRiichi(tile, seat, visible, doraIndicators);
+        if (this.weights.DefenseModel != DefenseModel.V3 || estimate.Probability <= 0)
+            return estimate;
+
+        // A novice-like seat waits on tanki/shanpon/kanchan more often: furiten still protects
+        // a suji against ryanmen, not against those (provisional, fit from the profile column).
+        if (seat.NoviceLike && (estimate.Class.Contains("suji", StringComparison.Ordinal) && !estimate.Class.StartsWith("non", StringComparison.Ordinal)
+                                || estimate.Class.StartsWith("honor", StringComparison.Ordinal)))
+        {
+            var q = Clamp(estimate.Probability * this.weights.NoviceBadWaitFactor);
+            estimate = new DangerEstimate(q, this.RankOf(q), estimate.Class, $"{estimate.Why}, ×{this.weights.NoviceBadWaitFactor:0.##} novice-like waits");
+        }
+
+        if (seat.Riichi)
+            return this.AroundRiichiTile(tile, seat, estimate);
+
+        // Not in riichi: shift by how much more or less this tile class deals into the seat's
+        // read than into a riichi (Phoenix replays, same class definition on both sides).
+        var kind = TileHelpers.ToIndex(tile);
+        // The counter classified a tile after it hit the river, so the copy we throw counts.
+        var generic = OpenDangerTable.GenericClass(tile, seat.OwnDiscards, seat.PublicCopies[kind] + 1);
+        // Several reads (HandRead.Alternatives): their ratios weighted; the heaviest names it.
+        IReadOnlyList<(HandRead Read, double Weight)> reads = seat.Reads.Count > 0 ? seat.Reads : [(seat.Read, 1)];
+        var ratio = reads.Sum(r => r.Weight * this.open.DangerRatio(r.Read, generic, OpenDangerTable.FlushClass(tile, r.Read)));
+        if (Math.Abs(ratio - 1) < 1e-9)
+            return estimate;
+        var main = reads.MaxBy(r => r.Weight).Read;
+        var flush = OpenDangerTable.FlushClass(tile, main);
+        var p = Clamp(estimate.Probability * ratio);
+        var also = reads.Count > 1 ? $" {reads.Max(r => r.Weight):P0}, else {reads.Where(r => r.Read != main).Select(r => r.Read.Describe()).First()}" : string.Empty;
+        return new DangerEstimate(p, this.RankOf(p), estimate.Class,
+            $"{estimate.Why}, ×{ratio:0.##} vs {main.Describe()}{(flush is null ? string.Empty : $" ({flush[6..]})")}{also}");
+    }
+
+    // Same suit within three of the riichi tile: Phoenix rates by that distance and by whether
+    // the riichi tile left the hand (matagi-suji and friends), over the plain class rate.
+    private DangerEstimate AroundRiichiTile(Tile tile, SeatThreatView seat, DangerEstimate estimate)
+    {
+        if (seat.RiichiTile is not { IsHonor: false } riichiTile || tile.IsHonor || seat.RiichiTileTsumogiri is not { } tsumogiri
+            || riichiTile.Suit != tile.Suit || Math.Abs(tile.Number - riichiTile.Number) > 3)
+            return estimate;
+        var kind = TileHelpers.ToIndex(tile);
+        var generic = OpenDangerTable.GenericClass(tile, seat.OwnDiscards, seat.PublicCopies[kind] + 1);
+        var relation = $"rt-{(tsumogiri ? "tg" : "td")}{tile.Number - riichiTile.Number:+0;-0;+0}";
+        var ratio = this.open.RiichiTileRatio(relation, generic);
+        if (Math.Abs(ratio - 1) < 0.02)
+            return estimate;
+        var p = Clamp(estimate.Probability * ratio);
+        return new DangerEstimate(p, this.RankOf(p), estimate.Class,
+            $"{estimate.Why}, ×{ratio:0.##} {Math.Abs(tile.Number - riichiTile.Number)} from the {(tsumogiri ? "tsumogiri" : "hand-cut")} riichi tile");
+    }
+
+    private DangerEstimate EstimateAgainstRiichi(Tile tile, SeatThreatView seat, int[] visible, IReadOnlyList<Tile> doraIndicators)
     {
         var kind = TileHelpers.ToIndex(tile);
         var kokushiPossible = KokushiPossible(visible, kind);
@@ -115,7 +223,7 @@ public sealed class TileDangerModel
         }
 
         if ((cls2 is DealInRateTable.NumberClass.NonSuji or DealInRateTable.NumberClass.HalfSuji or DealInRateTable.NumberClass.HalfSujiRiichi)
-            && IsOutsideEarlyDiscard(tile, seat))
+            && !seat.NoviceLike && IsOutsideEarlyDiscard(tile, seat))
         {
             rate *= m.EarlyOutside;
             notes.Add("outside an early discard");
@@ -143,9 +251,15 @@ public sealed class TileDangerModel
 
     // Build the per-seat views for a snapshot. `lastGlobal` (the most recent discard on
     // the table, normally kamicha's) is safe against everyone this turn by furiten.
-    public static SeatThreatView[] BuildViews(StateSnapshot state, int[] visible)
+    public static SeatThreatView[] BuildViews(StateSnapshot state, int[] visible, IReadOnlyList<bool>? noviceLike = null) =>
+        BuildViews(state, visible, noviceLike, null, readMixture: false);
+
+    // `noviceWeight`: P(novice) per seat for the profile blend (null: NoviceLike decides);
+    // `readMixture`: open-hand danger from HandRead.Alternatives instead of the single read.
+    public static SeatThreatView[] BuildViews(StateSnapshot state, int[] visible, IReadOnlyList<bool>? noviceLike, IReadOnlyList<double>? noviceWeight, bool readMixture)
     {
         var views = new SeatThreatView[4];
+        var blend = noviceWeight is not null;
         var ordersKnown = state.Seats.All(s => s.DiscardOrder.Count == s.Discards.Count);
         var anyCall = state.Seats.Any(s => s.Melds.Any(mm => mm.IsOpen)) || state.IsOpen;
         Tile? lastGlobal = null;
@@ -161,6 +275,11 @@ public sealed class TileDangerModel
 
         if (state.CallTile is { } offered && state.CallFromSeat is >= 1 and <= 3)
             lastGlobal = offered;
+
+        // Everything visible except our own closed hand: what the replay counts call "visible".
+        var publicCopies = (int[])visible.Clone();
+        foreach (var t in state.Hand)
+            publicCopies[TileHelpers.ToIndex(t)]--;
 
         foreach (var seat in state.Seats)
         {
@@ -196,6 +315,9 @@ public sealed class TileDangerModel
             var early = new bool[34];
             foreach (var t in seat.Discards.Take(6))
                 early[TileHelpers.ToIndex(t)] = true;
+            var own = new bool[34];
+            foreach (var t in seat.Discards)
+                own[TileHelpers.ToIndex(t)] = true;
 
             views[seat.Seat] = new SeatThreatView
             {
@@ -209,10 +331,38 @@ public sealed class TileDangerModel
                 SeatWind = SeatWindOf(seat.Seat, state.DealerSeat),
                 RoundWind = state.RoundWind,
                 OpenMelds = seat.Melds.Count(mm => mm.IsOpen),
+                Read = HandRead.Of(seat, SeatWindOf(seat.Seat, state.DealerSeat), state.RoundWind, callsOnly: blend ? false : noviceLike?[seat.Seat] == true),
+                Reads = readMixture ? HandRead.Alternatives(seat, SeatWindOf(seat.Seat, state.DealerSeat), state.RoundWind, callsOnly: !blend && noviceLike?[seat.Seat] == true) : [],
+                NoviceReads = blend
+                    ? readMixture ? HandRead.Alternatives(seat, SeatWindOf(seat.Seat, state.DealerSeat), state.RoundWind, callsOnly: true)
+                        : [(HandRead.Of(seat, SeatWindOf(seat.Seat, state.DealerSeat), state.RoundWind, callsOnly: true), 1)]
+                    : [],
+                NoviceLike = !blend && noviceLike?[seat.Seat] == true,
+                NoviceWeight = blend ? noviceWeight![seat.Seat] : 0,
+                RiichiTileTsumogiri = seat.Riichi && seat.RiichiDiscardIndex >= 0 && seat.DiscardTsumogiri.Count == seat.Discards.Count
+                                      && seat.RiichiDiscardIndex < seat.DiscardTsumogiri.Count
+                    ? seat.DiscardTsumogiri[seat.RiichiDiscardIndex] : null,
+                YakumanTiles = YakumanTilesOf(seat),
+                OwnDiscards = own,
+                PublicCopies = publicCopies,
             };
         }
 
         return views;
+    }
+
+    // Melded sets (open or concealed kan) that leave one tile kind short of a yakuman.
+    public static IReadOnlyDictionary<int, string> YakumanTilesOf(SeatState seat)
+    {
+        var sets = seat.Melds.Where(m => m.IsTriplet).Select(m => TileHelpers.ToIndex(m.Tiles[0])).ToHashSet();
+        var result = new Dictionary<int, string>();
+        var dragons = new[] { 31, 32, 33 };
+        if (dragons.Count(sets.Contains) == 2)
+            result[dragons.First(k => !sets.Contains(k))] = "Daisangen";
+        var winds = new[] { 27, 28, 29, 30 };
+        if (winds.Count(sets.Contains) == 3)
+            result[winds.First(k => !sets.Contains(k))] = "Shousuushii";
+        return result;
     }
 
     // Kokushi needs one of every terminal/honor; a kind with all four visible rules it out —

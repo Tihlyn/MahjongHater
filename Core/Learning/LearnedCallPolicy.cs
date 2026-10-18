@@ -46,6 +46,12 @@ public sealed class LearnedCallPolicy(LearnedModel network, PolicyWeights? weigh
         // (Phoenix players call on 16 % of windows; the gate is tuned on the validation split).
         var best = probabilities.Where(kv => kv.Key != LearningFeatures.PassAction).MaxBy(kv => kv.Value).Key;
 
+        // A call the heuristic takes that keeps a yakuman shape is never passed on the
+        // network's say-so (it values the meld, not the 32 000 behind it).
+        if (this.weights.YakumanHandling && this.weights.DefenseModel != DefenseModel.Legacy && heuristic.Accept && heuristic.Meld is { } taken
+            && description.Candidates.FirstOrDefault(c => c.Kind == heuristic.Kind && c.Meld.Tiles.Order().SequenceEqual(taken.Tiles.Order())) is { } chosen
+            && YakumanRoutes.Of(chosen.Remaining, chosen.MeldsAfter) is { } route)
+            return Finish(heuristic with { Reason = new Reason("call", $"{heuristic.Reason.Display} Keeps a {route.Name} route; taken whatever the learned pass ({pass:P0}).") });
         if (pass >= this.weights.LearnedCallPassThreshold)
             return Finish(CallDecision.Decline(heuristic.Accept
                 ? $"Learned: pass ({pass:P0}); the heuristic would {heuristic.Kind} but Phoenix players usually let this go."

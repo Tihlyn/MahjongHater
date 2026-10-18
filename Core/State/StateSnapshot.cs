@@ -56,6 +56,26 @@ public sealed record SeatState(
     // tracker did not see them). Lets "discarded after seat X's riichi" survive calls.
     public IReadOnlyList<int> DiscardOrder { get; init; } = [];
 
+    // Per discard (parallel to Discards; empty when unknown): true when the seat threw the
+    // tile it had just drawn. Live it is the type-8 discard event's [5], verified against
+    // the struct's per-seat flag on 2026-10-18 (docs/EMJ_STRUCT.md).
+    public IReadOnlyList<bool> DiscardTsumogiri { get; init; } = [];
+
+    // Trailing run of tsumogiri discards (a late run is a strong tenpai tell); -1 when the
+    // per-discard flags are not known.
+    public int TsumogiriStreak
+    {
+        get
+        {
+            if (this.DiscardTsumogiri.Count == 0 || this.DiscardTsumogiri.Count != this.Discards.Count)
+                return -1;
+            var run = 0;
+            for (var i = this.DiscardTsumogiri.Count - 1; i >= 0 && this.DiscardTsumogiri[i]; i--)
+                run++;
+            return run;
+        }
+    }
+
     // Simulator/replay observations retain called discards for furiten/history, but
     // do not count their physical copies again in visible-tile availability.
     public IReadOnlyList<int> ClaimedDiscardIndices { get; init; } = [];

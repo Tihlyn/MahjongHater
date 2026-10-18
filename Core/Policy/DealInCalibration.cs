@@ -22,11 +22,14 @@ public sealed record DealInSample(
     int LiveSuji,
     bool DealtIn,
     string Population,
-    string Model = "V2");
+    string Model = "V2",
+    string Read = "",
+    int TsumogiriStreak = -1,
+    string Profile = "");
 
 public static class DealInCalibration
 {
-    public const string CsvHeader = "utc,round,hand,turn,seat,riichi,openMelds,tenpai,tile,class,rank,predicted,liveSuji,dealtIn,population,model";
+    public const string CsvHeader = "utc,round,hand,turn,seat,riichi,openMelds,tenpai,tile,class,rank,predicted,liveSuji,dealtIn,population,model,read,tsumogiriStreak,profile";
 
     public static string ToCsv(DealInSample s) => string.Join(",",
         s.Utc.ToString("O", CultureInfo.InvariantCulture),
@@ -44,7 +47,10 @@ public static class DealInCalibration
         s.LiveSuji.ToString(CultureInfo.InvariantCulture),
         s.DealtIn ? "1" : "0",
         s.Population,
-        s.Model);
+        s.Model,
+        s.Read.Replace(',', ';'),
+        s.TsumogiriStreak.ToString(CultureInfo.InvariantCulture),
+        s.Profile.Replace(',', ';'));
 }
 
 // One row per finished hand for A/B runs (tools/ab_summary.py): how it ended for us and
@@ -180,7 +186,9 @@ public sealed class DealInRecorder
             var estimate = this.model.Explain(discarded, seat.Seat);
             this.rows.Add(new DealInSample(utc, decision.RoundWind.ToString(), decision.HandNumber, decision.Turn,
                 seat.Seat, seat.Riichi, open, tenpai, TileHelpers.Normalize(discarded), estimate.Class, estimate.Rank,
-                estimate.Probability, views[seat.Seat]?.LiveSuji ?? -1, false, this.Population, this.Model));
+                estimate.Probability, views[seat.Seat]?.LiveSuji ?? -1, false, this.Population, this.Model,
+                HandRead.Of(seat, TileDangerModel.SeatWindOf(seat.Seat, decision.DealerSeat), decision.RoundWind).Describe(),
+                seat.TsumogiriStreak, this.model.Profile(seat.Seat)));
         }
     }
 }

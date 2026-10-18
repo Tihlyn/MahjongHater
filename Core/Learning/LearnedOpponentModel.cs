@@ -8,6 +8,7 @@ namespace MahjongHater.Core.Learning;
 // while the learned tenpai head is better calibrated (docs/research/EVALUATION_RUNS.md).
 public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? weights = null, bool useLearnedDanger = true) : IOpponentModel, IPlacementModel
 {
+    private readonly PolicyWeights weights = weights ?? PolicyWeights.Default;
     private readonly OpponentModel fallback = new(weights);
     private readonly TileDangerModel ranks = new(weights: weights);
     private View? view;
@@ -25,7 +26,10 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
         var values = new double[4];
         for (var seat = 1; seat <= 3; seat++)
         {
-            tenpai[seat] = state.Seats[seat].Riichi ? 1 : network.Tenpai(output[network.TenpaiOffset + seat - 1]);
+            tenpai[seat] = state.Seats[seat].Riichi ? 1
+                : TenpaiEstimator.WithRiverTells(network.Tenpai(output[network.TenpaiOffset + seat - 1]), state.Seats[seat], state, this.weights);
+            if (this.weights.DefenseModel == DefenseModel.V3 && !state.Seats[seat].Riichi && OpponentModel.KokushiRead(state.Seats[seat]))
+                tenpai[seat] = Math.Max(tenpai[seat], OpenDangerTable.Default.KokushiReadTenpai(state.Seats[seat].Discards.Count) ?? 0);
             var probability = 0d;
             for (var kind = 0; kind < 34; kind++)
             {
@@ -38,6 +42,8 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
                 values[seat] += danger[seat, kind] * points[seat, kind];
             }
             values[seat] = probability > 0 ? values[seat] / probability : 0;
+            values[seat] = Math.Max(values[seat], ThreatValue.PlacementFloor(state.Seats[seat], state, this.weights))
+                           * ThreatValue.SituationFactor(state.Seats[seat], state, this.weights);
         }
         var primary = Enumerable.Range(1, 3).OrderByDescending(s => tenpai[s] * values[s]).First();
         Volatile.Write(ref this.view, new View(tenpai, danger, points, values, tenpai[primary] * values[primary] > 0 ? primary : -1));
@@ -48,6 +54,9 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
     public double Value(int seat) => Volatile.Read(ref this.view)?.Value[Seat(seat)] ?? this.fallback.Value(seat);
     public int PrimaryThreat() => Volatile.Read(ref this.view)?.Primary ?? this.fallback.PrimaryThreat();
     public int LiveSuji(int seat) => this.fallback.LiveSuji(seat);
+    public string Profile(int seat) => this.fallback.Profile(seat);
+    public bool NoviceLike(int seat) => this.fallback.NoviceLike(seat);
+    public double NoviceProbability(int seat) => this.fallback.NoviceProbability(seat);
     public double[]? Placement(StateSnapshot state, int[] scoreDeltas) =>
         !state.LayoutHealthy || state.Seats.Any(s => !s.DiscardsVerified) ? null : network.Placement(state, scoreDeltas);
     public DangerEstimate Explain(Tile tile, int seat)

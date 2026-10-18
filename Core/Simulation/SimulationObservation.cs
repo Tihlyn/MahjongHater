@@ -38,6 +38,7 @@ public sealed record SimulationObservation(StateSnapshot Snapshot, SimulationRul
             p.Riichi, Array.FindIndex(p.River, d => d.Riichi), p.Score)
         {
             DiscardCount = p.River.Length, DiscardOrder = p.River.Select(d => d.Order).ToArray(),
+            DiscardTsumogiri = p.River.Select(d => d.Tsumogiri).ToArray(),
             ClaimedDiscardIndices = Enumerable.Range(0, p.River.Length).Where(j => p.River[j].Claimed).ToArray(),
         }).ToArray();
         var flags = legal.Aggregate(LegalAction.None, (f, a) => f | Flag(a.Kind));

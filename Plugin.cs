@@ -25,6 +25,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IPluginLog pluginLog;
     private readonly IFramework framework;
     private readonly EmjActuator actuator;
+    private readonly WinOfferJournal winOffers = new();
     private readonly SimulationDatabase? simulationDatabase;
 
     public Plugin(
@@ -50,10 +51,10 @@ public sealed class Plugin : IDalamudPlugin
         this.Reader = new EmjStateReader(gameGui, pluginLog, addonLifecycle, this.Configuration, layout);
         var weights = PolicyWeights.Default with
         {
-            DefenseModel = this.Configuration.DefenseV2 ? DefenseModel.V2 : DefenseModel.Legacy,
+            DefenseModel = !this.Configuration.DefenseV2 ? DefenseModel.Legacy : this.Configuration.DefenseV3 ? DefenseModel.V3 : DefenseModel.V2,
         };
         IPolicy policy = new DecisionPolicy(weights: weights);
-        this.Reader.PolicyTag = this.Configuration.DefenseV2 ? "V2" : "Legacy";
+        this.Reader.PolicyTag = weights.DefenseModel.ToString();
         if (this.Configuration.LearnedPolicyEnabled)
         {
             try
@@ -73,7 +74,7 @@ public sealed class Plugin : IDalamudPlugin
                 var opponents = new MahjongHater.Core.Learning.LearnedOpponentModel(model, weights, useLearnedDanger: false);
                 policy = new DecisionPolicy(opponents: opponents, discards: new MahjongHater.Core.Learning.LearnedDiscardPolicy(model, weights),
                     calls: new MahjongHater.Core.Learning.LearnedCallPolicy(model, weights), weights: weights);
-                this.Reader.PolicyTag = "learned-guarded";
+                this.Reader.PolicyTag = weights.DefenseModel == DefenseModel.V3 ? "learned-guarded-v3" : "learned-guarded";
                 this.LearnedPolicy = new LearnedPolicyState(true,
                     $"{Path.GetFileName(path)} ({model.Rules.HandsInMatch}-hand, {model.Schema switch { 1 => "schema 1", _ => "schema 2" }}, {model.Status})",
                     Path.GetDirectoryName(path) ?? string.Empty);
@@ -140,6 +141,7 @@ public sealed class Plugin : IDalamudPlugin
         this.Reader.CalibrationSink = this.AppendCalibration;
         this.Reader.DealInSink = this.AppendDealIns;
         this.Reader.HandResultSink = this.AppendHandResult;
+        this.Reader.RiverSink = this.AppendRivers;
 
         this.actuator = new EmjActuator(gameGui, this.Reader);
         this.AutoPlayer = new AutoPlayer(this.Reader, this.AnalysisService, this.actuator,
@@ -398,8 +400,38 @@ public sealed class Plugin : IDalamudPlugin
             this.Queuer.Tick(this.AutoPlayer.InMatch);
         }
 
+        this.JournalWinOffers(this.Reader.Current);
         this.IdleGuard.Tick(this.AutoPlayer.Enabled, this.actuator.IsAddonOpen, DateTime.UtcNow);
     }
+
+    // Every offered win, the decision and what auto play did about it (win_offers.jsonl).
+    private void JournalWinOffers(StateSnapshot? state)
+    {
+        if (state is null || state.Phase == GamePhase.NotInGame)
+            return;
+        var publication = this.AnalysisService.Latest;
+        var fresh = publication is { Status: AnalysisStatus.Ready } && publication.Fingerprint == AnalysisService.ComputeFingerprint(state);
+        this.AppendWinOffers(this.winOffers.Observe(state, this.Reader.Tracker.CallWindowGeneration, publication?.Choice, fresh,
+            this.AutoPlayer.Enabled, this.AutoPlayer.Status, this.AutoPlayer.LastDispatchStatus, DateTime.UtcNow));
+    }
+
+    private void AppendWinOffers(IReadOnlyList<string> lines)
+    {
+        if (lines.Count == 0)
+            return;
+        try
+        {
+            var path = this.WinOfferPath;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.AppendAllLines(path, lines);
+        }
+        catch (Exception ex)
+        {
+            this.pluginLog.Warning(ex, "[WinOffers] Failed to append the win-offer journal.");
+        }
+    }
+
+    private string WinOfferPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "win_offers.jsonl");
 
     private string CalibrationPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "tenpai_calibration.csv");
 
@@ -410,6 +442,7 @@ public sealed class Plugin : IDalamudPlugin
     // One CSV row per finished hand (tools/ab_summary.py compares defense models).
     private void AppendHandResult(HandResult result)
     {
+        this.AppendWinOffers(this.winOffers.HandEnded(result, DateTime.UtcNow));
         try
         {
             var path = this.HandResultPath;
@@ -426,6 +459,22 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    private void AppendRivers(string line)
+    {
+        try
+        {
+            var path = this.RiverPath;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.AppendAllLines(path, [line]);
+        }
+        catch (Exception ex)
+        {
+            this.pluginLog.Warning(ex, "[Calibration] Failed to append the hand rivers.");
+        }
+    }
+
+    private string RiverPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "hand_rivers.jsonl");
+
     // One CSV row per (own discard, threatening seat); the file grows across sessions.
     private void AppendDealIns(IReadOnlyList<DealInSample> samples)
     {
@@ -433,6 +482,10 @@ public sealed class Plugin : IDalamudPlugin
         {
             var path = this.DealInPath;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            // The columns grew (v3: read, tsumogiri streak, profile): keep the old rows apart
+            // instead of mixing two layouts under one header.
+            if (File.Exists(path) && File.ReadLines(path).FirstOrDefault() is { } header && header != DealInCalibration.CsvHeader)
+                File.Move(path, Path.Combine(Path.GetDirectoryName(path)!, $"dealin_calibration.{DateTime.UtcNow:yyyyMMddHHmmss}.csv"));
             var lines = new List<string>(samples.Count + 1);
             if (!File.Exists(path))
                 lines.Add(DealInCalibration.CsvHeader);

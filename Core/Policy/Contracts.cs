@@ -55,9 +55,16 @@ public sealed record DiscardCandidate(
 
     public int MinPoints { get; init; }
 
+    // V3, tenpai with riichi legal: the lowest ron value over the waits without declaring
+    // (0 = no yaku dama); -1 when not computed.
+    public int DamaMinPoints { get; init; } = -1;
+
     public double WinProbability { get; init; }
 
     public double ExpectedValue { get; init; }
+
+    // V3: a yakuman the kept tiles are shaped for (valued in ValuePoints when not tenpai).
+    public YakumanRoute? Yakuman { get; init; }
 }
 
 // What the hand looks like right now, independent of the action: shown between turns
@@ -122,6 +129,16 @@ public interface IOpponentModel
 
     // Suji lines still live against the seat (18 at the start), -1 when unknown.
     int LiveSuji(int seat) => -1;
+
+    // V3: one line on how the seat has played this match ("novice-like (55 % early middles)").
+    string Profile(int seat) => string.Empty;
+
+    // V3: the seat plays like the Novice queue (OpponentProfiles).
+    bool NoviceLike(int seat) => false;
+
+    // V3: posterior that the seat is a novice-like player (OpponentProfiles); the prior when
+    // nothing is known.
+    double NoviceProbability(int seat) => OpponentProfiles.Prior;
 }
 
 // Final-placement distribution for us (1st..4th) if every relative seat's score moved by
@@ -133,10 +150,13 @@ public interface IPlacementModel
 }
 
 // Which danger/push-fold implementation runs; Legacy is the v1.3 behaviour for A/B runs.
+// V3 is V2 plus hand reads against open/dama seats, the tsumogiri tenpai tell and the
+// value-aware push cap (docs/research/DEFENSE_V3_2026_10_18.md).
 public enum DefenseModel
 {
     Legacy,
     V2,
+    V3,
 }
 
 public interface IDiscardPolicy
@@ -291,6 +311,80 @@ public sealed record PolicyWeights
     public double PlacementStakesWeight { get; init; } = 1;
     public double PlacementStakesMin { get; init; } = 0.33;
     public double PlacementStakesMax { get; init; } = 3;
+
+    // --- Yakuman handling (with Defense v2 or v3; Legacy keeps v1.3) ---
+    // Value yakuman routes before tenpai and keep them (discards, learned discards and calls),
+    // stay dama when every wait is a yakuman, push any tile with tenpai worth PushAnyTenpaiPoints,
+    // and price the tile that completes an opponent's visible daisangen/four winds as a yakuman.
+    // An attacking fix, so it does not wait on the Defense v3 setting.
+    public bool YakumanHandling { get; init; } = true;
+
+    // --- Defense v3 ---
+    // A non-tenpai push may not risk more than it can win: the unconditional budget is capped
+    // at P(win) × our value / (threat value × PushExposureTurns). 0 turns the cap off.
+    public double PushEvCapWeight { get; init; } = 1;
+    // V3: a tile's danger is summed over every threat, weighted by tenpai × value against the
+    // primary's (PushFoldDecision.Allows), instead of each threat being held to the primary's
+    // line on its own and a flat ×TwoRiichiFactor for two riichi.
+    public bool SeatBudget { get; init; } = true;
+    // V3: stay dama on a good wait already worth this much by ron without riichi (×1.5 as
+    // dealer) when no opponent reads novice-like: steady players fold to a riichi, so the
+    // declaration mostly costs rons; novice-like ones keep pushing, so it costs nothing.
+    // 0 turns it off.
+    public int DamaVsFoldersPoints { get; init; } = 8000;
+    // The same cap when the primary threat is novice-like. Their calls and riichi are cheap and
+    // often noten, so the read value overstates what a push risks: the arena (2026-10-18, 800
+    // duplicate matches) placed 0.06 better without the cap against novices and 0.05 worse
+    // without it against Phoenix-trained players. 0 turns it off.
+    public double PushEvCapNoviceWeight { get; init; } = 0;
+    // Ceiling for a non-riichi tenpai estimate after the tsumogiri adjustment.
+    public double TenpaiMaxWithTsumogiri { get; init; } = 0.95;
+    // Tenpai worth this much pushes any tile; haneman-class tenpai may cut up to the budget below;
+    // a slow expensive hand can be lifted by its EV to at most MaxRaisedBudget.
+    public double PushAnyTenpaiPoints { get; init; } = 24000;
+    public double HanemanTenpaiPoints { get; init; } = 12000;
+    public double HanemanTenpaiBudget { get; init; } = 0.2;
+    public double MaxRaisedBudget { get; init; } = 0.25;
+    // Fallback when open_danger.json has no two-dragon-melds/dragon cell: P(hit | tenpai) of
+    // the tile that finishes a visible yakuman.
+    public double YakumanTileRate { get; init; } = 0.0274;
+    // Opponent profiling (OpponentProfiles): P(novice) at which a seat reads as novice-like,
+    // and the provisional danger factor on its suji/honor tiles (more non-ryanmen waits) until
+    // dealin_calibration.csv can fit it.
+    public double NoviceProbabilityThreshold { get; init; } = 0.5;
+    public double NoviceBadWaitFactor { get; init; } = 1.3;
+    // Profile blend (V3): use P(novice) continuously instead of the NoviceProbabilityThreshold
+    // switch — danger mixes the steady and novice-like estimates, the push cap and dama rule
+    // follow the probability. ProfileCaution leans undecided seats (q near 50 %) toward the
+    // more dangerous estimate and away from novice-only allowances (0 = plain mixture).
+    public bool ProfileBlend { get; init; } = true;
+    public double ProfileCaution { get; init; } = 0.5;
+    // Per-hand fade of a seat's banked profile evidence (1 = never forget).
+    public double ProfileDecay { get; init; } = 0.9;
+    // Dama vs folders with the blend: stay dama only while P(every opponent folds) — the
+    // product of 1 - P(novice) — reaches this.
+    public double DamaFoldProbability { get; init; } = 0.5;
+    // Open-hand danger from several reads at once (HandRead.Alternatives) instead of one.
+    public bool ReadMixture { get; init; } = true;
+    // Seat budget over every opponent, not only those past ThreatTenpaiFloor: a 15 % tenpai
+    // seat adds 15 % of its value-weighted danger. The floor still decides when defense starts.
+    // Off: in the 3.4 live arena it cost 0.05 placement (it folds to seats that are rarely tenpai).
+    public bool ContinuousThreats { get; init; }
+    // With no safe tile to fold with, compare the least costly retreat against the attack
+    // instead of pushing every tile: a tile may cost what the retreat costs plus the extra win
+    // value it buys (per PushExposureTurns).
+    public bool RetreatEv { get; init; } = true;
+    // Cap on the all-last "a trailing riichi is worth what it needs" floor (baiman).
+    public double PlacementFloorMax { get; init; } = 16000;
+    // One more han on a deal-in: a riichi's ippatsu turn and the hand's last discard (houtei).
+    // About ×1.35 at the 2-4 han a riichi usually carries (mangan caps the rest).
+    public double IppatsuValueFactor { get; init; } = 1.35;
+    public double HouteiValueFactor { get; init; } = 1.3;
+    // Keeping the last safe tile before any riichi: from this turn, worth this many accepting
+    // tiles at 1-shanten / at 2-shanten or worse (HeuristicDiscardPolicy.KeepLastSafeTile).
+    public int SafeTileKeepFromTurn { get; init; } = 6;
+    public double SafeTileKeepUkeire { get; init; } = 1.5;
+    public double SafeTileKeepUkeireFar { get; init; } = 3;
 
     public static PolicyWeights Default { get; } = new();
 }

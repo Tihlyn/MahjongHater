@@ -77,6 +77,16 @@ public sealed class ConfigWindow : Window
             }
 
             Tooltip("Measured deal-in rates by tile class and live suji plus a push/fold budget (docs/DEFENSE_PLAN.md). Off = the v1.3 heuristics for A/B runs. Takes effect after a reload.");
+            if (Widgets.ToggleRow("Defense model v3", "##defensev3", this.configuration.DefenseV3))
+            {
+                this.configuration.DefenseV3 = !this.configuration.DefenseV3;
+                this.saved = false;
+            }
+
+            Tooltip("On top of v2: reads open and dama hands (flush, toitoi, yakuhai, tanyao) from Phoenix replay statistics, "
+                    + "reads tenpai tells in each river, tells novice-like players from steady ones seat by seat, and shares the push budget "
+                    + "across every threat by its value. Experimental: it deals in less than v2 but places worse in arena tests, "
+                    + "most of all against novices. Needs v2. Takes effect after a reload.");
             if (Widgets.ToggleRow("Experimental learned policy", "##learned", this.configuration.LearnedPolicyEnabled))
             {
                 this.configuration.LearnedPolicyEnabled = !this.configuration.LearnedPolicyEnabled;

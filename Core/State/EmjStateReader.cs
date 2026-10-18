@@ -75,6 +75,9 @@ public sealed unsafe class EmjStateReader : IDisposable
     // Receives one result row per finished hand (plugin appends it to CSV).
     public Action<Policy.HandResult>? HandResultSink { get; set; }
 
+    // Receives one hand_rivers.jsonl line per finished hand (Policy.HandRivers).
+    public Action<string>? RiverSink { get; set; }
+
     public void Dispose()
     {
         this.addonLifecycle.UnregisterListener(this.onRefresh);
@@ -423,11 +426,13 @@ public sealed unsafe class EmjStateReader : IDisposable
             && (!settlement.WinByRon || this.tracker.RonTile != null))
             this.DealInSink?.Invoke(dealIns);
 
-        this.HandResultSink?.Invoke(Policy.HandResult.FromRoundEnd(last, winner, this.tracker.LastWinByRon,
+        var result = Policy.HandResult.FromRoundEnd(last, winner, this.tracker.LastWinByRon,
             this.tracker.RonVictimSeat, drawBannersReady ? Policy.TenpaiCalibration.BannerMeansTenpai(banners[0]) : null,
             this.tracker.LastScoreDelta, this.configuration.CalibrationPopulation,
             this.PolicyTag ?? (this.configuration.DefenseV2 ? "V2" : "Legacy"), DateTime.UtcNow,
-            outcomeKnown: settlement.OutcomeKnown));
+            outcomeKnown: settlement.OutcomeKnown);
+        this.HandResultSink?.Invoke(result);
+        this.RiverSink?.Invoke(Policy.HandRivers.Line(last, result, winner));
     }
 
     // Visible texts of the call panel (Pon/Chi/Pass, Riichi/Tsumo/…). They persist after a

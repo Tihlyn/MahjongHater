@@ -25,6 +25,11 @@ public sealed class Configuration : IPluginConfiguration
     // v1.3 heuristics, kept for A/B auto-play runs.
     public bool DefenseV2 { get; set; } = true;
 
+    // Defense v3 on top of v2: hand reads vs open/dama seats, river tells, per-player profiles
+    // and a value-aware, per-seat push budget (docs/research/DEFENSE_V3_2026_10_18.md). Needs
+    // DefenseV2. Opt-in: in the 3.4 arena it dealt in less but placed worse than v2.
+    public bool DefenseV3 { get; set; }
+
     // Experimental offline discard lookup and optional public-state corpus capture.
     // Both take effect after a plugin reload.
     public bool PrecomputedPolicyEnabled { get; set; }

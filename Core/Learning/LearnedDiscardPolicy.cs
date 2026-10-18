@@ -38,9 +38,15 @@ public sealed class LearnedDiscardPolicy(LearnedModel network, PolicyWeights? we
 
         var denominator = candidates.Sum(Weight);
         if (denominator <= 0) return candidates;
+        // V3: Phoenix imitation rarely keeps a yakuman shape it cannot see the value of; the
+        // network still picks the tile, but only among those that keep the route at the
+        // fastest shanten (HeuristicDiscardPolicy marks them).
+        var fastest = candidates.Min(c => c.ShantenAfter);
+        var keepRoute = candidates.Any(c => c.Yakuman is not null && c.ShantenAfter == fastest);
         return candidates
             .Select(c => c with { Score = Weight(c) / denominator, Note = $"{c.Note}; imitation {Weight(c) / denominator:P0}" })
-            .OrderByDescending(c => c.Score).ThenBy(c => c.ShantenAfter).ThenBy(c => c.Tile)
+            .OrderByDescending(c => keepRoute && c.Yakuman is not null && c.ShantenAfter == fastest)
+            .ThenByDescending(c => c.Score).ThenBy(c => c.ShantenAfter).ThenBy(c => c.Tile)
             .ToArray();
     }
 }

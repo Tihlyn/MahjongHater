@@ -217,6 +217,7 @@ public sealed class SnapshotBuilder
         var riichi = panel.RiichiDiscardIndex is not null || (seat == 0 && t.RiichiDeclared);
         var riichiIndex = panel.RiichiDiscardIndex ?? (riichi ? Math.Max(0, discards.Count - 1) : -1);
         var order = t.SeatDiscardOrderOf(seat);
+        var tsumogiri = t.SeatDiscardTsumogiriOf(seat);
         return new SeatState(seat, discards, melds, riichi, riichiIndex, panel.Score ?? 0)
         {
             MeldCount = panel.MeldCount ?? -1,
@@ -224,6 +225,7 @@ public sealed class SnapshotBuilder
             DiscardsVerified = verified,
             DiscardCount = panel.DiscardCount ?? -1,
             DiscardOrder = order.Count == discards.Count ? order.ToList() : [],
+            DiscardTsumogiri = tsumogiri.Count == discards.Count ? tsumogiri.ToList() : [],
         };
     }
 
