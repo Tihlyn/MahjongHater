@@ -90,7 +90,7 @@ public sealed class SimulationPolicy
         return discards.First(a => a.Tile == best.Tile.ToString());
     }
 
-    private static SimAction? Match(ActionChoice choice, IReadOnlyList<SimAction> legal)
+    internal static SimAction? Match(ActionChoice choice, IReadOnlyList<SimAction> legal)
     {
         var kind = choice.Kind switch
         {

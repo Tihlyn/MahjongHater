@@ -15,5 +15,6 @@
     <Compile Include="../../Core/Learning/*.cs" LinkBase="Core/Learning" />
     <Compile Include="../../Core/State/StateSnapshot.cs" Link="Core/State/StateSnapshot.cs" />
     <EmbeddedResource Include="../../resources/policy/deal_in_rates.json" LogicalName="MahjongHater.resources.policy.deal_in_rates.json" />
+    <EmbeddedResource Include="../../resources/policy/open_danger.json" LogicalName="MahjongHater.resources.policy.open_danger.json" />
   </ItemGroup>
 </Project>

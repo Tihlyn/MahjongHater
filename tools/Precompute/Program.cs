@@ -4,11 +4,12 @@ using MahjongHater.Core.Precomputed;
 using MahjongHater.Core.State;
 
 // No game process, network or GPU needed. Corpus files contain public snapshots only.
-if (args.Length < 2 || !SimulationCommands.Handles(args[0]) && !LearningCommands.Handles(args[0]) && args[0] is not ("example" or "train" or "probe"))
+if (args.Length < 2 || !SimulationCommands.Handles(args[0]) && !LearningCommands.Handles(args[0]) && !ArenaCommands.Handles(args[0]) && args[0] is not ("example" or "train" or "probe"))
 {
     Console.Error.WriteLine("example <snapshots.jsonl> | train <snapshots.jsonl> <policy.json> [iterations=2048] [horizon=3] [seed=1] | probe <snapshots.jsonl> <policy.json>");
     Console.Error.WriteLine(SimulationCommands.Usage);
     Console.Error.WriteLine(LearningCommands.Usage);
+    Console.Error.WriteLine(ArenaCommands.Usage);
     return 2;
 }
 
@@ -17,6 +18,7 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
 try
 {
     if (LearningCommands.Handles(args[0])) return LearningCommands.Run(args, cancellation.Token);
+    if (ArenaCommands.Handles(args[0])) return ArenaCommands.Run(args, cancellation.Token);
     if (SimulationCommands.Handles(args[0]))
         return await SimulationCommands.Run(args, cancellation.Token);
     if (args[0] == "example")
