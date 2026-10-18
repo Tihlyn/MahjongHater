@@ -26,9 +26,12 @@
     "AcceptsFeedback": true,
     "DownloadLinkInstall": "https://github.com/Tihlyn/MahjongHater/releases/download/v3.2.0/latest.zip",
     "DownloadLinkUpdate": "https://github.com/Tihlyn/MahjongHater/releases/download/v3.2.0/latest.zip",
-    "DownloadLinkTesting": "https://github.com/Tihlyn/MahjongHater/releases/download/v3.2.0/latest.zip",
+    "DownloadLinkTesting": "https://github.com/Tihlyn/MahjongHater/releases/download/testing-3.4.0.0/latest.zip",
     "IsHide": false,
     "IsTestingExclusive": false,
-    "LastUpdate": 1790503444
+    "LastUpdate": 1792345659,
+    "TestingAssemblyVersion": "3.4.0.0",
+    "TestingDalamudApiLevel": 15,
+    "TestingChangelog": "- chore(release): update repository for v3.2.0 [skip ci] (92fce90)\n- feat(defense): track tsumogiri, journal win offers, vendor open-hand tables (d496f80)\n- feat(defense): v3 hand reads, yakuman handling and opponent profiles (6ab71c4)\n- feat(simulation): duplicate-format arena for policy A/B (97f9cd6)\n- feat(defense): river tells, riichi-tile and kokushi reads, last safe tile (9431a2d)\n- feat(defense): per-seat play - novice classifier, summed seat budget, dama vs folders, river journal (54a4356)\n- feat(defense): blended profiles and reads, retreat EV, yakuman handling for v2 (d409bfd)\n- feat(defense): 3.4 ships with Defense v2 default, v3 opt-in; yakuman fixes for v2 (fd5003c)\n- Merge branch 'defense-v3': Defense v3 (opt-in) and yakuman fixes for 3.4.0.0 (3a81e29)"
   }
 ]
