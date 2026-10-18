@@ -25,6 +25,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IPluginLog pluginLog;
     private readonly IFramework framework;
     private readonly EmjActuator actuator;
+    private readonly WinOfferJournal winOffers = new();
     private readonly SimulationDatabase? simulationDatabase;
 
     public Plugin(
@@ -398,8 +399,38 @@ public sealed class Plugin : IDalamudPlugin
             this.Queuer.Tick(this.AutoPlayer.InMatch);
         }
 
+        this.JournalWinOffers(this.Reader.Current);
         this.IdleGuard.Tick(this.AutoPlayer.Enabled, this.actuator.IsAddonOpen, DateTime.UtcNow);
     }
+
+    // Every offered win, the decision and what auto play did about it (win_offers.jsonl).
+    private void JournalWinOffers(StateSnapshot? state)
+    {
+        if (state is null || state.Phase == GamePhase.NotInGame)
+            return;
+        var publication = this.AnalysisService.Latest;
+        var fresh = publication is { Status: AnalysisStatus.Ready } && publication.Fingerprint == AnalysisService.ComputeFingerprint(state);
+        this.AppendWinOffers(this.winOffers.Observe(state, this.Reader.Tracker.CallWindowGeneration, publication?.Choice, fresh,
+            this.AutoPlayer.Enabled, this.AutoPlayer.Status, this.AutoPlayer.LastDispatchStatus, DateTime.UtcNow));
+    }
+
+    private void AppendWinOffers(IReadOnlyList<string> lines)
+    {
+        if (lines.Count == 0)
+            return;
+        try
+        {
+            var path = this.WinOfferPath;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.AppendAllLines(path, lines);
+        }
+        catch (Exception ex)
+        {
+            this.pluginLog.Warning(ex, "[WinOffers] Failed to append the win-offer journal.");
+        }
+    }
+
+    private string WinOfferPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "win_offers.jsonl");
 
     private string CalibrationPath => Path.Combine(this.pluginInterface.GetPluginConfigDirectory(), "tenpai_calibration.csv");
 
@@ -410,6 +441,7 @@ public sealed class Plugin : IDalamudPlugin
     // One CSV row per finished hand (tools/ab_summary.py compares defense models).
     private void AppendHandResult(HandResult result)
     {
+        this.AppendWinOffers(this.winOffers.HandEnded(result, DateTime.UtcNow));
         try
         {
             var path = this.HandResultPath;

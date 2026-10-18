@@ -409,6 +409,6 @@ kept only so old logs, captures and ideas can be understood. Code: `GameStateRea
 - **Akadora inside melds** are not representable in the struct meld record (type-13 icons carry
   them; the hand-delta fallback loses them).
 - Bottom-right buttons `6`–`11` unmapped; seat-panel node pointer roles (`+0x050..`, `+0x258..`)
-  unresolved; `+0x2D8` "tsumogiri" flag, `0x0FF8`, `0x12BC/0x12C0` unknown.
+  unresolved; `0x0FF8`, `0x12BC/0x12C0` unknown.
 - Settings **game length, double-wind pair fu, dora display** are stored but not consumed by the
   analysis; `ScoringEngine`/`FuCalculator` are not on the live path (value = yaku han + dora).

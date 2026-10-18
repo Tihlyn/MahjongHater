@@ -64,6 +64,8 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <EmbeddedResource Include="resources/policy/deal_in_rates.json" LogicalName="MahjongHater.resources.policy.deal_in_rates.json" />
+    <!-- Open-hand / dama / tsumogiri tables from Phoenix replays (tools/open_hand_danger.py → tools/make_open_danger.py). -->
+    <EmbeddedResource Include="resources/policy/open_danger.json" LogicalName="MahjongHater.resources.policy.open_danger.json" />
     <!-- An offline lookup table ships the same way once tools/Precompute has produced one:
          resources/policy/precomputed_policy.json[.gz] is already covered by the glob above,
          and a packed simulation database goes in resources/policy/simulation_policy. -->

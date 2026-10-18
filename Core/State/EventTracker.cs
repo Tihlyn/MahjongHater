@@ -31,6 +31,8 @@ public sealed class EventTracker
     // Global discard order this round (0-based, every seat), parallel to seatDiscards, so
     // "discarded after seat X's riichi" survives calls that skip turns.
     private readonly List<int>[] seatDiscardOrder = [[], [], [], []];
+    // Type-8 [5]: the discard was the tile just drawn (parallel to seatDiscards).
+    private readonly List<bool>[] seatDiscardTsumogiri = [[], [], [], []];
     private int discardCounter;
     // Set by a discard, cleared by the next turn advance: a type-32 win that arrives while
     // it is set was a ron on that discard (a tsumo needs a draw, i.e. a type-5, first).
@@ -102,6 +104,9 @@ public sealed class EventTracker
 
     // Global order index of each discard in SeatDiscardsOf(seat), same length.
     public IReadOnlyList<int> SeatDiscardOrderOf(int seat) => this.seatDiscardOrder[seat];
+
+    // Tsumogiri flag of each discard in SeatDiscardsOf(seat), same length.
+    public IReadOnlyList<bool> SeatDiscardTsumogiriOf(int seat) => this.seatDiscardTsumogiri[seat];
 
     // Hand number inside the round (East 1 → 1), 0 when no text has said yet.
     public int HandNumber { get; private set; }
@@ -329,6 +334,9 @@ public sealed class EventTracker
                     break;
                 this.seatDiscards[seat].Add(tile);
                 this.seatDiscardOrder[seat].Add(this.discardCounter++);
+                // [5] = 1 when the discard was the drawn tile: matched the struct's per-seat
+                // flag on 331/331 discards, and every post-riichi discard (2026-10-18).
+                this.seatDiscardTsumogiri[seat].Add(f.IsInt(5) && f.Int(5) == 1);
                 this.discardSinceTurnAdvance = true;
                 this.lastDiscardSeat = seat;
                 this.lastDiscardTile = tile;
@@ -859,6 +867,8 @@ public sealed class EventTracker
         foreach (var list in this.seatDiscards)
             list.Clear();
         foreach (var list in this.seatDiscardOrder)
+            list.Clear();
+        foreach (var list in this.seatDiscardTsumogiri)
             list.Clear();
         foreach (var list in this.seatMelds)
             list.Clear();

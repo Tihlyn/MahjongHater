@@ -34,6 +34,30 @@ public class DefenseTrackingTests
         Assert.Empty(t.SeatDiscardOrderOf(2));
     }
 
+    // 2026-10-18 08:14:48 / 08:14:38: tsumogiri 5z from the draw slot carried [5]=1, a tedashi
+    // 2z from slot 12 carried [5]=0 (n=6 [1]=seat [2]=icon [3]=0 [4]=? [5]=tsumogiri).
+    [Fact]
+    public void Discard_event_field_5_is_tracked_as_tsumogiri()
+    {
+        var t = new EventTracker();
+        t.OnRefresh(AtkFrame.OfInts(8, 2, StructFixture.IconOf(Tile.Parse("2s"), 76041), 0, 1, 0), T0);
+        t.OnRefresh(AtkFrame.OfInts(8, 2, StructFixture.IconOf(Tile.Parse("7s"), 76041), 0, 0, 1), T0);
+        t.OnRefresh(AtkFrame.OfInts(8, 2, StructFixture.IconOf(Tile.Parse("1z"), 76041), 0, 0, 1), T0);
+        t.OnRefresh(Discard(1, "3m"), T0);   // payload without [5]: counted as tedashi
+        Assert.Equal([false, true, true], t.SeatDiscardTsumogiriOf(2));
+        Assert.Equal([false], t.SeatDiscardTsumogiriOf(1));
+    }
+
+    [Fact]
+    public void Tsumogiri_streak_counts_the_trailing_run_and_needs_aligned_flags()
+    {
+        var seat = SeatState.Empty(1) with { Discards = TestTiles.Parse("1m2m3m4m"), DiscardTsumogiri = [true, false, true, true] };
+        Assert.Equal(2, seat.TsumogiriStreak);
+        Assert.Equal(0, (seat with { DiscardTsumogiri = [true, true, true, false] }).TsumogiriStreak);
+        Assert.Equal(-1, (seat with { DiscardTsumogiri = [true] }).TsumogiriStreak);
+        Assert.Equal(-1, SeatState.Empty(1).TsumogiriStreak);
+    }
+
     [Fact]
     public void Win_right_after_a_discard_is_a_ron_on_it()
     {

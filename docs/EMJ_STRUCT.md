@@ -67,7 +67,7 @@ node/tween data that churns every frame (ignore).
 | `+0x2CC` | `int32` | Point difference shown in "Ctrl: Show Point Difference" mode: `ourScore − seatScore` (for seat 0 it holds the raw score) | **verified** | `-1100`, `-26500`, `-4400` against 17000/18100/43500/21400. |
 | `+0x2D0` | `int32` | 0 | unknown | |
 | `+0x2D7` | `byte` | `0xFF` | unknown | Never changed. |
-| `+0x2D8` | `byte` | Toggles 0/1 on that seat's discards; stays 1 for us while we tsumogiri | *plausible: last discard was tsumogiri* | `0x7F0 0→1→0→1`, `0xAD0`, `0xDB0` flip on opponent discards only. |
+| `+0x2D8` | `byte` | **Last discard was tsumogiri** (the tile just drawn) | **verified** | 2026-10-18, NPC quick match watched with Cartographer: our tsumogiri 51/51 → 1, our tedashi 45/45 → 0, an opponent's discard right after its pon/chi 8/8 → 0. The same bit rides on the type-8 discard event `[5]` (331/331 equal), which is what the plugin reads. |
 
 Absolute offsets for the four seats (seat 0..3):
 
@@ -87,7 +87,7 @@ Absolute offsets for the four seats (seat 0..3):
 
 | Datum | Source | Notes |
 |---|---|---|
-| Opponent discard tiles | `AtkValues` refresh type **8**: `[1]` = seat, `[2]` = tile icon (`EventTracker`) | Fires once per discard for every seat incl. us. Opponent type-5/20 `[3]` is the 76041 placeholder. The struct only counts them (`+0x2C6`). |
+| Opponent discard tiles | `AtkValues` refresh type **8**: `[1]` = seat, `[2]` = tile icon, `[5]` = tsumogiri (1 = the drawn tile; verified, every post-riichi discard reads 1), `[4]` unknown (`EventTracker`) | Fires once per discard for every seat incl. us. Opponent type-5/20 `[3]` is the 76041 placeholder. The struct only counts them (`+0x2C6`). |
 | Own discard | type 8 with `[1]=0`, or the ButtonClick callback `[15, icon]` | |
 | Draw / wall | type **5**: `[1]` = live wall remaining (70 → 0), `[2]` = seat that drew, `[3]` = drawn icon for us (placeholder for others) | `SnapshotBuilder` uses the type-5 wall, else `70 − Σ discard counts`. The centre counter node `1/46/105/{2,3}/2` (two `Counter` digits) shows the same number. |
 | Meld composition | type **13**: `[1]` caller, `[3]` 4=pon / 5=chi / 6=kan, `[4]` display selector (not a meld ordinal), `[5]` from-direction (0 for concealed kan), `[6]` tile index or ambiguous 255, `[7]` tile count, `[8..11]` tile icons (chi: claimed tile first) | Only source for chi tiles and for red fives inside melds; a missed one is inferred from our closed-hand delta (`MeldInference`). |
@@ -128,7 +128,7 @@ public unsafe struct EmjSeatPanel {
     [FieldOffset(0x2C7)] public byte RiichiDiscardIndex;       // 0xFF none
     [FieldOffset(0x2C8)] public int Score;
     [FieldOffset(0x2CC)] public int PointDifference;
-    [FieldOffset(0x2D8)] public byte LastDiscardWasTsumogiri;   // plausible
+    [FieldOffset(0x2D8)] public byte LastDiscardWasTsumogiri;   // verified 2026-10-18
 }
 
 [StructLayout(LayoutKind.Explicit, Size = 0x1100)]                // real allocation is larger
@@ -155,7 +155,7 @@ sequences where they could be reconstructed from type-8 events.
 
 - Grouping of the 62 + 13 node pointers per seat (which are pile slots vs meld slots) — resolve by
   reading `NodeId` through each pointer.
-- `+0x2D8` "tsumogiri" reading, `0x0FDC` behaviour after a kan, `0x0FF8`, `0x12BC/0x12C0`.
+- `0x0FDC` behaviour after a kan, `0x0FF8`, `0x12BC/0x12C0`.
 - Concealed and added kans were captured on 2026-09-23 (see
   `research/CLOSED_KAN_2026_09_23.md`). The former shares marker 255 with chi; the latter
   upgrades a pon through refresh 14. Further client versions still need layout validation.
