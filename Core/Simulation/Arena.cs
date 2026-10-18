@@ -30,7 +30,8 @@ public sealed class PolicySeat(string name, IPolicy policy) : IArenaSeat
     }
 }
 
-// The FF14 Novice-queue opponent as seen on 2026-10-18 (early middles 50-83 %): plays for
+// A worst-case Novice-queue opponent (the most novice-like live player on 2026-10-18 threw 36 %
+// early middles; this seat throws more): plays for
 // tile efficiency only, never folds, takes any call that keeps a yaku, declares riichi on any
 // wait, and throws a random tile part of the time.
 public sealed class NoviceSeat(int seed, double randomDiscard = 0.35, double callRate = 0.75) : IArenaSeat

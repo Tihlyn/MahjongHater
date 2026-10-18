@@ -41,8 +41,10 @@ internal static class ArenaCommands
         IReadOnlyList<ArenaSeatResult>? baseline = null;
         foreach (var arm in arms)
         {
-            var (kind, version) = arm.Split('-') is [var k, var v] ? (k, v) : throw new ArgumentException($"arm '{arm}' must look like heuristic-V3 or guarded-V2");
-            var w = PolicyWeights.Default with { DefenseModel = Enum.Parse<DefenseModel>(version) };
+            // "guarded-V3" or "guarded-V3:NoviceBadWaitFactor=1;PushEvCapWeight=0" (PolicyWeights overrides).
+            var head = arm.Split(':', 2);
+            var (kind, version) = head[0].Split('-') is [var k, var v] ? (k, v) : throw new ArgumentException($"arm '{arm}' must look like heuristic-V3 or guarded-V2");
+            var w = WithOverrides(PolicyWeights.Default with { DefenseModel = Enum.Parse<DefenseModel>(version) }, head.Length > 1 ? head[1] : "");
             IArenaSeat Candidate() => kind switch
             {
                 "heuristic" => new PolicySeat(arm, new DecisionPolicy(weights: w)),
@@ -62,6 +64,21 @@ internal static class ArenaCommands
         }
 
         return 0;
+    }
+
+    private static PolicyWeights WithOverrides(PolicyWeights w, string overrides)
+    {
+        foreach (var pair in overrides.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var (name, value) = pair.Split('=') is [var n, var v] ? (n, v) : throw new ArgumentException($"override '{pair}' must be Name=value");
+            var property = typeof(PolicyWeights).GetProperty(name) ?? throw new ArgumentException($"PolicyWeights has no '{name}'");
+            var parsed = property.PropertyType.IsEnum ? Enum.Parse(property.PropertyType, value)
+                : Convert.ChangeType(value, property.PropertyType, System.Globalization.CultureInfo.InvariantCulture);
+            w = w with { };
+            property.SetValue(w, parsed);   // init-only setters are still settable by reflection on a fresh copy
+        }
+
+        return w;
     }
 
     // Same seeds and seats in the same order for every arm: the difference per match removes

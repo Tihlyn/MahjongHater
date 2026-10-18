@@ -186,6 +186,20 @@ public static class ThreatValue
         return Math.Max(Math.Max(points, isDealer ? w.OpenFloorDealerValue : w.OpenFloorValue), measured ?? 0);
     }
 
+    // V3: the extra han a deal-in carries right now. A riichi on its ippatsu turn (it has not
+    // discarded since declaring) adds ippatsu; the last discard of the hand adds houtei.
+    public static double SituationFactor(SeatState seat, StateSnapshot state, PolicyWeights w)
+    {
+        if (w.DefenseModel != DefenseModel.V3)
+            return 1;
+        var factor = 1.0;
+        if (seat.Riichi && seat.RiichiDiscardIndex >= 0 && seat.RiichiDiscardIndex == seat.Discards.Count - 1)
+            factor *= w.IppatsuValueFactor;
+        if (state.WallRemaining == 0)
+            factor *= w.HouteiValueFactor;
+        return factor;
+    }
+
     // V3, last hand of the match: a trailing seat that declares riichi is playing for the
     // points that move it up, so its hand is worth at least that (capped at baiman). A ron on
     // us moves the gap by twice the payment, so it needs half the gap to the seat above.

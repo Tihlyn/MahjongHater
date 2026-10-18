@@ -123,4 +123,32 @@ public class DefenseV3Tests
         var tenpai = Candidate(shanten: 0, ukeire: 8) with { ValuePoints = 3900, MinPoints = 3900, WinProbability = 0.4 };
         Assert.DoesNotContain("EV cap", new PushFoldPolicy(V3).Decide(state, Model(state, V3), [tenpai]).Reason.Display);
     }
+
+    // Against a novice-like dealer the same slow hand keeps the table's budget: their calls are
+    // cheap and often noten, and the arena placed better without the cap in that field.
+    [Fact]
+    public void The_EV_cap_does_not_apply_against_a_novice_like_threat()
+    {
+        var state = Seat(Snap("123m456m4578p447s1z"), 2, "4m5p6s3m7p5s1z2z9p1p3z4z", melds: [Pon("7z"), Pon("3p")])
+            with { DealerSeat = 2, DoraIndicators = TestTiles.Parse("2p"), WallRemaining = 30 };
+        var model = Model(state, V3);
+        Assert.True(model.NoviceLike(2), model.Profile(2));
+        var slow = Candidate(shanten: 2, ukeire: 17) with { ValuePoints = 1000, WinProbability = 0.05 };
+        Assert.DoesNotContain("EV cap", new PushFoldPolicy(V3).Decide(state, model, [slow]).Reason.Display);
+        var capped = V3 with { PushEvCapNoviceWeight = 1 };
+        Assert.Contains("EV cap", new PushFoldPolicy(capped).Decide(state, Model(state, capped), [slow]).Reason.Display);
+    }
+
+    [Fact]
+    public void A_steady_threat_behind_a_novice_keeps_the_EV_cap()
+    {
+        var state = Seat(Seat(Snap("123m456m4578p447s1z"), 2, "4m5p6s3m7p5s1z2z9p1p3z4z", riichi: true, riichiIndex: 11), 1,
+                "1m9m1z2z9p1p3z4z8s7z5z", melds: [Pon("7z"), Pon("3p"), Pon("6z")])
+            with { DealerSeat = 2, DoraIndicators = TestTiles.Parse("2p"), WallRemaining = 30 };
+        var model = Model(state, V3);
+        Assert.True(model.NoviceLike(2) && !model.NoviceLike(1), $"{model.Profile(1)} / {model.Profile(2)}");
+        Assert.True(model.TenpaiProbability(1) >= V3.ThreatTenpaiFloor);
+        var slow = Candidate(shanten: 2, ukeire: 17) with { ValuePoints = 1000, WinProbability = 0.05 };
+        Assert.Contains("EV cap", new PushFoldPolicy(V3).Decide(state, model, [slow]).Reason.Display);
+    }
 }

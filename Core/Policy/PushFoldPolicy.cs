@@ -188,10 +188,13 @@ public sealed class PushFoldPolicy : IPushFoldPolicy
         // slow hand kept its 1-shanten/2-shanten budget (2026-10-18 08:04: 2-shanten worth
         // 1 000 pushed a 7 % budget into a dealer's two-call ~10 000). Expected loss per push
         // ≈ tenpai × danger × threat value × exposure turns; expected gain ≈ P(win) × value.
-        if (w.DefenseModel == DefenseModel.V3 && w.PushEvCapWeight > 0 && best.ShantenAfter >= 1)
+        // Only when every threat is novice-like: on a mixed table a steady player in tenpai
+        // behind a novice primary still prices the push.
+        var capWeight = threats.All(opponents.NoviceLike) ? w.PushEvCapNoviceWeight : w.PushEvCapWeight;
+        if (w.DefenseModel == DefenseModel.V3 && capWeight > 0 && best.ShantenAfter >= 1)
         {
             var threatValue = Math.Max(1000, opponents.Value(primary));
-            var gain = best.WinProbability * value * stakesFactor * w.PushEvCapWeight;
+            var gain = best.WinProbability * value * stakesFactor * capWeight;
             var cap = gain / (threatValue * Math.Max(1, w.PushExposureTurns));
             if (cap < budget)
             {

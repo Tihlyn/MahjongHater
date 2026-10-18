@@ -36,12 +36,12 @@ public sealed class OpponentModel : IOpponentModel
         var views = this.weights.DefenseModel != DefenseModel.Legacy ? TileDangerModel.BuildViews(state, visible, novice) : null;
         foreach (var seat in state.Seats.Where(s => s.Seat is >= 1 and <= 3))
         {
-            probabilities[seat.Seat] = TenpaiEstimator.WithTsumogiri(TenpaiEstimator.Estimate(seat, this.weights), seat, this.weights);
+            probabilities[seat.Seat] = TenpaiEstimator.WithRiverTells(TenpaiEstimator.Estimate(seat, this.weights), seat, state, this.weights);
             riichi[seat.Seat] = seat.Riichi;
 
             if (views is not null)
             {
-                values[seat.Seat] = ThreatValue.Points(seat, state, this.weights);
+                values[seat.Seat] = ThreatValue.Points(seat, state, this.weights) * ThreatValue.SituationFactor(seat, state, this.weights);
             }
             else
             {
@@ -62,8 +62,16 @@ public sealed class OpponentModel : IOpponentModel
             }
 
             if (this.weights.DefenseModel == DefenseModel.V3 && views is not null)
+            {
                 foreach (var (kind, name) in views[seat.Seat].YakumanTiles)
                     dangers[seat.Seat, kind] = this.YakumanDanger(dangers[seat.Seat, kind], kind, name, seat, state, visible, values[seat.Seat]);
+                if (KokushiRead(seat) && TileDangerModel.KokushiPossible(visible))
+                {
+                    probabilities[seat.Seat] = Math.Max(probabilities[seat.Seat], OpenDangerTable.Default.KokushiReadTenpai(seat.Discards.Count) ?? 0);
+                    foreach (var kind in KokushiKinds)
+                        dangers[seat.Seat, kind] = this.KokushiDanger(dangers[seat.Seat, kind], kind, seat, state, visible, values[seat.Seat]);
+                }
+            }
         }
 
         // The seat to defend against first: a riichi (the dealer's first), else the
@@ -128,6 +136,29 @@ public sealed class OpponentModel : IOpponentModel
         var pao = visible[kind] <= 2 ? ", pao if it is pon'd" : string.Empty;
         return new DangerEstimate(equivalent, this.danger.RankOf(equivalent), $"yakuman/{name}",
             $"finishes {name} ({p:P1} × {yakuman} vs ~{seatValue:0}){pao}");
+    }
+
+    private static readonly int[] KokushiKinds = [0, 8, 9, 17, 18, 26, 27, 28, 29, 30, 31, 32, 33];
+
+    // A closed seat that has thrown 8+ tiles with at most one terminal/honor among them is
+    // keeping every orphan: the river shape tools/open_hand_danger.py counts as "kokushi-read".
+    public static bool KokushiRead(SeatState seat) =>
+        !seat.Melds.Any(m => m.IsOpen) && seat.Discards.Count >= 8 && seat.Discards.Count(t => t.IsTerminalOrHonor) <= 1;
+
+    // Terminals and honors into a kokushi-shaped seat: the measured hit rate (any tenpai), with
+    // the kokushi share of those hands priced as a yakuman, as a cost-equivalent danger.
+    private DangerEstimate KokushiDanger(DangerEstimate current, int kind, SeatState seat, StateSnapshot state, int[] visible, double seatValue)
+    {
+        if (current.Probability <= 0 || visible[kind] >= 4)
+            return current;
+        var table = OpenDangerTable.Default;
+        var p = Math.Max(current.Probability, table.KokushiTileRate() ?? current.Probability);
+        var share = table.KokushiShare(seat.Discards.Count) ?? 0;
+        var yakuman = YakumanRoutes.Points(seat.Seat == state.DealerSeat);
+        var value = share * yakuman + (1 - share) * Math.Max(1000, seatValue);
+        var equivalent = Math.Clamp(p * value / Math.Max(1000, seatValue), 0, 1);
+        return new DangerEstimate(equivalent, this.danger.RankOf(equivalent), "yakuman/Kokushi Musou",
+            $"kokushi-shaped river ({p:P1}, {share:P0} of its tenpai hands are kokushi)");
     }
 
     // v1.3 constants (kept for A/B runs behind DefenseModel.Legacy): flat class rates,

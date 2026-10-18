@@ -47,6 +47,17 @@ public sealed class OpenDangerTable
         return rate is { } r ? Math.Clamp(r / riichi, MinRatio, MaxRatio) : 1;
     }
 
+    // Riichi seat, tile within three of the riichi tile in its suit: the relation's rate for the
+    // same class over the plain riichi rate for that class (falls back to the relation alone).
+    public double RiichiTileRatio(string relation, string generic)
+    {
+        if (generic == "genbutsu" || this.Rate("riichi", generic) is not { } plain || plain <= 0)
+            return 1;
+        if (this.Rate("riichi", $"{relation}|{generic}") is { } cell)
+            return Math.Clamp(cell / plain, MinRatio, MaxRatio);
+        return 1;
+    }
+
     // Average ron payment of a hit against this read (dealer and non-dealer mixed), and the
     // same by dora visible in an open hand's melds (0..3+); null when not counted.
     public double? Cost(HandRead read) => this.CellOf(read.TableContext, "ALL")?.Cost;
@@ -68,22 +79,44 @@ public sealed class OpenDangerTable
         return hits > 0 && paid > 0 && this.CostByVisibleDora(visibleDora) is { } cost ? cost / (paid / hits) : 1;
     }
 
+    // Kokushi-shaped river (closed, 8+ discards, at most one orphan thrown): P(tenpai), the
+    // share of seats that are kokushi-tenpai among the tenpai ones, and P(hit | tenpai) of an
+    // orphan.
+    public double? KokushiReadTenpai(int discards) => this.KokushiCell(discards, "all")?.Rate;
+
+    public double? KokushiShare(int discards) =>
+        this.KokushiCell(discards, "kokushi") is { } k && this.KokushiCell(discards, "all") is { Rate: > 0 } a ? Math.Min(1, k.Rate / a.Rate) : null;
+
+    public double? KokushiTileRate() => this.CellOf("kokushi-read", "terminal-honor")?.Rate;
+
+    private Cell? KokushiCell(int discards, string feature)
+    {
+        var phase = discards <= 6 ? "early" : discards <= 11 ? "mid" : "late";
+        return this.tenpai.TryGetValue("kokushi-read", out var byPhase) && byPhase.TryGetValue(phase, out var cells)
+            && cells.TryGetValue(feature, out var cell) ? cell : null;
+    }
+
     // P(hit | tenpai) of the tile that finishes a seat's two dragon sets.
     public double? YakumanTileRate() => this.CellOf("two-dragon-melds", "dragon")?.Rate;
 
     // Likelihood ratio on the tenpai odds for a run of `streak` trailing tsumogiri discards,
     // against the average seat with the same calls and phase. 1 when the table has no cell.
-    public double TenpaiOddsRatio(int openMelds, int discards, int streak)
+    public double TenpaiOddsRatio(int openMelds, int discards, int streak) =>
+        streak < 0 ? 1 : this.TenpaiRatio(openMelds, discards, $"tsg{Math.Min(streak, 3)}");
+
+    // Likelihood ratio on the tenpai odds right after the seat cut `cut` ("dora", "yakuhai",
+    // "middle") from its hand, against the average seat with the same calls and phase.
+    public double TenpaiCutRatio(int openMelds, int discards, string cut) => this.TenpaiRatio(openMelds, discards, "cut:" + cut);
+
+    private double TenpaiRatio(int openMelds, int discards, string feature)
     {
-        if (streak < 0)
-            return 1;
         var kind = openMelds == 0 ? "dama" : $"open{Math.Min(openMelds, 4)}";
         var phase = discards <= 6 ? "early" : discards <= 11 ? "mid" : "late";
         if (!this.tenpai.TryGetValue(kind, out var byPhase) || !byPhase.TryGetValue(phase, out var cells)
-            || !cells.TryGetValue("all", out var all) || !cells.TryGetValue($"tsg{Math.Min(streak, 3)}", out var run))
+            || !cells.TryGetValue("all", out var all) || !cells.TryGetValue(feature, out var cell))
             return 1;
         static double Odds(double p) => Math.Clamp(p, 1e-4, 1 - 1e-4) / (1 - Math.Clamp(p, 1e-4, 1 - 1e-4));
-        return Odds(run.Rate) / Odds(all.Rate);
+        return Odds(cell.Rate) / Odds(all.Rate);
     }
 
     // Number-tile class against a seat as the counter defines it: suji when the matching far

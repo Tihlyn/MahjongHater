@@ -5,7 +5,8 @@ namespace MahjongHater.Core.Policy;
 // How each opponent has played this match so far, from its rivers alone. The signal is the
 // share of middle tiles (3-7) among a seat's first six discards: Phoenix players throw 16.4 %
 // (28 088 seat-hands; 3+ of 6 in under 10 % of hands), a random discarder ~44 %. On
-// 2026-10-18 the human Novice-queue opponents threw 50-83 %, the NPCs 17-33 %.
+// 2026-10-18 the three humans of one match threw 36 %, 5 % and 19 % over 8 hands (single
+// hands up to 6 of 6), the NPCs 10-21 % over 16.
 //
 // A novice-like seat's discards say little about its hand: the early-outside read is off and
 // a flush is read from calls only. Suji keeps its furiten protection (the game enforces it),

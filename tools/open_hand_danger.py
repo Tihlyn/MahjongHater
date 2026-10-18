@@ -76,6 +76,7 @@ class Seat:
         self.version = 0
         self.furiten_riichi = False
         self.wait_cache = (-1, None)
+        self.last_cut = 'none'
 
     @property
     def open(self):
@@ -182,6 +183,14 @@ def tile_class(k, seat, visible, read):
     return f"{'suji' if suji else 'nonsuji'}:{rank}"
 
 
+def dora_of(k):
+    if k < 27:
+        return k // 9 * 9 + (k % 9 + 1) % 9
+    if k < 31:
+        return 27 + (k - 27 + 1) % 4
+    return 31 + (k - 31 + 1) % 3
+
+
 def bucket_turn(n):
     return 'early' if n <= 6 else 'mid' if n <= 11 else 'late'
 
@@ -279,6 +288,20 @@ def analyse_game(raw):
                     visible[kind(t)] += 1
         for t in doras:
             visible[kind(t)] += 1
+        # What this discard says about the discarder: a late cut of a live dora / yakuhai /
+        # middle tile from the hand is the classic "they just got tenpai" tell.
+        dora_kinds = {dora_of(kind(t)) for t in doras}
+        late = len(s.discards) >= 7
+        if not tedashi:
+            s.last_cut = 'none'
+        elif k in dora_kinds or tile in (16, 52, 88):
+            s.last_cut = 'dora'
+        elif k in yakuhai_kinds((d - oya) % 4, round_wind) and visible[k] - 1 <= 1:
+            s.last_cut = 'yakuhai'
+        elif late and k < 27 and 2 <= k % 9 <= 6:
+            s.last_cut = 'middle'
+        else:
+            s.last_cut = 'none'
         for o in range(4):
             if o == d:
                 continue
@@ -314,6 +337,8 @@ def analyse_game(raw):
                 tenpai[(kind_s, tb, f'tsg{min(tsumogiri_streak, 3)}')][1] += is_tenpai
                 tenpai[(kind_s, tb, f'midtd{late_mid_tedashi}')][0] += 1
                 tenpai[(kind_s, tb, f'midtd{late_mid_tedashi}')][1] += is_tenpai
+                tenpai[(kind_s, tb, 'cut:' + os_.last_cut)][0] += 1
+                tenpai[(kind_s, tb, 'cut:' + os_.last_cut)][1] += is_tenpai
                 if not closed:
                     for rt, _ in read_type(os_, seat_wind, round_wind):
                         tenpai[(kind_s, tb, 'read:' + rt)][0] += 1
@@ -326,6 +351,13 @@ def analyse_game(raw):
                     if winds >= 3:
                         tenpai[('three-wind-melds', tb)][0] += 1
                         tenpai[('three-wind-melds', tb)][1] += is_tenpai
+            kokushi_read = closed and ndisc >= 8 and sum(1 for t, _, _ in os_.discards if kind(t) >= 27 or kind(t) % 9 in (0, 8)) <= 1
+            if kokushi_read:
+                tenpai[('kokushi-read', tb)][0] += 1
+                tenpai[('kokushi-read', tb)][1] += is_tenpai
+                kokushi_tenpai = SH.calculate_shanten_for_kokushi_hand(to34(os_.hand)) == 0
+                tenpai[('kokushi-read', tb, 'kokushi')][0] += 1
+                tenpai[('kokushi-read', tb, 'kokushi')][1] += kokushi_tenpai
             if not is_tenpai:
                 continue
             # ---- conditional danger given tenpai (only for this discard tile)
@@ -359,6 +391,13 @@ def analyse_game(raw):
                 # Flush reads: the generic suji class too, alone and crossed with the suit
                 # class, so the plugin can scale its riichi-based estimate by a like-for-like ratio.
                 keys += [(ctx, 'g:' + generic), (ctx, f'{cls}|{generic}')]
+            if riichi and cls != 'genbutsu' and k < 27:
+                rt = next(((t, td) for t, td, od in os_.discards if od == os_.riichi_order), None)
+                if rt is not None and kind(rt[0]) < 27 and kind(rt[0]) // 9 == k // 9 and abs(k % 9 - kind(rt[0]) % 9) <= 3:
+                    rel = f"rt-{'td' if rt[1] else 'tg'}{k % 9 - kind(rt[0]) % 9:+d}"
+                    keys += [(ctx, rel), (ctx, f'{rel}|{generic}')]
+            if kokushi_read and cls != 'genbutsu':
+                keys.append(('kokushi-read', 'terminal-honor' if k >= 27 or k % 9 in (0, 8) else 'simple'))
             for key in keys:
                 out[key][0] += 1
                 out[key][1] += hit

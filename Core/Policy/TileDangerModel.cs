@@ -59,6 +59,10 @@ public sealed class SeatThreatView
     // its river are off.
     public bool NoviceLike { get; init; }
 
+    // Whether the riichi declaration tile was the tile just drawn (null when unknown). A
+    // hand-discarded riichi tile says something about the wait around it; a tsumogiri one does not.
+    public bool? RiichiTileTsumogiri { get; init; }
+
     public bool IsGenbutsu(Tile tile) => this.Genbutsu[TileHelpers.ToIndex(tile)];
 
     public bool IsRiichiTile(int kind) => this.RiichiTile is { } r && TileHelpers.ToIndex(r) == kind;
@@ -97,7 +101,7 @@ public sealed class TileDangerModel
         }
 
         if (seat.Riichi)
-            return estimate;
+            return this.AroundRiichiTile(tile, seat, estimate);
 
         // Not in riichi: shift by how much more or less this tile class deals into the seat's
         // read than into a riichi (Phoenix replays, same class definition on both sides).
@@ -111,6 +115,24 @@ public sealed class TileDangerModel
         var p = Clamp(estimate.Probability * ratio);
         return new DangerEstimate(p, this.RankOf(p), estimate.Class,
             $"{estimate.Why}, ×{ratio:0.##} vs {seat.Read.Describe()}{(flush is null ? string.Empty : $" ({flush[6..]})")}");
+    }
+
+    // Same suit within three of the riichi tile: Phoenix rates by that distance and by whether
+    // the riichi tile left the hand (matagi-suji and friends), over the plain class rate.
+    private DangerEstimate AroundRiichiTile(Tile tile, SeatThreatView seat, DangerEstimate estimate)
+    {
+        if (seat.RiichiTile is not { IsHonor: false } riichiTile || tile.IsHonor || seat.RiichiTileTsumogiri is not { } tsumogiri
+            || riichiTile.Suit != tile.Suit || Math.Abs(tile.Number - riichiTile.Number) > 3)
+            return estimate;
+        var kind = TileHelpers.ToIndex(tile);
+        var generic = OpenDangerTable.GenericClass(tile, seat.OwnDiscards, seat.PublicCopies[kind] + 1);
+        var relation = $"rt-{(tsumogiri ? "tg" : "td")}{tile.Number - riichiTile.Number:+0;-0;+0}";
+        var ratio = this.open.RiichiTileRatio(relation, generic);
+        if (Math.Abs(ratio - 1) < 0.02)
+            return estimate;
+        var p = Clamp(estimate.Probability * ratio);
+        return new DangerEstimate(p, this.RankOf(p), estimate.Class,
+            $"{estimate.Why}, ×{ratio:0.##} {Math.Abs(tile.Number - riichiTile.Number)} from the {(tsumogiri ? "tsumogiri" : "hand-cut")} riichi tile");
     }
 
     private DangerEstimate EstimateAgainstRiichi(Tile tile, SeatThreatView seat, int[] visible, IReadOnlyList<Tile> doraIndicators)
@@ -269,6 +291,9 @@ public sealed class TileDangerModel
                 OpenMelds = seat.Melds.Count(mm => mm.IsOpen),
                 Read = HandRead.Of(seat, SeatWindOf(seat.Seat, state.DealerSeat), state.RoundWind, callsOnly: noviceLike?[seat.Seat] == true),
                 NoviceLike = noviceLike?[seat.Seat] == true,
+                RiichiTileTsumogiri = seat.Riichi && seat.RiichiDiscardIndex >= 0 && seat.DiscardTsumogiri.Count == seat.Discards.Count
+                                      && seat.RiichiDiscardIndex < seat.DiscardTsumogiri.Count
+                    ? seat.DiscardTsumogiri[seat.RiichiDiscardIndex] : null,
                 YakumanTiles = YakumanTilesOf(seat),
                 OwnDiscards = own,
                 PublicCopies = publicCopies,

@@ -27,7 +27,9 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
         for (var seat = 1; seat <= 3; seat++)
         {
             tenpai[seat] = state.Seats[seat].Riichi ? 1
-                : TenpaiEstimator.WithTsumogiri(network.Tenpai(output[network.TenpaiOffset + seat - 1]), state.Seats[seat], this.weights);
+                : TenpaiEstimator.WithRiverTells(network.Tenpai(output[network.TenpaiOffset + seat - 1]), state.Seats[seat], state, this.weights);
+            if (this.weights.DefenseModel == DefenseModel.V3 && !state.Seats[seat].Riichi && OpponentModel.KokushiRead(state.Seats[seat]))
+                tenpai[seat] = Math.Max(tenpai[seat], OpenDangerTable.Default.KokushiReadTenpai(state.Seats[seat].Discards.Count) ?? 0);
             var probability = 0d;
             for (var kind = 0; kind < 34; kind++)
             {
@@ -40,7 +42,8 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
                 values[seat] += danger[seat, kind] * points[seat, kind];
             }
             values[seat] = probability > 0 ? values[seat] / probability : 0;
-            values[seat] = Math.Max(values[seat], ThreatValue.PlacementFloor(state.Seats[seat], state, this.weights));
+            values[seat] = Math.Max(values[seat], ThreatValue.PlacementFloor(state.Seats[seat], state, this.weights))
+                           * ThreatValue.SituationFactor(state.Seats[seat], state, this.weights);
         }
         var primary = Enumerable.Range(1, 3).OrderByDescending(s => tenpai[s] * values[s]).First();
         Volatile.Write(ref this.view, new View(tenpai, danger, points, values, tenpai[primary] * values[primary] > 0 ? primary : -1));
@@ -52,6 +55,7 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
     public int PrimaryThreat() => Volatile.Read(ref this.view)?.Primary ?? this.fallback.PrimaryThreat();
     public int LiveSuji(int seat) => this.fallback.LiveSuji(seat);
     public string Profile(int seat) => this.fallback.Profile(seat);
+    public bool NoviceLike(int seat) => this.fallback.NoviceLike(seat);
     public double[]? Placement(StateSnapshot state, int[] scoreDeltas) =>
         !state.LayoutHealthy || state.Seats.Any(s => !s.DiscardsVerified) ? null : network.Placement(state, scoreDeltas);
     public DangerEstimate Explain(Tile tile, int seat)

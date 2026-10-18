@@ -107,6 +107,9 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
             });
         }
 
+        if (this.weights.DefenseModel == DefenseModel.V3 && !this.weights.RankByPointEv)
+            candidates = this.KeepLastSafeTile(state, candidates);
+
         // A yakuman route on the table: tile efficiency alone throws it away (an honor pair for
         // a ryanmen), so inside each shanten level rank by point EV for this decision.
         var minShanten = candidates.Count > 0 ? candidates.Min(c => c.ShantenAfter) : 0;
@@ -120,5 +123,33 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
         // Shanten stays the primary key (the push/fold layer decides when to give one up);
         // inside a level the point-EV (v2) or the analyzer score (legacy) orders the tiles.
         return candidates.OrderBy(c => c.ShantenAfter).ThenByDescending(c => c.Score).ThenBy(c => c.Tile).ToArray();
+    }
+
+    // Every defence guide: from mid-hand, hold one tile you can fold with. Throwing the last
+    // safe tile (genbutsu to two opponents, or an honor with two copies out) costs the
+    // equivalent of a few accepting tiles while nobody has declared riichi yet; once someone
+    // has, the push/fold budget decides instead.
+    private List<DiscardCandidate> KeepLastSafeTile(StateSnapshot state, List<DiscardCandidate> candidates)
+    {
+        var w = this.weights;
+        if (state.Turn < w.SafeTileKeepFromTurn || state.Seats.Any(s => s.Seat != 0 && s.Riichi) || state.OurRiichi)
+            return candidates;
+        var publicCopies = new int[34];
+        foreach (var t in state.SeenForAnalyzer().Concat(state.OurMelds.SelectMany(m => m.Tiles)).Concat(state.DoraIndicators))
+            publicCopies[TileHelpers.ToIndex(t)]++;
+        bool Safe(Tile t)
+        {
+            var kind = TileHelpers.ToIndex(t);
+            return t.IsHonor && publicCopies[kind] >= 2
+                   || state.Seats.Count(s => s.Seat != 0 && s.Discards.Any(d => TileHelpers.ToIndex(d) == kind)) >= 2;
+        }
+
+        if (state.Hand.Count(Safe) != 1)
+            return candidates;
+        return candidates.Select(c => c.ShantenAfter < 1 || !Safe(c.Tile) ? c : c with
+        {
+            Score = c.Score - (c.ShantenAfter >= 2 ? w.SafeTileKeepUkeireFar : w.SafeTileKeepUkeire) * w.UkeireWeight,
+            Note = $"{c.Note}; last safe tile",
+        }).ToList();
     }
 }

@@ -128,6 +128,9 @@ public interface IOpponentModel
 
     // V3: one line on how the seat has played this match ("novice-like (55 % early middles)").
     string Profile(int seat) => string.Empty;
+
+    // V3: the seat plays like the Novice queue (OpponentProfiles).
+    bool NoviceLike(int seat) => false;
 }
 
 // Final-placement distribution for us (1st..4th) if every relative seat's score moved by
@@ -305,6 +308,11 @@ public sealed record PolicyWeights
     // A non-tenpai push may not risk more than it can win: the unconditional budget is capped
     // at P(win) × our value / (threat value × PushExposureTurns). 0 turns the cap off.
     public double PushEvCapWeight { get; init; } = 1;
+    // The same cap when the primary threat is novice-like. Their calls and riichi are cheap and
+    // often noten, so the read value overstates what a push risks: the arena (2026-10-18, 800
+    // duplicate matches) placed 0.06 better without the cap against novices and 0.05 worse
+    // without it against Phoenix-trained players. 0 turns it off.
+    public double PushEvCapNoviceWeight { get; init; } = 0;
     // Ceiling for a non-riichi tenpai estimate after the tsumogiri adjustment.
     public double TenpaiMaxWithTsumogiri { get; init; } = 0.95;
     // Tenpai worth this much pushes any tile; haneman-class tenpai may cut up to the budget below;
@@ -323,6 +331,15 @@ public sealed record PolicyWeights
     public double NoviceBadWaitFactor { get; init; } = 1.3;
     // Cap on the all-last "a trailing riichi is worth what it needs" floor (baiman).
     public double PlacementFloorMax { get; init; } = 16000;
+    // One more han on a deal-in: a riichi's ippatsu turn and the hand's last discard (houtei).
+    // About ×1.35 at the 2-4 han a riichi usually carries (mangan caps the rest).
+    public double IppatsuValueFactor { get; init; } = 1.35;
+    public double HouteiValueFactor { get; init; } = 1.3;
+    // Keeping the last safe tile before any riichi: from this turn, worth this many accepting
+    // tiles at 1-shanten / at 2-shanten or worse (HeuristicDiscardPolicy.KeepLastSafeTile).
+    public int SafeTileKeepFromTurn { get; init; } = 6;
+    public double SafeTileKeepUkeire { get; init; } = 1.5;
+    public double SafeTileKeepUkeireFar { get; init; } = 3;
 
     public static PolicyWeights Default { get; } = new();
 }
