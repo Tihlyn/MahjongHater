@@ -30,34 +30,13 @@ internal static class ArenaCommands
             Console.Error.WriteLine($"note: the model was trained for {model.Rules.HandsInMatch}-hand matches; the arena plays {rules.HandsInMatch}.");
         var seeds = Enumerable.Range(first, seedCount).ToArray();
 
-        IArenaSeat Opponent(int seed, int seat)
-        {
-            var casual = field == "live" && new Random(unchecked(seed * 7919 + seat)).NextDouble() < 1 / 3d;
-            var learned = field == "learned" || field == "mixed" && seat % 2 == 1 || field == "live" && !casual;
-            if (casual)
-                return NoviceSeat.Casual(unchecked(seed * 31 + seat));
-            if (!learned)
-                return new NoviceSeat(unchecked(seed * 31 + seat));
-            var w = PolicyWeights.Default;
-            return new PolicySeat("learned", new LearnedPolicy(new DecisionPolicy(opponents: new LearnedOpponentModel(model!, w),
-                calls: new LearnedCallPolicy(model!, w), weights: w), model!, w));
-        }
+        IArenaSeat Opponent(int seed, int seat) => MakeOpponent(field, model, seed, seat).Seat;
 
         Console.WriteLine($"arena: {seedCount} seeds x 4 seats, {rules.HandsInMatch}-hand matches, opponents={field}, threads={threads}");
         IReadOnlyList<ArenaSeatResult>? baseline = null;
         foreach (var arm in arms)
         {
-            // "guarded-V3" or "guarded-V3:NoviceBadWaitFactor=1;PushEvCapWeight=0" (PolicyWeights overrides).
-            var head = arm.Split(':', 2);
-            var (kind, version) = head[0].Split('-') is [var k, var v] ? (k, v) : throw new ArgumentException($"arm '{arm}' must look like heuristic-V3 or guarded-V2");
-            var w = WithOverrides(PolicyWeights.Default with { DefenseModel = Enum.Parse<DefenseModel>(version) }, head.Length > 1 ? head[1] : "");
-            IArenaSeat Candidate() => kind switch
-            {
-                "heuristic" => new PolicySeat(arm, new DecisionPolicy(weights: w)),
-                "guarded" => new PolicySeat(arm, new DecisionPolicy(opponents: new LearnedOpponentModel(model!, w, useLearnedDanger: false),
-                    discards: new LearnedDiscardPolicy(model!, w), calls: new LearnedCallPolicy(model!, w), weights: w)),
-                _ => throw new ArgumentException($"unknown arm kind '{kind}'"),
-            };
+            IArenaSeat Candidate() => MakeCandidate(arm, model).Seat;
             var clock = Stopwatch.StartNew();
             var results = ArenaRunner.Duplicate(rules, seeds, Candidate, Opponent, threads,
                 n => { if (n % 20 == 0) Console.Error.Write($"\r{arm}: {n}/{seeds.Length * 4}"); }, ct);
@@ -70,6 +49,41 @@ internal static class ArenaCommands
         }
 
         return 0;
+    }
+
+    // The opponent at a physical seat and its true type (novice, casual, learned).
+    internal static (IArenaSeat Seat, string Type) MakeOpponent(string field, LearnedModel? model, int seed, int seat)
+    {
+        var casual = field == "live" && new Random(unchecked(seed * 7919 + seat)).NextDouble() < 1 / 3d;
+        var learned = field == "learned" || field == "mixed" && seat % 2 == 1 || field == "live" && !casual;
+        if (casual)
+            return (NoviceSeat.Casual(unchecked(seed * 31 + seat)), "casual");
+        if (!learned)
+            return (new NoviceSeat(unchecked(seed * 31 + seat)), "novice");
+        var w = PolicyWeights.Default;
+        return (new PolicySeat("learned", new LearnedPolicy(new DecisionPolicy(opponents: new LearnedOpponentModel(model!, w),
+            calls: new LearnedCallPolicy(model!, w), weights: w), model!, w)), "learned");
+    }
+
+    // "guarded-V3" or "guarded-V3:NoviceBadWaitFactor=1;PushEvCapWeight=0" (PolicyWeights overrides):
+    // the seat, the opponent model it reads the table with, and its weights.
+    internal static (IArenaSeat Seat, IOpponentModel Opponents, PolicyWeights Weights) MakeCandidate(string arm, LearnedModel? model)
+    {
+        var head = arm.Split(':', 2);
+        var (kind, version) = head[0].Split('-') is [var k, var v] ? (k, v) : throw new ArgumentException($"arm '{arm}' must look like heuristic-V3 or guarded-V2");
+        var w = WithOverrides(PolicyWeights.Default with { DefenseModel = Enum.Parse<DefenseModel>(version) }, head.Length > 1 ? head[1] : "");
+        switch (kind)
+        {
+            case "heuristic":
+                var heuristic = new OpponentModel(w);
+                return (new PolicySeat(arm, new DecisionPolicy(opponents: heuristic, weights: w)), heuristic, w);
+            case "guarded":
+                var guarded = new LearnedOpponentModel(model!, w, useLearnedDanger: false);
+                return (new PolicySeat(arm, new DecisionPolicy(opponents: guarded, discards: new LearnedDiscardPolicy(model!, w),
+                    calls: new LearnedCallPolicy(model!, w), weights: w)), guarded, w);
+            default:
+                throw new ArgumentException($"unknown arm kind '{kind}'");
+        }
     }
 
     private static PolicyWeights WithOverrides(PolicyWeights w, string overrides)

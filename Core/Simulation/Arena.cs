@@ -92,7 +92,10 @@ public sealed record ArenaSeatResult(string Name, int Score, int Placement, int 
 public static class ArenaRunner
 {
     // A full match with one policy per physical seat (MatchRunner's loop and settlement).
-    public static ArenaSeatResult[] Play(SimulationRules rules, int seed, IReadOnlyList<IArenaSeat> seats, CancellationToken ct = default)
+    // `chosen` sees the true game after a seat picks its action and before it is applied
+    // (calibration against hidden hands).
+    public static ArenaSeatResult[] Play(SimulationRules rules, int seed, IReadOnlyList<IArenaSeat> seats, CancellationToken ct = default,
+        Action<SimGame, IReadOnlyList<SimAction>, SimAction>? chosen = null)
     {
         if (seats.Count != 4)
             throw new ArgumentException("An arena table needs four seats.");
@@ -111,6 +114,7 @@ public static class ArenaRunner
             {
                 var legal = RiichiSimulator.Legal(game);
                 var action = seats[game.Actor].Choose(SimulationObservation.Observe(game, legal), legal, ct);
+                chosen?.Invoke(game, legal, action);
                 RiichiSimulator.Apply(game, action, validate: true);
             }
 
