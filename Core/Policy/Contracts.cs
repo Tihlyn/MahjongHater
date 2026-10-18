@@ -265,7 +265,13 @@ public sealed record PolicyWeights
     public double RiichiBonusHan { get; init; } = 0.6;         // ura / ippatsu / tsumo expectation
     // Win-probability model (HandValue.WinProbability) and the number of dangerous discards a
     // push is expected to cost before the hand resolves (scales the risk term in the EV).
-    public double WinRateK { get; init; } = 0.8;
+    // WinRateK (closed) and WinRateKOpen are fitted on arena outcomes of our first tenpai of a
+    // hand against the Phoenix-trained network (2026-10-18, `Precompute calibrate`: riichi 1.26
+    // ± 0.09, open 1.01 ± 0.08; 47 % of riichi won). The old 0.8 predicted 34 % for those 47 %.
+    // Tables that fold less win more (3.6 / 2.0 against arena novices); that part needs a
+    // per-seat fold read and is not in the estimate yet.
+    public double WinRateK { get; init; } = 1.25;
+    public double WinRateKOpen { get; init; } = 1.0;
     public double TenpaiRateK { get; init; } = 1.0;
     public double ExtraShantenFactor { get; init; } = 0.35;
     public double PushExposureTurns { get; init; } = 3;

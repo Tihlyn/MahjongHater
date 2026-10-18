@@ -9,6 +9,19 @@ namespace MahjongHater.Tests.Policy;
 public class DiscardAndStanceTests
 {
     [Fact]
+    public void Tenpai_win_chance_follows_the_arena_fit_and_open_hands_win_less()
+    {
+        // Six live waits with 50 tiles left: 1 - exp(-K x 6 x 12.5 / 103).
+        var w = PolicyWeights.Default;
+        var closed = HandValue.WinProbability(0, 6, 0, 50, w);
+        var open = HandValue.WinProbability(0, 6, 0, 50, w, open: true);
+        Assert.Equal(1 - Math.Exp(-1.25 * 6 * 12.5 / 103), closed, 9);
+        Assert.InRange(closed, 0.55, 0.65);   // the old K = 0.8 said 44 %
+        Assert.True(open < closed);
+        Assert.True(HandValue.WinProbability(1, 20, 120, 50, w, open: true) < HandValue.WinProbability(1, 20, 120, 50, w));
+    }
+
+    [Fact]
     public void Discard_policy_preserves_analyzer_metrics_and_legacy_score_scale()
     {
         var legacy = new PolicyWeights { DefenseModel = DefenseModel.Legacy };
