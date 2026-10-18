@@ -33,7 +33,8 @@ internal static class ArenaCommands
         IArenaSeat Opponent(int seed, int seat) => MakeOpponent(field, model, seed, seat).Seat;
 
         Console.WriteLine($"arena: {seedCount} seeds x 4 seats, {rules.HandsInMatch}-hand matches, opponents={field}, threads={threads}");
-        IReadOnlyList<ArenaSeatResult>? baseline = null;
+        // Up to four arms: every arm against each earlier one; more: against the first only.
+        var played = new List<(string Arm, IReadOnlyList<ArenaSeatResult> Results)>();
         foreach (var arm in arms)
         {
             IArenaSeat Candidate() => MakeCandidate(arm, model).Seat;
@@ -42,10 +43,9 @@ internal static class ArenaCommands
                 n => { if (n % 20 == 0) Console.Error.Write($"\r{arm}: {n}/{seeds.Length * 4}"); }, ct);
             Console.Error.WriteLine();
             Console.WriteLine(Format(arm, results, clock.Elapsed));
-            if (baseline is null)
-                baseline = results;
-            else
-                Console.WriteLine($"{"",-14} vs {arms[0]}: {Paired(baseline, results, r => r.Placement, "placement", "0.000")}  {Paired(baseline, results, r => r.Score, "score", "0")}");
+            foreach (var (earlier, baseline) in arms.Length <= 4 ? played : played.Take(1))
+                Console.WriteLine($"{"",-14} vs {earlier}: {Paired(baseline, results, r => r.Placement, "placement", "0.000")}  {Paired(baseline, results, r => r.Score, "score", "0")}");
+            played.Add((arm, results));
         }
 
         return 0;
