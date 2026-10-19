@@ -181,7 +181,7 @@ public class TableReadsTests
     public void The_win_factor_applies_only_when_switched_on()
     {
         var rows = Enumerable.Range(0, 300).Select(i => new WinReveals.Row(false, 0.5, i % 10 < 7)).ToList();
-        var off = new OpponentModel(V2, wins: new WinReveals(rows));
+        var off = new OpponentModel(V2 with { WinReveals = false }, wins: new WinReveals(rows));
         var on = new OpponentModel(V2 with { WinReveals = true }, wins: new WinReveals(rows));
         Assert.Equal(1, off.WinRateFactor(false));
         Assert.True(on.WinRateFactor(false) > 1.5);
@@ -191,7 +191,7 @@ public class TableReadsTests
     public void Open_hand_value_follows_the_scale()
     {
         var state = Snap() with { Seats = [.. Snap().Seats.Select(s => s.Seat == 1 ? Open(2) : s)] };
-        var full = Model(state, V2).Value(1);
+        var full = Model(state, V2 with { OpenValueScale = 1 }).Value(1);
         var scaled = Model(state, V2 with { OpenValueScale = 0.75 }).Value(1);
         Assert.Equal(full * 0.75, scaled, 6);
         Assert.Equal(1, ThreatValue.OpenScale(Open(0), V2 with { OpenValueScale = 0.75 }));
@@ -202,7 +202,7 @@ public class TableReadsTests
     {
         var rows = Enumerable.Range(0, 200).Select(i => new TenpaiReveals.Row(2, 0, 0, i < 20));
         var state = Snap() with { Seats = [.. Snap().Seats.Select(s => s.Seat == 1 ? Open(2) : s)] };
-        var off = new OpponentModel(V2, reveals: new TenpaiReveals(rows));
+        var off = new OpponentModel(V2 with { TenpaiReveals = false }, reveals: new TenpaiReveals(rows));
         off.Update(state);
         var on = new OpponentModel(V2 with { TenpaiReveals = true }, reveals: new TenpaiReveals(rows));
         on.Update(state);

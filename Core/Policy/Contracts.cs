@@ -419,13 +419,16 @@ public sealed record PolicyWeights
     public double SteadyFoldShare { get; init; } = 0.73;
     public double NonFolderShare { get; init; } = 0.46;
     public double FoldPriorStrength { get; init; } = 6;
-    // Tenpai corrected by what draws revealed (TenpaiReveals), when the model has a store.
-    public bool TenpaiReveals { get; init; }
+    // Tenpai corrected by what draws revealed (TenpaiReveals), when the model has a store. On
+    // since 3.5: live arena -0.051 placement against the same arm without it.
+    public bool TenpaiReveals { get; init; } = true;
     // Our win estimate scaled by the factor our own tenpai results on these tables show
-    // (WinReveals), when the model has a store.
-    public bool WinReveals { get; init; }
-    // Open, non-riichi hands are worth this share of the read value (1 = as read).
-    public double OpenValueScale { get; init; } = 1;
+    // (WinReveals), when the model has a store. On since 3.5: novice arena -0.010 placement,
+    // +265 points a match; level on live and Phoenix-trained tables.
+    public bool WinReveals { get; init; } = true;
+    // Open, non-riichi hands are worth this share of the read value (1 = as read). Measured
+    // 0.73-0.78 for Phoenix-trained seats, 0.68-0.73 casual, 0.56 novice; live arena -0.024.
+    public double OpenValueScale { get; init; } = 0.75;
 
     public static PolicyWeights Default { get; } = new();
 }
