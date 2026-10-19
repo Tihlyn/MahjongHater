@@ -7,13 +7,20 @@ public sealed class OpponentModel : IOpponentModel
     private readonly PolicyWeights weights;
     private readonly TileDangerModel danger;
     private readonly OpponentProfiles profiles;
+    private readonly TenpaiReveals? reveals;
+    private readonly WinReveals? wins;
     private Model model = new(new double[4], new DangerEstimate[4, 34], new double[4], new bool[4], -1, [-1, -1, -1, -1]);
 
-    public OpponentModel(PolicyWeights? weights = null, TileDangerModel? danger = null)
+    // `reveals`: tenpai corrected by what draws showed (applied with PolicyWeights.TenpaiReveals;
+    // recorded either way, so a live store keeps learning while the switch is off). `wins`: our
+    // own tenpai results on these tables (PolicyWeights.WinReveals), the same way.
+    public OpponentModel(PolicyWeights? weights = null, TileDangerModel? danger = null, TenpaiReveals? reveals = null, WinReveals? wins = null)
     {
         this.weights = weights ?? PolicyWeights.Default;
         this.danger = danger ?? new TileDangerModel(weights: this.weights);
         this.profiles = new OpponentProfiles(this.weights.ProfileDecay);
+        this.reveals = reveals;
+        this.wins = wins;
     }
 
     public void Update(StateSnapshot state)
@@ -30,9 +37,12 @@ public sealed class OpponentModel : IOpponentModel
         bool[]? novice = null;
         double[]? noviceWeight = null;
         var v3 = this.weights.DefenseModel == DefenseModel.V3;
+        if (this.weights.DefenseModel != DefenseModel.Legacy)
+            this.profiles.Observe(state);
+        this.reveals?.Observe(state);
+        this.wins?.Observe(state);
         if (v3)
         {
-            this.profiles.Observe(state);
             novice = [false, this.profiles.NoviceLike(1, this.weights), this.profiles.NoviceLike(2, this.weights), this.profiles.NoviceLike(3, this.weights)];
             if (this.weights.ProfileBlend)
                 noviceWeight = [0, this.profiles.NoviceProbability(1), this.profiles.NoviceProbability(2), this.profiles.NoviceProbability(3)];
@@ -43,11 +53,14 @@ public sealed class OpponentModel : IOpponentModel
         foreach (var seat in state.Seats.Where(s => s.Seat is >= 1 and <= 3))
         {
             probabilities[seat.Seat] = TenpaiEstimator.WithRiverTells(TenpaiEstimator.Estimate(seat, this.weights), seat, state, this.weights);
+            if (this.reveals is not null)
+                probabilities[seat.Seat] = this.reveals.Adjust(seat.Seat, probabilities[seat.Seat], seat, 1 - this.Steadiness(seat.Seat), this.weights.TenpaiReveals);
             riichi[seat.Seat] = seat.Riichi;
 
             if (views is not null)
             {
-                values[seat.Seat] = ThreatValue.Points(seat, state, this.weights) * ThreatValue.SituationFactor(seat, state, this.weights);
+                values[seat.Seat] = ThreatValue.Points(seat, state, this.weights) * ThreatValue.SituationFactor(seat, state, this.weights)
+                                    * ThreatValue.OpenScale(seat, this.weights);
             }
             else
             {
@@ -118,6 +131,12 @@ public sealed class OpponentModel : IOpponentModel
     public bool NoviceLike(int seat) => this.weights.DefenseModel == DefenseModel.V3 && this.profiles.NoviceLike(CheckSeat(seat), this.weights);
 
     public double NoviceProbability(int seat) => this.weights.DefenseModel == DefenseModel.V3 ? this.profiles.NoviceProbability(CheckSeat(seat)) : 0;
+
+    public double Steadiness(int seat) => this.weights.DefenseModel == DefenseModel.Legacy ? 1 : this.profiles.Steadiness(CheckSeat(seat), this.weights);
+
+    public double WinRateFactor(bool open) => this.weights.WinReveals && this.wins is not null ? this.wins.Factor(open) : 1;
+
+    public void OurTenpai(bool open, double hazard) => this.wins?.Tenpai(open, hazard);
 
     public double ExpectedDealInCost(Tile tile)
     {

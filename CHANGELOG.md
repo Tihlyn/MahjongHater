@@ -4,6 +4,34 @@ Notable changes are recorded here using the Keep a Changelog format and semantic
 
 ## Unreleased
 
+## [3.5.0.0] - 2026-10-19 (testing)
+
+### Changed
+
+- Defense v3 and the learned policy are now on by default; a 3.4 configuration is switched to
+  both once. Either can still be turned off in Settings.
+- The defense learns your tables from what they show. At every exhaustive draw the hands shown
+  tenpai or noten correct how often callers with 0 / 1 / 2 / 3+ calls really are tenpai, and
+  our own tenpai results scale our win estimate. Both are kept per policy in
+  `tenpai_reveals.csv` and `win_reveals.csv` in the config folder and pay off after a few dozen
+  matches. Against arena novices it read two-call hands at 57 % tenpai against 14 % true; it
+  now reads 11.5 %.
+- Open, non-riichi hands are valued at 0.75 of the read value, as measured on every kind of
+  table.
+- Our tenpai win estimate is refitted on arena outcomes, open hands apart.
+
+### Fixed
+
+- The reads fit could diverge on near-certain three-call estimates; Newton steps are capped
+  and backtracked.
+
+### Arena (guarded learned policy, duplicate matches, 300 seeds, Δ placement vs 3.4's Defense v2)
+
+- Defense v3 with table reads: live-like table −0.074 ± 0.025 (+823 points a match), novices
+  −0.140 ± 0.024 (+4 250), Phoenix-trained network −0.018 ± 0.026 (level). Deal-in rises a
+  little (live 7.3 → 8.4 %), wins rise more (24.4 → 26.3 %): the defense stops folding to hands
+  that are not there. Details: `docs/research/DEFENSE_V3_2026_10_18.md` §6.
+
 ## [3.4.0.0] - 2026-10-18 (testing)
 
 ### Fixed

@@ -32,6 +32,7 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
             return candidates;
         var primary = opponents.PrimaryThreat();
         var v2 = this.weights.DefenseModel != DefenseModel.Legacy;
+        var factor = opponents.WinRateFactor(state.IsOpen);
         int[]? visible = null;
         if (v2)
         {
@@ -83,7 +84,7 @@ public sealed class HeuristicDiscardPolicy : IDiscardPolicy
                     if (route is not null && option.Eval.ShantenAfter >= 1)
                         valuePoints = Math.Max(valuePoints, YakumanRoutes.Points(state.DealerSeat == 0) * route.ValueShare);
                 }
-                winProbability = HandValue.WinProbability(option.Eval.ShantenAfter, option.Eval.Ukeire, option.Eval.Ukeire2, state.WallRemaining, this.weights);
+                winProbability = HandValue.WinProbability(option.Eval.ShantenAfter, option.Eval.Ukeire, option.Eval.Ukeire2, state.WallRemaining, this.weights, state.IsOpen, factor);
                 var cost = opponents.ExpectedDealInCost(tile);
                 ev = winProbability * valuePoints - this.weights.PushExposureTurns * cost;
                 // The budget/betaori layer decides defense; here risk only breaks ties unless

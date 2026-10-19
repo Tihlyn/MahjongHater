@@ -6,7 +6,9 @@ namespace MahjongHater.Core.Learning;
 // `useLearnedDanger = false` keeps the measured danger tables and takes only the tenpai head
 // from the network: on Phoenix replays the tables discriminate ron tiles slightly better
 // while the learned tenpai head is better calibrated (docs/research/EVALUATION_RUNS.md).
-public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? weights = null, bool useLearnedDanger = true) : IOpponentModel, IPlacementModel
+// `reveals`, `wins`: tenpai corrected by what draws showed, our own tenpai results (OpponentModel has the same).
+public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? weights = null, bool useLearnedDanger = true,
+    TenpaiReveals? reveals = null, WinReveals? wins = null) : IOpponentModel, IPlacementModel
 {
     private readonly PolicyWeights weights = weights ?? PolicyWeights.Default;
     private readonly OpponentModel fallback = new(weights);
@@ -16,6 +18,8 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
     public void Update(StateSnapshot state)
     {
         this.fallback.Update(state);
+        reveals?.Observe(state);
+        wins?.Observe(state);
         if (!network.Supports(state) || !state.LayoutHealthy || state.Seats.Any(s => !s.DiscardsVerified))
         { Volatile.Write(ref this.view, null); return; }
         var features = network.Encode(state);
@@ -28,16 +32,19 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
         {
             tenpai[seat] = state.Seats[seat].Riichi ? 1
                 : TenpaiEstimator.WithRiverTells(network.Tenpai(output[network.TenpaiOffset + seat - 1]), state.Seats[seat], state, this.weights);
+            if (reveals is not null)
+                tenpai[seat] = reveals.Adjust(seat, tenpai[seat], state.Seats[seat], 1 - this.fallback.Steadiness(seat), this.weights.TenpaiReveals);
             if (this.weights.DefenseModel == DefenseModel.V3 && !state.Seats[seat].Riichi && OpponentModel.KokushiRead(state.Seats[seat]))
                 tenpai[seat] = Math.Max(tenpai[seat], OpenDangerTable.Default.KokushiReadTenpai(state.Seats[seat].Discards.Count) ?? 0);
             var probability = 0d;
+            var scale = ThreatValue.OpenScale(state.Seats[seat], this.weights);
             for (var kind = 0; kind < 34; kind++)
             {
                 var index = (seat - 1) * 34 + kind;
                 var c = 8 + seat * 6;
                 var safe = features[c * 34 + kind] > 0 || features[(c + 5) * 34 + kind] > 0;
                 danger[seat, kind] = safe ? 0 : useLearnedDanger ? network.Wait(output[network.RonOffset + index]) : this.fallback.Danger(TileHelpers.FromIndex(kind), seat);
-                points[seat, kind] = network.Points(output[network.PointsOffset + index]);
+                points[seat, kind] = network.Points(output[network.PointsOffset + index]) * scale;
                 probability += danger[seat, kind];
                 values[seat] += danger[seat, kind] * points[seat, kind];
             }
@@ -57,6 +64,9 @@ public sealed class LearnedOpponentModel(LearnedModel network, PolicyWeights? we
     public string Profile(int seat) => this.fallback.Profile(seat);
     public bool NoviceLike(int seat) => this.fallback.NoviceLike(seat);
     public double NoviceProbability(int seat) => this.fallback.NoviceProbability(seat);
+    public double Steadiness(int seat) => this.fallback.Steadiness(seat);
+    public double WinRateFactor(bool open) => this.weights.WinReveals && wins is not null ? wins.Factor(open) : 1;
+    public void OurTenpai(bool open, double hazard) => wins?.Tenpai(open, hazard);
     public double[]? Placement(StateSnapshot state, int[] scoreDeltas) =>
         !state.LayoutHealthy || state.Seats.Any(s => !s.DiscardsVerified) ? null : network.Placement(state, scoreDeltas);
     public DangerEstimate Explain(Tile tile, int seat)

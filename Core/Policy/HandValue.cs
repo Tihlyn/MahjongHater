@@ -83,26 +83,34 @@ public static class HandValue
 
     // Chance of winning the hand from here (docs/DEFENSE_PLAN.md §3.3): tenpai hits scale
     // with live winning tiles per unseen tile over the turns left (ron included through k);
-    // a 1-shanten first needs an accepting draw, then wins with its follow-up shape.
-    public static double WinProbability(int shantenAfter, int ukeire, long ukeire2, int wallRemaining, PolicyWeights w)
+    // a 1-shanten first needs an accepting draw, then wins with its follow-up shape. An open
+    // hand wins less often for the same waits (no riichi pressure, waits without a yaku).
+    // `factor`: what our own results on these tables show (IOpponentModel.WinRateFactor).
+    public static double WinProbability(int shantenAfter, int ukeire, long ukeire2, int wallRemaining, PolicyWeights w, bool open = false,
+        double factor = 1)
     {
         var unseen = wallRemaining + 53;                 // wall + three hands + dead wall
         var turnsLeft = Math.Max(0, wallRemaining) / 4.0;
+        var k = (open ? w.WinRateKOpen : w.WinRateK) * factor;
         if (shantenAfter < 0)
             return 1;
         if (shantenAfter == 0)
-            return 1 - Math.Exp(-w.WinRateK * ukeire * turnsLeft / unseen);
+            return 1 - Math.Exp(-k * ukeire * turnsLeft / unseen);
         if (shantenAfter == 1)
         {
             var reach = 1 - Math.Exp(-ukeire * turnsLeft * w.TenpaiRateK / unseen);
             var nextUkeire = ukeire > 0 && ukeire2 > 0 ? Math.Clamp(ukeire2 / (double)ukeire, 2, 12) : 5;
-            var thenWin = 1 - Math.Exp(-w.WinRateK * nextUkeire * (turnsLeft / 2) / unseen);
+            var thenWin = 1 - Math.Exp(-k * nextUkeire * (turnsLeft / 2) / unseen);
             return reach * thenWin;
         }
 
-        var far = WinProbability(1, Math.Max(ukeire, 1), ukeire2, wallRemaining, w);
+        var far = WinProbability(1, Math.Max(ukeire, 1), ukeire2, wallRemaining, w, open, factor);
         return far * Math.Pow(w.ExtraShantenFactor, shantenAfter - 1);
     }
+
+    // The tenpai estimate's hazard before any table factor: 1 - exp(-hazard) is the win chance.
+    public static double TenpaiHazard(int ukeire, int wallRemaining, PolicyWeights w, bool open) =>
+        (open ? w.WinRateKOpen : w.WinRateK) * ukeire * (Math.Max(0, wallRemaining) / 4.0) / (wallRemaining + 53);
 
     private static int PointsForWait(StateSnapshot state, List<Tile> closed, Tile wait, List<Tile> doras,
         YakuDetector detector, bool isDealer, bool riichi, PolicyWeights w)
@@ -187,6 +195,12 @@ public static class ThreatValue
         var points = HandValue.PointsFor(han, fu, isDealer);
         return Math.Max(Math.Max(points, isDealer ? w.OpenFloorDealerValue : w.OpenFloorValue), measured ?? 0);
     }
+
+    // Open, non-riichi hands read high for every kind of player: against arena ground truth the
+    // ron value of a tenpai open hand was 1.25 (Phoenix-trained seats) to 1.5 (casual seats)
+    // times below the estimate, riichi and dama on target (2026-10-18, `Precompute calibrate`).
+    public static double OpenScale(SeatState seat, PolicyWeights w) =>
+        !seat.Riichi && seat.Melds.Any(m => m.IsOpen) ? w.OpenValueScale : 1;
 
     // V3: the extra han a deal-in carries right now. A riichi on its ippatsu turn (it has not
     // discarded since declaring) adds ippatsu; the last discard of the hand adds houtei.

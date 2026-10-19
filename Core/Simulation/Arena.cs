@@ -11,11 +11,31 @@ public interface IArenaSeat
     SimAction Choose(SimulationObservation observation, IReadOnlyList<SimAction> legal, CancellationToken ct);
 }
 
+// A seat that sees how each of its hands ended, as the table shows it.
+public interface IHandEndObserver
+{
+    void HandEnded(SimGame game, int seat);
+}
+
 // A live-plugin policy (DecisionPolicy, learned-guarded, ...) at the table. Wins are always
-// taken, exactly as a confirmed game offer is live.
-public sealed class PolicySeat(string name, IPolicy policy) : IArenaSeat
+// taken, exactly as a confirmed game offer is live. With `Reveals`, an exhaustive draw shows
+// it every seat's tenpai, as the draw screen does live; with `Wins`, every hand end tells it
+// whether the hand was ours.
+public sealed class PolicySeat(string name, IPolicy policy) : IArenaSeat, IHandEndObserver
 {
     public string Name { get; } = name;
+
+    public TenpaiReveals? Reveals { get; init; }
+
+    public WinReveals? Wins { get; init; }
+
+    public void HandEnded(SimGame game, int seat)
+    {
+        if (game.Result is { } ended)
+            this.Wins?.HandEnded(ended.Winners.Contains(seat));
+        if (this.Reveals is not null && game.Result is { End: HandEnd.ExhaustiveDraw } result)
+            this.Reveals.Draw(Enumerable.Range(0, 4).Select(r => r == 0 ? (bool?)null : result.Tenpai[(seat + r) % 4]).ToArray());
+    }
 
     public SimAction Choose(SimulationObservation observation, IReadOnlyList<SimAction> legal, CancellationToken ct)
     {
@@ -92,7 +112,10 @@ public sealed record ArenaSeatResult(string Name, int Score, int Placement, int 
 public static class ArenaRunner
 {
     // A full match with one policy per physical seat (MatchRunner's loop and settlement).
-    public static ArenaSeatResult[] Play(SimulationRules rules, int seed, IReadOnlyList<IArenaSeat> seats, CancellationToken ct = default)
+    // `chosen` sees the true game after a seat picks its action and before it is applied
+    // (calibration against hidden hands).
+    public static ArenaSeatResult[] Play(SimulationRules rules, int seed, IReadOnlyList<IArenaSeat> seats, CancellationToken ct = default,
+        Action<SimGame, IReadOnlyList<SimAction>, SimAction>? chosen = null)
     {
         if (seats.Count != 4)
             throw new ArgumentException("An arena table needs four seats.");
@@ -111,10 +134,13 @@ public static class ArenaRunner
             {
                 var legal = RiichiSimulator.Legal(game);
                 var action = seats[game.Actor].Choose(SimulationObservation.Observe(game, legal), legal, ct);
+                chosen?.Invoke(game, legal, action);
                 RiichiSimulator.Apply(game, action, validate: true);
             }
 
             var result = game.Result!;
+            for (var s = 0; s < 4; s++)
+                (seats[s] as IHandEndObserver)?.HandEnded(game, s);
             for (var s = 0; s < 4; s++)
                 if (game.Players[s].Riichi)
                     riichis[s]++;

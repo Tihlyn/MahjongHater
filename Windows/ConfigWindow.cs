@@ -85,14 +85,15 @@ public sealed class ConfigWindow : Window
 
             Tooltip("On top of v2: reads open and dama hands (flush, toitoi, yakuhai, tanyao) from Phoenix replay statistics, "
                     + "reads tenpai tells in each river, tells novice-like players from steady ones seat by seat, and shares the push budget "
-                    + "across every threat by its value. Experimental: it deals in less than v2 but places worse in arena tests, "
-                    + "most of all against novices. Needs v2. Takes effect after a reload.");
-            if (Widgets.ToggleRow("Experimental learned policy", "##learned", this.configuration.LearnedPolicyEnabled))
+                    + "across every threat by its value. Both v2 and v3 learn from the hands shown at draws how often callers "
+                    + "really are tenpai at your tables. Needs v2. Takes effect after a reload.");
+            if (Widgets.ToggleRow("Learned policy", "##learned", this.configuration.LearnedPolicyEnabled))
             {
                 this.configuration.LearnedPolicyEnabled = !this.configuration.LearnedPolicyEnabled;
                 this.saved = false;
             }
-            Tooltip("Use the trained discard/riichi policy and opponent predictions. Requires learned_policy.json. Save and reload to apply.");
+            Tooltip("Use the trained discard policy and opponent predictions inside the measured defense. The models ship with the plugin; "
+                    + "off = the heuristic policy. Save and reload to apply.");
             if (Widgets.ToggleRow("Experimental precomputed policy", "##precomputed", this.configuration.PrecomputedPolicyEnabled))
             {
                 this.configuration.PrecomputedPolicyEnabled = !this.configuration.PrecomputedPolicyEnabled;

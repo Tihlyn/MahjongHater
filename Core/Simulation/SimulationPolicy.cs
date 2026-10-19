@@ -72,7 +72,7 @@ public sealed class SimulationPolicy
             var dora = kept.Concat(s.OurMelds.SelectMany(m => m.Tiles)).Sum(t => (t.IsRedFive ? 1 : 0)
                 + s.DoraIndicators.Count(i => TileHelpers.SameKind(TileDangerModel.DoraOf(i), t)));
             var value = HandValue.EstimatePoints(s, dora, this.weights);
-            var probability = HandValue.WinProbability(e.ShantenAfter, e.Ukeire, 0, s.WallRemaining, this.weights);
+            var probability = HandValue.WinProbability(e.ShantenAfter, e.Ukeire, 0, s.WallRemaining, this.weights, s.IsOpen);
             var cost = this.opponents.ExpectedDealInCost(tile);
             return new DiscardCandidate(tile, e.ShantenAfter, e.Ukeire, 0, dora, 0,
                 probability * value - this.weights.PushExposureTurns * cost, "simulation guideline")
