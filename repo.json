@@ -26,12 +26,12 @@
     "AcceptsFeedback": true,
     "DownloadLinkInstall": "https://github.com/Tihlyn/MahjongHater/releases/download/v3.2.0/latest.zip",
     "DownloadLinkUpdate": "https://github.com/Tihlyn/MahjongHater/releases/download/v3.2.0/latest.zip",
-    "DownloadLinkTesting": "https://github.com/Tihlyn/MahjongHater/releases/download/testing-3.4.0.0/latest.zip",
+    "DownloadLinkTesting": "https://github.com/Tihlyn/MahjongHater/releases/download/testing-3.5.0.0/latest.zip",
     "IsHide": false,
     "IsTestingExclusive": false,
-    "LastUpdate": 1792345659,
-    "TestingAssemblyVersion": "3.4.0.0",
+    "LastUpdate": 1792393077,
+    "TestingAssemblyVersion": "3.5.0.0",
     "TestingDalamudApiLevel": 15,
-    "TestingChangelog": "- chore(release): update repository for v3.2.0 [skip ci] (92fce90)\n- feat(defense): track tsumogiri, journal win offers, vendor open-hand tables (d496f80)\n- feat(defense): v3 hand reads, yakuman handling and opponent profiles (6ab71c4)\n- feat(simulation): duplicate-format arena for policy A/B (97f9cd6)\n- feat(defense): river tells, riichi-tile and kokushi reads, last safe tile (9431a2d)\n- feat(defense): per-seat play - novice classifier, summed seat budget, dama vs folders, river journal (54a4356)\n- feat(defense): blended profiles and reads, retreat EV, yakuman handling for v2 (d409bfd)\n- feat(defense): 3.4 ships with Defense v2 default, v3 opt-in; yakuman fixes for v2 (fd5003c)\n- Merge branch 'defense-v3': Defense v3 (opt-in) and yakuman fixes for 3.4.0.0 (3a81e29)"
+    "TestingChangelog": "- chore(release): update repository for v3.2.0 [skip ci] (92fce90)\n- feat(defense): track tsumogiri, journal win offers, vendor open-hand tables (d496f80)\n- feat(defense): v3 hand reads, yakuman handling and opponent profiles (6ab71c4)\n- feat(simulation): duplicate-format arena for policy A/B (97f9cd6)\n- feat(defense): river tells, riichi-tile and kokushi reads, last safe tile (9431a2d)\n- feat(defense): per-seat play - novice classifier, summed seat budget, dama vs folders, river journal (54a4356)\n- feat(defense): blended profiles and reads, retreat EV, yakuman handling for v2 (d409bfd)\n- feat(defense): 3.4 ships with Defense v2 default, v3 opt-in; yakuman fixes for v2 (fd5003c)\n- Merge branch 'defense-v3': Defense v3 (opt-in) and yakuman fixes for 3.4.0.0 (3a81e29)\n- chore(testing): publish 3.4.0.0 [skip ci] (98ec1ce)\n- feat(simulation): arena calibration of the opponent model against hidden hands (506e70d)\n- feat(simulation): calibrate writes win rows; arena compares each arm with every earlier one (3a4061b)\n- feat(policy): refit the tenpai win estimate on arena outcomes, open hands apart (036f530)\n- feat(policy): table reads learned from what the table shows (a7f4420)\n- fix(policy): reveal fits cap and backtrack Newton steps (diverged to a = +673 on v2's near-certain three-call reads) (fd628ce)\n- docs(research): calibration and table reads, arena, ablations and warm-up (09c5cdd)\n- feat(defense): 3.5 ships Defense v3 with table reads and the learned policy by default (e5387e3)\n- Merge branch 'defense-table-reads': Defense v3 with table reads and the learned policy by default for 3.5.0.0 (aef6938)"
   }
 ]
